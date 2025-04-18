@@ -3,14 +3,14 @@
 #### BUILD
 
 ```zsh
-mkdir -p && cd build
+mkdir -p build && cd build
 ./build.sh
 ```
 
 or
 
 ```zsh
-mkdir -p && cd build
+mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release \
          -DLLVM_DIR=$(brew --prefix llvm)/lib/cmake/llvm \
          -DClang_DIR=$(brew --prefix llvm)/lib/cmake/clang \
