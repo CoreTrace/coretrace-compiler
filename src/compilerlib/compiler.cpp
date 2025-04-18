@@ -101,7 +101,14 @@ std::pair<bool, std::string> compile(const std::vector<std::string>& input_args)
 
     auto ci = std::make_unique<clang::CompilerInstance>();
     ci->setInvocation(std::move(invoc));
-    ci->createDiagnostics(*fs, &dc, false);
+    
+    // Modification pour supporter LLVM 16+
+    #if LLVM_VERSION_MAJOR >= 16
+        ci->createDiagnostics(&dc, false);
+    #else
+        ci->createDiagnostics(*fs, &dc, false);
+    #endif
+    
     ci->getDiagnostics().getDiagnosticOptions().ShowCarets = false;
     ci->createFileManager(fs);
     ci->createSourceManager(ci->getFileManager());
