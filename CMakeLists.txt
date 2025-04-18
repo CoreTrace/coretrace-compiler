@@ -14,6 +14,9 @@ include_directories(
   include
 )
 
+# Option pour activer ou désactiver les tests
+option(BUILD_TESTS "Build test executables" OFF)
+
 set(LIB_SOURCES src/compilerlib/compiler.cpp)
 
 add_library(compilerlib_static STATIC ${LIB_SOURCES})
@@ -80,22 +83,30 @@ target_link_libraries(cc PRIVATE compilerlib_static)
 install(TARGETS compilerlib_static compilerlib_shared cc ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 install(DIRECTORY include/ DESTINATION include)
 
-add_executable(test_compiler test/test_compiler.cpp)
-
 set(USE_SHARED_LIB OFF CACHE BOOL "Link with shared compilerlib")
 
-if(NOT LLVM_ENABLE_RTTI)
-  target_compile_options(test_compiler PRIVATE -fno-rtti)
+# Construction conditionnelle des tests
+if(BUILD_TESTS)
+  # Vérifier si le fichier de test existe
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_compiler.cpp")
+    add_executable(test_compiler test/test_compiler.cpp)
+    
+    if(NOT LLVM_ENABLE_RTTI)
+      target_compile_options(test_compiler PRIVATE -fno-rtti)
+    endif()
+    
+    if(USE_SHARED_LIB)
+      target_link_libraries(test_compiler PRIVATE compilerlib_shared)
+      set_target_properties(test_compiler PROPERTIES
+        BUILD_RPATH "@loader_path/../lib"
+        INSTALL_RPATH "@loader_path/../lib"
+      )
+    else()
+      target_link_libraries(test_compiler PRIVATE compilerlib_static)
+    endif()
+    
+    target_include_directories(test_compiler PRIVATE include)
+  else()
+    message(STATUS "Test file test/test_compiler.cpp not found, skipping test build")
+  endif()
 endif()
-
-if(USE_SHARED_LIB)
-  target_link_libraries(test_compiler PRIVATE compilerlib_shared)
-  set_target_properties(test_compiler PROPERTIES
-    BUILD_RPATH "@loader_path/../lib"
-    INSTALL_RPATH "@loader_path/../lib"
-  )
-else()
-  target_link_libraries(test_compiler PRIVATE compilerlib_static)
-endif()
-
-target_include_directories(test_compiler PRIVATE include)

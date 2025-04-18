@@ -66,7 +66,8 @@ jobs:
         cmake .. -DCMAKE_BUILD_TYPE=Release \
                 -DLLVM_DIR=${{ env.LLVM_DIR }} \
                 -DClang_DIR=${{ env.Clang_DIR }} \
-                -DUSE_SHARED_LIB=OFF
+                -DUSE_SHARED_LIB=OFF \
+                -DBUILD_TESTS=OFF
         cmake --build . --config Release
 
     - name: Configure and Build (Windows)
@@ -74,5 +75,5 @@ jobs:
       run: |
         mkdir -p build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$env:LLVM_DIR" -DClang_DIR="$env:Clang_DIR" -DUSE_SHARED_LIB=OFF
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$env:LLVM_DIR" -DClang_DIR="$env:Clang_DIR" -DUSE_SHARED_LIB=OFF -DBUILD_TESTS=OFF
         cmake --build . --config Release
