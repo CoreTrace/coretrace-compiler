@@ -67,3 +67,4 @@ jobs:
         else
           echo "Test échoué: Fichier LLVM IR non généré"
           exit 1
+        fi
