@@ -1,0 +1,78 @@
+name: Build
+
+on:
+  push:
+    branches: [ main, feat/*, feature/* ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake
+        # Install LLVM and Clang
+        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+        sudo apt-add-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-16 main"
+        sudo apt-get update
+        sudo apt-get install -y llvm-16 llvm-16-dev clang-16 libclang-16-dev
+        echo "LLVM_DIR=/usr/lib/llvm-16/lib/cmake/llvm" >> $GITHUB_ENV
+        echo "Clang_DIR=/usr/lib/llvm-16/lib/cmake/clang" >> $GITHUB_ENV
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install cmake llvm
+        echo "LLVM_DIR=$(brew --prefix llvm)/lib/cmake/llvm" >> $GITHUB_ENV
+        echo "Clang_DIR=$(brew --prefix llvm)/lib/cmake/clang" >> $GITHUB_ENV
+        echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+
+    - name: Install dependencies (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        # Install Chocolatey packages
+        choco install cmake ninja
+        
+        # Download pre-built LLVM for Windows
+        Invoke-WebRequest -Uri "https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.0/LLVM-16.0.0-win64.exe" -OutFile "llvm_installer.exe"
+        
+        # Silent install
+        Start-Process -FilePath "llvm_installer.exe" -ArgumentList "/S" -Wait
+        
+        # Set environment variables for LLVM and Clang
+        echo "LLVM_DIR=C:\Program Files\LLVM\lib\cmake\llvm" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        echo "Clang_DIR=C:\Program Files\LLVM\lib\cmake\clang" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Configure and Build (Linux/macOS)
+      if: runner.os == 'Linux' || runner.os == 'macOS'
+      run: |
+        mkdir -p build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release \
+                -DLLVM_DIR=${{ env.LLVM_DIR }} \
+                -DClang_DIR=${{ env.Clang_DIR }} \
+                -DUSE_SHARED_LIB=OFF
+        cmake --build . --config Release
+
+    - name: Configure and Build (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        mkdir -p build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$env:LLVM_DIR" -DClang_DIR="$env:Clang_DIR" -DUSE_SHARED_LIB=OFF
+        cmake --build . --config Release
