@@ -7,7 +7,21 @@
 namespace compilerlib
 {
 
-std::pair<bool, std::string> compile(const std::vector<std::string>& args);
+enum class OutputMode
+{
+    ToFile,
+    ToMemory,
+};
+
+struct CompileResult
+{
+    bool success;
+    std::string diagnostics;
+    std::string llvmIR;
+};
+
+// std::pair<bool, std::string> compile(const std::vector<std::string>& args);
+CompileResult compile(const std::vector<std::string>& args, OutputMode mode = OutputMode::ToFile);
 
 #ifdef __cplusplus
 extern "C" {
