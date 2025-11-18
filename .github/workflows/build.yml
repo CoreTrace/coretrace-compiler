@@ -52,14 +52,14 @@ jobs:
                 -DUSE_SHARED_LIB=OFF \
                 -DBUILD_TESTS=OFF
         cmake --build . --config Release
-        
+
     - name: Test compiler (Linux/macOS)
       if: runner.os == 'Linux' || runner.os == 'macOS'
       run: |
         cd build
         echo 'int main() { return 0; }' > test.cc
         ./cc -S -emit-llvm test.cc
-        
+
         # Vérifier que le fichier LLVM IR a été généré
         if [ -f "test.ll" ]; then
           echo "Test réussi: Fichier LLVM IR généré avec succès"
