@@ -14,12 +14,21 @@ include_directories(
   include
 )
 
-# Option pour activer ou désactiver les tests
 option(BUILD_TESTS "Build test executables" OFF)
 
 set(LIB_SOURCES src/compilerlib/compiler.cpp)
 
 add_library(compilerlib_static STATIC ${LIB_SOURCES})
+
+# FOR USE WITH FETCHCONTENT
+target_include_directories(compilerlib_static
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+# ALIAS FOR USE WITH FETCHCONTENT
+add_library(cc::compilerlib_static ALIAS compilerlib_static)
+
 if(NOT LLVM_ENABLE_RTTI)
   target_compile_options(compilerlib_static PRIVATE -fno-rtti)
 endif()
@@ -46,7 +55,17 @@ else()
 endif()
 
 add_library(compilerlib_shared SHARED ${LIB_SOURCES})
+
 set_target_properties(compilerlib_shared PROPERTIES OUTPUT_NAME "compilerlib")
+
+# FOR USE WITH FETCHCONTENT
+target_include_directories(compilerlib_shared
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+# ALIAS FOR USE WITH FETCHCONTENT
+add_library(cc::compilerlib_shared ALIAS compilerlib_shared)
 
 if(NOT LLVM_ENABLE_RTTI)
   target_compile_options(compilerlib_shared PRIVATE -fno-rtti)
@@ -85,16 +104,14 @@ install(DIRECTORY include/ DESTINATION include)
 
 set(USE_SHARED_LIB OFF CACHE BOOL "Link with shared compilerlib")
 
-# Construction conditionnelle des tests
 if(BUILD_TESTS)
-  # Vérifier si le fichier de test existe
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_compiler.cpp")
     add_executable(test_compiler test/test_compiler.cpp)
-    
+
     if(NOT LLVM_ENABLE_RTTI)
       target_compile_options(test_compiler PRIVATE -fno-rtti)
     endif()
-    
+
     if(USE_SHARED_LIB)
       target_link_libraries(test_compiler PRIVATE compilerlib_shared)
       set_target_properties(test_compiler PROPERTIES
@@ -104,7 +121,7 @@ if(BUILD_TESTS)
     else()
       target_link_libraries(test_compiler PRIVATE compilerlib_static)
     endif()
-    
+
     target_include_directories(test_compiler PRIVATE include)
   else()
     message(STATUS "Test file test/test_compiler.cpp not found, skipping test build")

@@ -101,14 +101,17 @@ std::pair<bool, std::string> compile(const std::vector<std::string>& input_args)
 
     auto ci = std::make_unique<clang::CompilerInstance>();
     ci->setInvocation(std::move(invoc));
-    
-    // Modification pour supporter LLVM 16+
-    #if LLVM_VERSION_MAJOR >= 16
-        ci->createDiagnostics(&dc, false);
-    #else
+
+    // Adaptation to different LLVM/Clang versions
+    // - LLVM < 16: createDiagnostics(VFS, Consumer, ShouldOwnClient)
+    // - LLVM 16–18: createDiagnostics(Consumer, ShouldOwnClient)
+    // - LLVM 19–20+: the overloads without a VFS have been removed, you must pass the VFS.
+    #if LLVM_VERSION_MAJOR >= 19
         ci->createDiagnostics(*fs, &dc, false);
+    #else
+        ci->createDiagnostics(&dc, false);
     #endif
-    
+
     ci->getDiagnostics().getDiagnosticOptions().ShowCarets = false;
     ci->createFileManager(fs);
     ci->createSourceManager(ci->getFileManager());
