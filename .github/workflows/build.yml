@@ -37,7 +37,7 @@ jobs:
     - name: Install dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install cmake llvm
+        brew install cmake llvm@20
         echo "LLVM_DIR=$(brew --prefix llvm)/lib/cmake/llvm" >> $GITHUB_ENV
         echo "Clang_DIR=$(brew --prefix llvm)/lib/cmake/clang" >> $GITHUB_ENV
         echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
