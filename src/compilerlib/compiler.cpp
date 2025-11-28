@@ -9,6 +9,7 @@
 
 
 #include <llvm/Config/llvm-config.h>
+#include <llvm/IR/Module.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
 #include <llvm/Support/VirtualFileSystem.h>
@@ -17,6 +18,7 @@
 #include <llvm-c/Target.h>
 
 #include <cstring>
+#include <iostream>
 
 namespace compilerlib {
 
@@ -62,7 +64,9 @@ struct DiagsSaver : clang::DiagnosticConsumer {
 };
 } // anonymous namespace
 
-std::pair<bool, std::string> compile(const std::vector<std::string>& input_args) {
+// std::pair<bool, std::string> compile(const std::vector<std::string>& input_args) ###OLD SIGNATURE
+CompileResult compile(const std::vector<std::string>& input_args, OutputMode mode)
+{
     auto fs = llvm::vfs::getRealFileSystem();
     DiagsSaver dc;
 
@@ -135,6 +139,11 @@ std::pair<bool, std::string> compile(const std::vector<std::string>& input_args)
     LLVMInitializeAllAsmParsers();
     LLVMInitializeAllAsmPrinters();
 
+    CompileResult result;
+    result.success = false;
+    result.diagnostics = {};
+    result.llvmIR = {};
+
     switch (ci->getFrontendOpts().ProgramAction)
     {
         case clang::frontend::EmitObj:
@@ -157,14 +166,41 @@ std::pair<bool, std::string> compile(const std::vector<std::string>& input_args)
         }
         case clang::frontend::EmitLLVM:
         {
-            clang::EmitLLVMAction action;
-            ci->ExecuteAction(action);
+            if (mode == OutputMode::ToFile)
+            {
+                clang::EmitLLVMAction action;
+                ci->ExecuteAction(action);
+            }
+            if (mode == OutputMode::ToMemory)
+            {
+                clang::EmitLLVMOnlyAction action;
+                if (!ci->ExecuteAction(action))
+                {
+                    result.success     = false;
+                    result.diagnostics = std::move(dc.message);
+                    return result;
+                }
+                std::unique_ptr<llvm::Module> module = action.takeModule();
+                if (module)
+                {
+                    std::string llvmIR;
+                    llvm::raw_string_ostream rso(llvmIR);
+                    module->print(rso, nullptr);
+                    rso.flush();
+                    result.llvmIR = std::move(llvmIR);
+                }
+            }
             break;
         }
         default:
-            return {false, "Unhandled action"};
+            result.success = false;
+            result.diagnostics = "Unhandled action";
+            return result;
     }
-    return {true, std::move(dc.message)};
+    // return {true, std::move(dc.message)};
+    result.success     = true;
+    result.diagnostics = std::move(dc.message);
+    return result;
 }
 
 // TODO : improve this code to use a better interface
@@ -174,12 +210,13 @@ extern "C" int compile_c(int argc, const char** argv, char* output_buffer, int b
     for (int i = 0; i < argc; ++i)
         args.emplace_back(argv[i]);
 
-    auto [success, message] = compilerlib::compile(args);
+    // auto [success, message] = compilerlib::compile(args);
+    CompileResult result = compilerlib::compile(args);
 
-    std::strncpy(output_buffer, message.c_str(), buffer_size - 1);
+    std::strncpy(output_buffer, result.diagnostics.c_str(), buffer_size - 1);
     output_buffer[buffer_size - 1] = '\0';
 
-    return success ? 1 : 0;
+    return result.success ? 1 : 0;
 }
 
 } // namespace compilerlib
