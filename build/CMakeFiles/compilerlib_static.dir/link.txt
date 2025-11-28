@@ -1,2 +1,0 @@
-/Library/Developer/CommandLineTools/usr/bin/ar qc libcompilerlib_static.a CMakeFiles/compilerlib_static.dir/src/compilerlib/compiler.cpp.o
-/Library/Developer/CommandLineTools/usr/bin/ranlib libcompilerlib_static.a
