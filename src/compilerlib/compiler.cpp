@@ -70,15 +70,26 @@ CompileResult compile(const std::vector<std::string>& input_args, OutputMode mod
     auto fs = llvm::vfs::getRealFileSystem();
     DiagsSaver dc;
 
-    std::vector<const char *> args = {"clang"};
+    std::vector<const char *> args = {"clang++"};
 #ifdef __APPLE__
     args.insert(args.end(), {"-isysroot", "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
                              "-I", "/Library/Developer/CommandLineTools/usr/include",
                              "-I", "/Library/Developer/CommandLineTools/usr/include/c++/v1"});
+#ifdef CLANG_RESOURCE_DIR
+    args.push_back("-resource-dir");
+    args.push_back(CLANG_RESOURCE_DIR);
+#endif
+
 #else
     args.insert(args.end(), {"-I", "/usr/include",
                              "-I", "/usr/include/c++/11",
                              "-I", "/usr/local/include"});
+
+#ifdef CLANG_RESOURCE_DIR
+    args.push_back("-resource-dir");
+    args.push_back(CLANG_RESOURCE_DIR);
+#endif
+
 #endif
     for (const auto& arg : input_args) {
         args.push_back(arg.c_str());

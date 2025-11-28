@@ -1,0 +1,17 @@
+/tmp/coretrace-compiler/build/CMakeFiles/intrinsics_gen.dir
+/tmp/coretrace-compiler/build/CMakeFiles/vt_gen.dir
+/tmp/coretrace-compiler/build/CMakeFiles/omp_gen.dir
+/tmp/coretrace-compiler/build/CMakeFiles/acc_gen.dir
+/tmp/coretrace-compiler/build/CMakeFiles/ARMTargetParserTableGen.dir
+/tmp/coretrace-compiler/build/CMakeFiles/AArch64TargetParserTableGen.dir
+/tmp/coretrace-compiler/build/CMakeFiles/RISCVTargetParserTableGen.dir
+/tmp/coretrace-compiler/build/CMakeFiles/clang-tablegen-targets.dir
+/tmp/coretrace-compiler/build/CMakeFiles/compilerlib_static.dir
+/tmp/coretrace-compiler/build/CMakeFiles/compilerlib_shared.dir
+/tmp/coretrace-compiler/build/CMakeFiles/cc.dir
+/tmp/coretrace-compiler/build/CMakeFiles/edit_cache.dir
+/tmp/coretrace-compiler/build/CMakeFiles/rebuild_cache.dir
+/tmp/coretrace-compiler/build/CMakeFiles/list_install_components.dir
+/tmp/coretrace-compiler/build/CMakeFiles/install.dir
+/tmp/coretrace-compiler/build/CMakeFiles/install/local.dir
+/tmp/coretrace-compiler/build/CMakeFiles/install/strip.dir
