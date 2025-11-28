@@ -20,6 +20,29 @@ set(LIB_SOURCES src/compilerlib/compiler.cpp)
 
 add_library(compilerlib_static STATIC ${LIB_SOURCES})
 
+# Generic detection of Clang resource directory.
+# You can override this with -DCLANG_RESOURCE_DIR=/custom/path when configuring CMake.
+set(CLANG_RESOURCE_DIR "" CACHE STRING "Path to Clang resource directory")
+
+if(NOT CLANG_RESOURCE_DIR)
+  find_program(CLANG_EXECUTABLE
+    NAMES clang-20 clang
+    DOC "Path to the clang executable used to detect resource dir"
+  )
+
+  if(NOT CLANG_EXECUTABLE)
+    message(FATAL_ERROR "Unable to find clang executable. Please set CLANG_RESOURCE_DIR manually.")
+  endif()
+
+  execute_process(
+    COMMAND ${CLANG_EXECUTABLE} -print-resource-dir
+    OUTPUT_VARIABLE CLANG_RESOURCE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+endif()
+
+message(STATUS "Using Clang resource dir: ${CLANG_RESOURCE_DIR}")
+
 # FOR USE WITH FETCHCONTENT
 target_include_directories(compilerlib_static
   PUBLIC
@@ -92,6 +115,16 @@ else()
 endif()
 
 add_executable(cc src/cli/main.cc)
+
+# Propagate CLANG_RESOURCE_DIR as a compile definition to all relevant targets
+foreach(tgt compilerlib_static compilerlib_shared cc)
+  if(TARGET ${tgt})
+    target_compile_definitions(${tgt}
+      PRIVATE
+        CLANG_RESOURCE_DIR=\"${CLANG_RESOURCE_DIR}\"
+    )
+  endif()
+endforeach()
 
 if(NOT LLVM_ENABLE_RTTI)
   target_compile_options(cc PRIVATE -fno-rtti)
