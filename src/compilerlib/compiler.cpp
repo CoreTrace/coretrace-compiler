@@ -70,7 +70,7 @@ CompileResult compile(const std::vector<std::string>& input_args, OutputMode mod
     auto fs = llvm::vfs::getRealFileSystem();
     DiagsSaver dc;
 
-    std::vector<const char *> args = {"clang++"};
+    std::vector<const char *> args = {"clang"};
 #ifdef __APPLE__
     args.insert(args.end(), {"-isysroot", "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
                              "-I", "/Library/Developer/CommandLineTools/usr/include",
