@@ -26,13 +26,13 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential cmake
-        # Install LLVM and Clang
+        # Install LLVM and Clang 20
         wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-        sudo apt-add-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-16 main"
+        sudo apt-add-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-20 main"
         sudo apt-get update
-        sudo apt-get install -y llvm-16 llvm-16-dev clang-16 libclang-16-dev
-        echo "LLVM_DIR=/usr/lib/llvm-16/lib/cmake/llvm" >> $GITHUB_ENV
-        echo "Clang_DIR=/usr/lib/llvm-16/lib/cmake/clang" >> $GITHUB_ENV
+        sudo apt-get install -y llvm-20 llvm-20-dev clang-20 libclang-20-dev
+        echo "LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm" >> $GITHUB_ENV
+        echo "Clang_DIR=/usr/lib/llvm-20/lib/cmake/clang" >> $GITHUB_ENV
 
     - name: Install dependencies (macOS)
       if: runner.os == 'macOS'
