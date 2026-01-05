@@ -15,24 +15,33 @@ int main(int argc, char *argv[])
     args.reserve(argc - 1);
 
     compilerlib::OutputMode mode = compilerlib::OutputMode::ToFile;
+    bool instrument = false;
 
-    for (int i = 1; i < argc; ++i) {
+    for (int i = 1; i < argc; ++i)
+    {
         std::string arg = argv[i];
-        if (arg == "--in-mem" || arg == "--in-memory") {
+        if (arg == "--in-mem" || arg == "--in-memory")
+        {
             mode = compilerlib::OutputMode::ToMemory;
-        } else {
+        } else if (arg == "--instrument")
+        {
+            instrument = true;
+        } else
+        {
             args.push_back(std::move(arg));
         }
     }
 
-    auto res = compilerlib::compile(args, mode);
+    auto res = compilerlib::compile(args, mode, instrument);
 
-    if (!res.success) {
+    if (!res.success)
+    {
         std::cerr << res.diagnostics;
         return 1;
     }
 
-    if (mode == compilerlib::OutputMode::ToMemory && !res.llvmIR.empty()) {
+    if (mode == compilerlib::OutputMode::ToMemory && !res.llvmIR.empty())
+    {
         std::cout << res.llvmIR << std::endl;
     }
 
