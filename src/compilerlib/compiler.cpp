@@ -408,6 +408,7 @@ public:
         }
 
         clang::EmitLLVMOnlyAction action;
+        resetDiagnostics();
         if (!ci->ExecuteAction(action))
         {
             error = std::move(ctx_.dc.message);
@@ -470,6 +471,7 @@ public:
             case clang::frontend::EmitObj:
             {
                 clang::EmitObjAction action;
+                resetDiagnostics();
                 if (!ci->ExecuteAction(action)) {
                     return fail("compilation failed");
                 }
@@ -478,6 +480,7 @@ public:
             case clang::frontend::EmitAssembly:
             {
                 clang::EmitAssemblyAction action;
+                resetDiagnostics();
                 if (!ci->ExecuteAction(action)) {
                     return fail("compilation failed");
                 }
@@ -486,6 +489,7 @@ public:
             case clang::frontend::EmitBC:
             {
                 clang::EmitBCAction action;
+                resetDiagnostics();
                 if (!ci->ExecuteAction(action)) {
                     return fail("compilation failed");
                 }
@@ -496,6 +500,7 @@ public:
                 if (ctx_.mode == OutputMode::ToFile)
                 {
                     clang::EmitLLVMAction action;
+                    resetDiagnostics();
                     if (!ci->ExecuteAction(action)) {
                         return fail("compilation failed");
                     }
@@ -503,6 +508,7 @@ public:
                 if (ctx_.mode == OutputMode::ToMemory)
                 {
                     clang::EmitLLVMOnlyAction action;
+                    resetDiagnostics();
                     if (!ci->ExecuteAction(action))
                     {
                         result.success     = false;
@@ -558,6 +564,12 @@ private:
         LLVMInitializeAllTargetMCs();
         LLVMInitializeAllAsmParsers();
         LLVMInitializeAllAsmPrinters();
+    }
+
+    void resetDiagnostics()
+    {
+        ctx_.dc.message.clear();
+        ctx_.dc.os.flush();
     }
 
     std::unique_ptr<clang::CompilerInstance> makeCompilerInstance(const llvm::opt::ArgStringList &ccArgs)
