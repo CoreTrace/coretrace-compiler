@@ -1,6 +1,7 @@
 #include "compilerlib/instrumentation/trace.hpp"
 #include "compilerlib/instrumentation/common.hpp"
 
+#include <llvm/ADT/StringMap.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
@@ -13,13 +14,22 @@
 namespace compilerlib {
 namespace {
 
-llvm::Value *createStringLiteral(llvm::Module &module, llvm::StringRef text)
+llvm::Value *getStringLiteral(llvm::Module &module,
+                              llvm::StringRef text,
+                              llvm::StringMap<llvm::Constant *> &cache)
 {
+    if (auto it = cache.find(text); it != cache.end()) {
+        return it->second;
+    }
+
     llvm::IRBuilder<> builder(module.getContext());
     auto *global = builder.CreateGlobalString(text, ".ct.func", 0, &module);
     auto *zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(module.getContext()), 0);
     llvm::Constant *indices[] = {zero, zero};
-    return llvm::ConstantExpr::getInBoundsGetElementPtr(global->getValueType(), global, indices);
+    llvm::Constant *value =
+        llvm::ConstantExpr::getInBoundsGetElementPtr(global->getValueType(), global, indices);
+    cache.try_emplace(text, value);
+    return value;
 }
 
 } // namespace
@@ -46,6 +56,7 @@ void instrumentModule(llvm::Module &module)
     llvm::FunctionCallee exitF64Fn = module.getOrInsertFunction("__ct_trace_exit_f64", exitF64Ty);
     llvm::FunctionCallee exitUnknownFn = module.getOrInsertFunction("__ct_trace_exit_unknown", exitUnknownTy);
 
+    llvm::StringMap<llvm::Constant *> funcNameCache;
     for (llvm::Function &func : module) {
         if (!shouldInstrument(func)) {
             continue;
@@ -53,7 +64,7 @@ void instrumentModule(llvm::Module &module)
 
         llvm::BasicBlock &entry = func.getEntryBlock();
         llvm::IRBuilder<> entryBuilder(&*entry.getFirstInsertionPt());
-        llvm::Value *funcName = createStringLiteral(module, func.getName());
+        llvm::Value *funcName = getStringLiteral(module, func.getName(), funcNameCache);
         entryBuilder.CreateCall(enterFn, {funcName});
 
         llvm::SmallVector<llvm::ReturnInst *, 8> returns;

@@ -1,9 +1,11 @@
 #include "compilerlib/instrumentation/bounds.hpp"
 #include "compilerlib/instrumentation/common.hpp"
 
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
+#include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
@@ -14,14 +16,37 @@
 namespace compilerlib {
 namespace {
 
-llvm::Value *createSiteString(llvm::Module &module, const llvm::Instruction &inst)
+llvm::Constant *createSiteString(llvm::Module &module, llvm::StringRef site)
 {
-    std::string site = formatSiteString(inst);
     llvm::IRBuilder<> builder(module.getContext());
     auto *global = builder.CreateGlobalString(site, ".ct.site", 0, &module);
     auto *zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(module.getContext()), 0);
     llvm::Constant *indices[] = {zero, zero};
     return llvm::ConstantExpr::getInBoundsGetElementPtr(global->getValueType(), global, indices);
+}
+
+llvm::Value *getSiteString(llvm::Module &module,
+                           const llvm::Instruction &inst,
+                           llvm::DenseMap<const llvm::DILocation *, llvm::Constant *> &cache,
+                           llvm::Constant *&unknown)
+{
+    llvm::DebugLoc loc = inst.getDebugLoc();
+    if (!loc) {
+        if (!unknown) {
+            unknown = createSiteString(module, "<unknown>");
+        }
+        return unknown;
+    }
+
+    const llvm::DILocation *di = loc.get();
+    if (auto it = cache.find(di); it != cache.end()) {
+        return it->second;
+    }
+
+    std::string site = formatSiteString(inst);
+    llvm::Constant *value = createSiteString(module, site);
+    cache[di] = value;
+    return value;
 }
 
 llvm::Value *stripPointerCastsAndGEPs(llvm::Value *value)
@@ -134,6 +159,8 @@ void instrumentMemoryAccesses(llvm::Module &module)
                                            false);
     llvm::FunctionCallee checkFn = module.getOrInsertFunction("__ct_check_bounds", checkTy);
 
+    llvm::DenseMap<const llvm::DILocation *, llvm::Constant *> siteCache;
+    llvm::Constant *unknownSite = nullptr;
     llvm::SmallVector<llvm::Instruction *, 128> worklist;
 
     for (llvm::Function &func : module)
@@ -161,7 +188,7 @@ void instrumentMemoryAccesses(llvm::Module &module)
     for (llvm::Instruction *inst : worklist)
     {
         llvm::IRBuilder<> builder(inst);
-        llvm::Value *site = createSiteString(module, *inst);
+        llvm::Value *site = getSiteString(module, *inst, siteCache, unknownSite);
 
         if (auto *load = llvm::dyn_cast<llvm::LoadInst>(inst))
         {

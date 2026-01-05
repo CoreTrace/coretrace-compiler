@@ -1,9 +1,11 @@
 #include "compilerlib/instrumentation/alloc.hpp"
 #include "compilerlib/instrumentation/common.hpp"
 
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstrTypes.h>
@@ -58,14 +60,37 @@ bool isFreeLike(const llvm::Function &fn)
     return fnTy->getParamType(0)->isPointerTy();
 }
 
-llvm::Value *createSiteString(llvm::Module &module, const llvm::Instruction &inst)
+llvm::Constant *createSiteString(llvm::Module &module, llvm::StringRef site)
 {
-    std::string site = formatSiteString(inst);
     llvm::IRBuilder<> builder(module.getContext());
     auto *global = builder.CreateGlobalString(site, ".ct.site", 0, &module);
     auto *zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(module.getContext()), 0);
     llvm::Constant *indices[] = {zero, zero};
     return llvm::ConstantExpr::getInBoundsGetElementPtr(global->getValueType(), global, indices);
+}
+
+llvm::Value *getSiteString(llvm::Module &module,
+                           const llvm::Instruction &inst,
+                           llvm::DenseMap<const llvm::DILocation *, llvm::Constant *> &cache,
+                           llvm::Constant *&unknown)
+{
+    llvm::DebugLoc loc = inst.getDebugLoc();
+    if (!loc) {
+        if (!unknown) {
+            unknown = createSiteString(module, "<unknown>");
+        }
+        return unknown;
+    }
+
+    const llvm::DILocation *di = loc.get();
+    if (auto it = cache.find(di); it != cache.end()) {
+        return it->second;
+    }
+
+    std::string site = formatSiteString(inst);
+    llvm::Constant *value = createSiteString(module, site);
+    cache[di] = value;
+    return value;
 }
 
 bool isEffectivelyUnused(llvm::Value *value)
@@ -126,6 +151,8 @@ void wrapAllocCalls(llvm::Module &module)
     llvm::FunctionCallee ctMallocUnreachable = module.getOrInsertFunction("__ct_malloc_unreachable", mallocTy);
     llvm::FunctionCallee ctFree = module.getOrInsertFunction("__ct_free", freeTy);
 
+    llvm::DenseMap<const llvm::DILocation *, llvm::Constant *> siteCache;
+    llvm::Constant *unknownSite = nullptr;
     llvm::SmallVector<llvm::CallInst *, 16> mallocCalls;
     llvm::SmallVector<llvm::CallInst *, 16> freeCalls;
 
@@ -166,7 +193,7 @@ void wrapAllocCalls(llvm::Module &module)
             sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
         }
 
-        llvm::Value *site = createSiteString(module, *call);
+        llvm::Value *site = getSiteString(module, *call, siteCache, unknownSite);
         llvm::FunctionCallee target = isEffectivelyUnused(call) ? ctMallocUnreachable : ctMalloc;
         auto *newCall = builder.CreateCall(target, {sizeArg, site});
         newCall->setCallingConv(call->getCallingConv());
