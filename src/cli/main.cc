@@ -23,10 +23,12 @@ int main(int argc, char *argv[])
         if (arg == "--in-mem" || arg == "--in-memory")
         {
             mode = compilerlib::OutputMode::ToMemory;
-        } else if (arg == "--instrument")
+        }
+        else if (arg == "--instrument")
         {
             instrument = true;
-        } else
+        }
+        else
         {
             args.push_back(std::move(arg));
         }
