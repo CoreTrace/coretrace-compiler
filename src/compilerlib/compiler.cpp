@@ -136,6 +136,24 @@ bool hasDebugFlag(const std::vector<std::string> &args)
     return false;
 }
 
+void appendDiagnostics(std::string &out, const std::string &extra)
+{
+    if (extra.empty()) {
+        return;
+    }
+    if (!out.empty() && out.back() != '\n') {
+        out.push_back('\n');
+    }
+    out.append(extra);
+}
+
+std::string mergeDiagnostics(const std::string &driver, const std::string &cc1)
+{
+    std::string merged = driver;
+    appendDiagnostics(merged, cc1);
+    return merged;
+}
+
 bool isCc1Command(const llvm::opt::ArgStringList &args)
 {
     for (const char *arg : args) {
@@ -166,6 +184,7 @@ struct CompileContext {
     std::string clang_path;
     llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs;
     DiagsSaver dc;
+    std::string driver_diagnostics;
 
     CompileContext(const std::vector<std::string> &args, OutputMode mode, bool instrument)
         : mode(mode), instrument(instrument), input_args(args), fs(llvm::vfs::getRealFileSystem()) {}
@@ -455,7 +474,8 @@ public:
 
         auto fail = [&](const char *fallback) -> CompileResult {
             result.success = false;
-            result.diagnostics = ctx_.dc.message.empty() ? fallback : std::move(ctx_.dc.message);
+            std::string diag = ctx_.dc.message.empty() ? fallback : std::move(ctx_.dc.message);
+            result.diagnostics = mergeDiagnostics(ctx_.driver_diagnostics, diag);
             return result;
         };
 
@@ -512,7 +532,8 @@ public:
                     if (!ci->ExecuteAction(action))
                     {
                         result.success     = false;
-                        result.diagnostics = std::move(ctx_.dc.message);
+                        result.diagnostics = mergeDiagnostics(ctx_.driver_diagnostics,
+                                                              std::move(ctx_.dc.message));
                         return result;
                     }
                     std::unique_ptr<llvm::Module> module = action.takeModule();
@@ -546,7 +567,7 @@ public:
         }
 
         result.success     = true;
-        result.diagnostics = std::move(ctx_.dc.message);
+        result.diagnostics = mergeDiagnostics(ctx_.driver_diagnostics, ctx_.dc.message);
         return result;
     }
 
@@ -676,16 +697,16 @@ CompileResult runInstrumentedToFile(CompileContext &ctx,
     {
         if (!cc1.runInstrumented(*job, error))
         {
-            return {false, std::move(error), {}};
+            return {false, mergeDiagnostics(ctx.driver_diagnostics, error), {}};
         }
     }
 
     Linker linker;
     if (!linker.run(plan.otherJobs, error)) {
-        return {false, std::move(error), {}};
+        return {false, mergeDiagnostics(ctx.driver_diagnostics, error), {}};
     }
 
-    return {true, std::move(ctx.dc.message), {}};
+    return {true, mergeDiagnostics(ctx.driver_diagnostics, ctx.dc.message), {}};
 }
 
 } // namespace
@@ -729,12 +750,17 @@ CompileResult compile(const std::vector<std::string>& input_args, OutputMode mod
         return {false, std::move(error), {}};
     }
 
+    if (instrument && !ctx.dc.message.empty()) {
+        ctx.driver_diagnostics = std::move(ctx.dc.message);
+        ctx.dc.message.clear();
+        ctx.dc.os.flush();
+    }
+
     Cc1Runner cc1(ctx, *diags);
     if (instrument && mode == OutputMode::ToFile)
     {
         return runInstrumentedToFile(ctx, cc1, plan, error);
     }
-
     return cc1.runSingle(*plan.cc1Jobs.front());
 }
 
