@@ -9,6 +9,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstrTypes.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
@@ -45,6 +46,36 @@ bool isMallocLike(const llvm::Function &fn)
     return fnTy->getParamType(0)->isIntegerTy();
 }
 
+bool isCallocLike(const llvm::Function &fn)
+{
+    if (!fn.isDeclaration()) {
+        return false;
+    }
+    const auto *fnTy = fn.getFunctionType();
+    if (!fnTy || fnTy->isVarArg() || fnTy->getNumParams() != 2) {
+        return false;
+    }
+    if (!fnTy->getReturnType()->isPointerTy()) {
+        return false;
+    }
+    return fnTy->getParamType(0)->isIntegerTy() && fnTy->getParamType(1)->isIntegerTy();
+}
+
+bool isReallocLike(const llvm::Function &fn)
+{
+    if (!fn.isDeclaration()) {
+        return false;
+    }
+    const auto *fnTy = fn.getFunctionType();
+    if (!fnTy || fnTy->isVarArg() || fnTy->getNumParams() != 2) {
+        return false;
+    }
+    if (!fnTy->getReturnType()->isPointerTy()) {
+        return false;
+    }
+    return fnTy->getParamType(0)->isPointerTy() && fnTy->getParamType(1)->isIntegerTy();
+}
+
 bool isFreeLike(const llvm::Function &fn)
 {
     if (!fn.isDeclaration()) {
@@ -58,6 +89,32 @@ bool isFreeLike(const llvm::Function &fn)
         return false;
     }
     return fnTy->getParamType(0)->isPointerTy();
+}
+
+bool isOperatorNewName(llvm::StringRef name, bool &isArray)
+{
+    if (name == "_Znwm" || name == "__Znwm") {
+        isArray = false;
+        return true;
+    }
+    if (name == "_Znam" || name == "__Znam") {
+        isArray = true;
+        return true;
+    }
+    return false;
+}
+
+bool isOperatorDeleteName(llvm::StringRef name, bool &isArray)
+{
+    if (name == "_ZdlPv" || name == "__ZdlPv") {
+        isArray = false;
+        return true;
+    }
+    if (name == "_ZdaPv" || name == "__ZdaPv") {
+        isArray = true;
+        return true;
+    }
+    return false;
 }
 
 llvm::Constant *createSiteString(llvm::Module &module, llvm::StringRef site)
@@ -91,6 +148,34 @@ llvm::Value *getSiteString(llvm::Module &module,
     llvm::Constant *value = createSiteString(module, site);
     cache[di] = value;
     return value;
+}
+
+llvm::CallBase *replaceCall(llvm::CallBase *call,
+                            llvm::FunctionCallee target,
+                            llvm::ArrayRef<llvm::Value *> args)
+{
+    if (auto *invoke = llvm::dyn_cast<llvm::InvokeInst>(call)) {
+        llvm::IRBuilder<> builder(invoke);
+        auto *newInvoke = builder.CreateInvoke(target,
+                                               invoke->getNormalDest(),
+                                               invoke->getUnwindDest(),
+                                               args);
+        newInvoke->setCallingConv(invoke->getCallingConv());
+        newInvoke->setDebugLoc(invoke->getDebugLoc());
+        invoke->replaceAllUsesWith(newInvoke);
+        invoke->eraseFromParent();
+        return newInvoke;
+    }
+
+    auto *callInst = llvm::cast<llvm::CallInst>(call);
+    llvm::IRBuilder<> builder(callInst);
+    auto *newCall = builder.CreateCall(target, args);
+    newCall->setCallingConv(callInst->getCallingConv());
+    newCall->setTailCallKind(callInst->getTailCallKind());
+    newCall->setDebugLoc(callInst->getDebugLoc());
+    callInst->replaceAllUsesWith(newCall);
+    callInst->eraseFromParent();
+    return newCall;
 }
 
 bool isEffectivelyUnused(llvm::Value *value)
@@ -145,16 +230,34 @@ void wrapAllocCalls(llvm::Module &module)
     llvm::Type *sizeTy = layout.getIntPtrType(context);
 
     auto *mallocTy = llvm::FunctionType::get(voidPtrTy, {sizeTy, voidPtrTy}, false);
+    auto *callocTy = llvm::FunctionType::get(voidPtrTy, {sizeTy, sizeTy, voidPtrTy}, false);
+    auto *reallocTy = llvm::FunctionType::get(voidPtrTy, {voidPtrTy, sizeTy, voidPtrTy}, false);
     auto *freeTy = llvm::FunctionType::get(llvm::Type::getVoidTy(context), {voidPtrTy}, false);
 
     llvm::FunctionCallee ctMalloc = module.getOrInsertFunction("__ct_malloc", mallocTy);
     llvm::FunctionCallee ctMallocUnreachable = module.getOrInsertFunction("__ct_malloc_unreachable", mallocTy);
+    llvm::FunctionCallee ctCalloc = module.getOrInsertFunction("__ct_calloc", callocTy);
+    llvm::FunctionCallee ctCallocUnreachable = module.getOrInsertFunction("__ct_calloc_unreachable", callocTy);
+    llvm::FunctionCallee ctRealloc = module.getOrInsertFunction("__ct_realloc", reallocTy);
+    llvm::FunctionCallee ctNew = module.getOrInsertFunction("__ct_new", mallocTy);
+    llvm::FunctionCallee ctNewUnreachable = module.getOrInsertFunction("__ct_new_unreachable", mallocTy);
+    llvm::FunctionCallee ctNewArray = module.getOrInsertFunction("__ct_new_array", mallocTy);
+    llvm::FunctionCallee ctNewArrayUnreachable =
+        module.getOrInsertFunction("__ct_new_array_unreachable", mallocTy);
     llvm::FunctionCallee ctFree = module.getOrInsertFunction("__ct_free", freeTy);
+    llvm::FunctionCallee ctDelete = module.getOrInsertFunction("__ct_delete", freeTy);
+    llvm::FunctionCallee ctDeleteArray = module.getOrInsertFunction("__ct_delete_array", freeTy);
 
     llvm::DenseMap<const llvm::DILocation *, llvm::Constant *> siteCache;
     llvm::Constant *unknownSite = nullptr;
-    llvm::SmallVector<llvm::CallInst *, 16> mallocCalls;
-    llvm::SmallVector<llvm::CallInst *, 16> freeCalls;
+    llvm::SmallVector<llvm::CallBase *, 16> mallocCalls;
+    llvm::SmallVector<llvm::CallBase *, 16> callocCalls;
+    llvm::SmallVector<llvm::CallBase *, 16> reallocCalls;
+    llvm::SmallVector<llvm::CallBase *, 16> freeCalls;
+    llvm::SmallVector<llvm::CallBase *, 16> newCalls;
+    llvm::SmallVector<llvm::CallBase *, 16> newArrayCalls;
+    llvm::SmallVector<llvm::CallBase *, 16> deleteCalls;
+    llvm::SmallVector<llvm::CallBase *, 16> deleteArrayCalls;
 
     for (llvm::Function &func : module) {
         if (!shouldInstrument(func)) {
@@ -162,7 +265,7 @@ void wrapAllocCalls(llvm::Module &module)
         }
         for (llvm::BasicBlock &bb : func) {
             for (llvm::Instruction &inst : bb) {
-                auto *call = llvm::dyn_cast<llvm::CallInst>(&inst);
+                auto *call = llvm::dyn_cast<llvm::CallBase>(&inst);
                 if (!call) {
                     continue;
                 }
@@ -177,16 +280,48 @@ void wrapAllocCalls(llvm::Module &module)
                     if (isMallocLike(*callee)) {
                         mallocCalls.push_back(call);
                     }
-                } else if (name == "free") {
+                    continue;
+                }
+                if (name == "calloc") {
+                    if (isCallocLike(*callee)) {
+                        callocCalls.push_back(call);
+                    }
+                    continue;
+                }
+                if (name == "realloc") {
+                    if (isReallocLike(*callee)) {
+                        reallocCalls.push_back(call);
+                    }
+                    continue;
+                }
+                if (name == "free") {
                     if (isFreeLike(*callee)) {
                         freeCalls.push_back(call);
+                    }
+                    continue;
+                }
+
+                bool isArray = false;
+                if (isOperatorNewName(name, isArray) && isMallocLike(*callee)) {
+                    if (isArray) {
+                        newArrayCalls.push_back(call);
+                    } else {
+                        newCalls.push_back(call);
+                    }
+                    continue;
+                }
+                if (isOperatorDeleteName(name, isArray) && isFreeLike(*callee)) {
+                    if (isArray) {
+                        deleteArrayCalls.push_back(call);
+                    } else {
+                        deleteCalls.push_back(call);
                     }
                 }
             }
         }
     }
 
-    for (llvm::CallInst *call : mallocCalls) {
+    for (llvm::CallBase *call : mallocCalls) {
         llvm::IRBuilder<> builder(call);
         llvm::Value *sizeArg = call->getArgOperand(0);
         if (sizeArg->getType() != sizeTy) {
@@ -195,26 +330,88 @@ void wrapAllocCalls(llvm::Module &module)
 
         llvm::Value *site = getSiteString(module, *call, siteCache, unknownSite);
         llvm::FunctionCallee target = isEffectivelyUnused(call) ? ctMallocUnreachable : ctMalloc;
-        auto *newCall = builder.CreateCall(target, {sizeArg, site});
-        newCall->setCallingConv(call->getCallingConv());
-        newCall->setTailCallKind(call->getTailCallKind());
-        newCall->setDebugLoc(call->getDebugLoc());
-
-        call->replaceAllUsesWith(newCall);
-        call->eraseFromParent();
+        (void)replaceCall(call, target, {sizeArg, site});
     }
 
-    for (llvm::CallInst *call : freeCalls) {
+    for (llvm::CallBase *call : callocCalls) {
+        llvm::IRBuilder<> builder(call);
+        llvm::Value *countArg = call->getArgOperand(0);
+        llvm::Value *sizeArg = call->getArgOperand(1);
+        if (countArg->getType() != sizeTy) {
+            countArg = builder.CreateZExtOrTrunc(countArg, sizeTy);
+        }
+        if (sizeArg->getType() != sizeTy) {
+            sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
+        }
+
+        llvm::Value *site = getSiteString(module, *call, siteCache, unknownSite);
+        llvm::FunctionCallee target = isEffectivelyUnused(call) ? ctCallocUnreachable : ctCalloc;
+        (void)replaceCall(call, target, {countArg, sizeArg, site});
+    }
+
+    for (llvm::CallBase *call : reallocCalls) {
+        llvm::IRBuilder<> builder(call);
+        llvm::Value *ptrArg = call->getArgOperand(0);
+        llvm::Value *sizeArg = call->getArgOperand(1);
+        if (ptrArg->getType() != voidPtrTy) {
+            ptrArg = builder.CreateBitCast(ptrArg, voidPtrTy);
+        }
+        if (sizeArg->getType() != sizeTy) {
+            sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
+        }
+
+        llvm::Value *site = getSiteString(module, *call, siteCache, unknownSite);
+        (void)replaceCall(call, ctRealloc, {ptrArg, sizeArg, site});
+    }
+
+    for (llvm::CallBase *call : newCalls) {
+        llvm::IRBuilder<> builder(call);
+        llvm::Value *sizeArg = call->getArgOperand(0);
+        if (sizeArg->getType() != sizeTy) {
+            sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
+        }
+        llvm::Value *site = getSiteString(module, *call, siteCache, unknownSite);
+        llvm::FunctionCallee target = isEffectivelyUnused(call) ? ctNewUnreachable : ctNew;
+        (void)replaceCall(call, target, {sizeArg, site});
+    }
+
+    for (llvm::CallBase *call : newArrayCalls) {
+        llvm::IRBuilder<> builder(call);
+        llvm::Value *sizeArg = call->getArgOperand(0);
+        if (sizeArg->getType() != sizeTy) {
+            sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
+        }
+        llvm::Value *site = getSiteString(module, *call, siteCache, unknownSite);
+        llvm::FunctionCallee target =
+            isEffectivelyUnused(call) ? ctNewArrayUnreachable : ctNewArray;
+        (void)replaceCall(call, target, {sizeArg, site});
+    }
+
+    for (llvm::CallBase *call : freeCalls) {
         llvm::IRBuilder<> builder(call);
         llvm::Value *ptrArg = call->getArgOperand(0);
         if (ptrArg->getType() != voidPtrTy) {
             ptrArg = builder.CreateBitCast(ptrArg, voidPtrTy);
         }
-        auto *newCall = builder.CreateCall(ctFree, {ptrArg});
-        newCall->setCallingConv(call->getCallingConv());
-        newCall->setTailCallKind(call->getTailCallKind());
-        newCall->setDebugLoc(call->getDebugLoc());
-        call->eraseFromParent();
+        (void)replaceCall(call, ctFree, {ptrArg});
+    }
+
+    for (llvm::CallBase *call : deleteCalls) {
+        llvm::IRBuilder<> builder(call);
+        llvm::Value *ptrArg = call->getArgOperand(0);
+        if (ptrArg->getType() != voidPtrTy) {
+            ptrArg = builder.CreateBitCast(ptrArg, voidPtrTy);
+        }
+        (void)replaceCall(call, ctDelete, {ptrArg});
+    }
+
+    for (llvm::CallBase *call : deleteArrayCalls) {
+        llvm::IRBuilder<> builder(call);
+        llvm::Value *ptrArg = call->getArgOperand(0);
+        if (ptrArg->getType() != voidPtrTy) {
+            ptrArg = builder.CreateBitCast(ptrArg, voidPtrTy);
+        }
+        (void)replaceCall(call, ctDeleteArray, {ptrArg});
     }
 }
 
