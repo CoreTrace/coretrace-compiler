@@ -44,6 +44,8 @@ Options:
 - --ct-no-alloc-trace, --ct-alloc-trace: disable/enable malloc/free tracing logs.
 
 All other arguments are forwarded to clang (e.g., -O2, -g, -I, -D, -L, -l, -std=...).
+Alloc instrumentation rewrites malloc/free/calloc/realloc and basic C++ operator new/delete
+(scalar/array). Sized/aligned new/delete overloads are not handled yet.
 
 #### HOW TO USE THIS CORETRACE-COMPILER IN YOUR PROJECT
 
