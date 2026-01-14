@@ -354,6 +354,35 @@ CT_NOINSTR static void ct_log_alloc_details(const char *label,
     ct_log(CTLevel::Warn, "└-----------------------------------┘\n");
 }
 
+CT_NOINSTR static void ct_log_realloc_details(const char *label,
+                                              const char *status,
+                                              size_t old_req_size,
+                                              size_t old_real_size,
+                                              void *old_ptr,
+                                              size_t new_req_size,
+                                              size_t new_real_size,
+                                              void *new_ptr,
+                                              const char *site,
+                                              CTColor color)
+{
+    ct_log(CTLevel::Warn,
+           "{}{}{} :: tid={} site={}\n",
+           ct_color(color),
+           label,
+           ct_color(CTColor::Reset),
+           ct_thread_id(),
+           ct_site_name(site));
+    ct_log(CTLevel::Warn, "┌-----------------------------------┐\n");
+    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "status", status);
+    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "old_req_size", old_req_size);
+    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "new_req_size", new_req_size);
+    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "old_alloc_size", old_real_size);
+    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "new_alloc_size", new_real_size);
+    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "old_ptr", std::format("{:p}", old_ptr));
+    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "new_ptr", std::format("{:p}", new_ptr));
+    ct_log(CTLevel::Warn, "└-----------------------------------┘\n");
+}
+
 CT_NOINSTR static void *ct_malloc_impl(size_t size, const char *site, int unreachable)
 {
     ct_init_env_once();
@@ -535,25 +564,28 @@ CT_NOINSTR static void *ct_realloc_impl(void *ptr, size_t size, const char *site
     }
 
     size_t old_size = 0;
+    size_t old_req_size = 0;
     int had_entry = 0;
 
     ct_lock_acquire();
     if (ptr) {
-        had_entry = ct_table_lookup(ptr, &old_size, nullptr, nullptr, nullptr);
+        had_entry = ct_table_lookup(ptr, &old_size, &old_req_size, nullptr, nullptr);
     }
     ct_lock_release();
 
     void *new_ptr = realloc(ptr, size);
     if (!new_ptr && size > 0) {
         if (ct_alloc_trace_enabled) {
-            ct_log(CTLevel::Warn,
-                   "{}tracing-realloc{} :: tid={} site={} ptr={:p} size={} (failed)\n",
-                   ct_color(CTColor::Yellow),
-                   ct_color(CTColor::Reset),
-                   ct_thread_id(),
-                   ct_site_name(site),
-                   ptr,
-                   size);
+            ct_log_realloc_details("tracing-realloc",
+                                   "failed",
+                                   old_req_size,
+                                   old_size,
+                                   ptr,
+                                   size,
+                                   0,
+                                   nullptr,
+                                   site,
+                                   CTColor::Yellow);
         }
         return nullptr;
     }
@@ -592,15 +624,27 @@ CT_NOINSTR static void *ct_realloc_impl(void *ptr, size_t size, const char *site
     }
 
     if (ct_alloc_trace_enabled) {
-        ct_log(CTLevel::Info,
-               "{}tracing-realloc{} :: tid={} site={} ptr={:p} new_ptr={:p} size={}\n",
-               ct_color(CTColor::Yellow),
-               ct_color(CTColor::Reset),
-               ct_thread_id(),
-               ct_site_name(site),
-               ptr,
-               new_ptr,
-               size);
+        const char *status = "updated";
+        if (size == 0 && ptr) {
+            status = "freed";
+        } else if (!ptr && new_ptr) {
+            status = "allocated";
+        } else if (new_ptr == ptr) {
+            status = "in-place";
+        } else if (new_ptr) {
+            status = "moved";
+        }
+
+        ct_log_realloc_details("tracing-realloc",
+                               status,
+                               old_req_size,
+                               old_size,
+                               ptr,
+                               size,
+                               real_size,
+                               new_ptr,
+                               site,
+                               CTColor::Yellow);
     }
 
     return new_ptr;
