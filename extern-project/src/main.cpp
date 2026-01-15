@@ -13,17 +13,20 @@ int main(int argc, char *argv[])
     args.reserve(argc - 1);
 
     compilerlib::OutputMode mode = compilerlib::OutputMode::ToFile;
+    bool instrument = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--in-mem" || arg == "--in-memory") {
             mode = compilerlib::OutputMode::ToMemory;
+        } else if (arg == "--instrument") {
+            instrument = true;
         } else {
             args.push_back(std::move(arg));
         }
     }
 
-    auto res = compilerlib::compile(args, mode);
+    auto res = compilerlib::compile(args, mode, instrument);
 
     if (!res.success) {
         std::cerr << res.diagnostics;

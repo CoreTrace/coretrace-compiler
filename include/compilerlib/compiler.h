@@ -21,7 +21,9 @@ struct CompileResult
 };
 
 // std::pair<bool, std::string> compile(const std::vector<std::string>& args);
-CompileResult compile(const std::vector<std::string>& args, OutputMode mode = OutputMode::ToFile);
+CompileResult compile(const std::vector<std::string>& args,
+                      OutputMode mode = OutputMode::ToFile,
+                      bool instrument = false);
 
 #ifdef __cplusplus
 extern "C" {

@@ -15,8 +15,48 @@ include_directories(
 )
 
 option(BUILD_TESTS "Build test executables" OFF)
+option(ENABLE_DEBUG_ASAN "Enable debug symbols and AddressSanitizer" OFF)
 
-set(LIB_SOURCES src/compilerlib/compiler.cpp)
+if(ENABLE_DEBUG_ASAN)
+  if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+  endif()
+
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
+    set(ASAN_FLAGS -fsanitize=address -fno-omit-frame-pointer)
+    add_compile_options(-g -O0 ${ASAN_FLAGS})
+    add_link_options(${ASAN_FLAGS})
+  else()
+    message(WARNING "ENABLE_DEBUG_ASAN is ON but ASAN flags are only set for Clang/GNU compilers.")
+  endif()
+endif()
+
+set(LIB_SOURCES
+  src/compilerlib/compiler.cpp
+  src/compilerlib/instrumentation/alloc.cpp
+  src/compilerlib/instrumentation/bounds.cpp
+  src/compilerlib/instrumentation/common.cpp
+  src/compilerlib/instrumentation/config.cpp
+  src/compilerlib/instrumentation/trace.cpp
+  src/compilerlib/instrumentation/vtable.cpp
+)
+
+add_library(ct_instrument_runtime STATIC
+  src/runtime/ct_instrument_runtime.cpp
+  src/runtime/ct_runtime_alloc.cpp
+  src/runtime/ct_runtime_backtrace.cpp
+  src/runtime/ct_runtime_bounds.cpp
+  src/runtime/ct_runtime_env.cpp
+  src/runtime/ct_runtime_logging.cpp
+  src/runtime/ct_runtime_shadow.cpp
+  src/runtime/ct_runtime_state.cpp
+  src/runtime/ct_runtime_trace.cpp
+  src/runtime/ct_runtime_vtable.cpp
+)
+set_target_properties(ct_instrument_runtime PROPERTIES OUTPUT_NAME "ct_instrument_runtime")
+if(ENABLE_DEBUG_ASAN)
+  target_compile_options(ct_instrument_runtime PRIVATE -fno-sanitize=address)
+endif()
 
 add_library(compilerlib_static STATIC ${LIB_SOURCES})
 
@@ -51,6 +91,12 @@ target_include_directories(compilerlib_static
 )
 # ALIAS FOR USE WITH FETCHCONTENT
 add_library(cc::compilerlib_static ALIAS compilerlib_static)
+
+target_compile_definitions(compilerlib_static
+  PRIVATE
+    CT_RUNTIME_LIB_PATH="$<TARGET_FILE:ct_instrument_runtime>"
+)
+add_dependencies(compilerlib_static ct_instrument_runtime)
 
 if(NOT LLVM_ENABLE_RTTI)
   target_compile_options(compilerlib_static PRIVATE -fno-rtti)
@@ -89,6 +135,12 @@ target_include_directories(compilerlib_shared
 )
 # ALIAS FOR USE WITH FETCHCONTENT
 add_library(cc::compilerlib_shared ALIAS compilerlib_shared)
+
+target_compile_definitions(compilerlib_shared
+  PRIVATE
+    CT_RUNTIME_LIB_PATH="$<TARGET_FILE:ct_instrument_runtime>"
+)
+add_dependencies(compilerlib_shared ct_instrument_runtime)
 
 if(NOT LLVM_ENABLE_RTTI)
   target_compile_options(compilerlib_shared PRIVATE -fno-rtti)
