@@ -57,7 +57,7 @@ struct CtAddrInfo {
     CtModuleInfo module;
 };
 
-CT_NOINSTR bool ct_demangle_any(const char *name, std::string &out)
+CT_NODISCARD CT_NOINSTR bool ct_demangle_any(const char *name, std::string &out)
 {
     if (!name) {
         return false;
@@ -77,7 +77,7 @@ CT_NOINSTR bool ct_demangle_any(const char *name, std::string &out)
     return false;
 }
 
-CT_NOINSTR bool ct_lookup_symbol(const void *addr, const char **name_out, const char **object_out)
+CT_NODISCARD CT_NOINSTR bool ct_lookup_symbol(const void *addr, const char **name_out, const char **object_out)
 {
 #if defined(__APPLE__) || defined(__linux__)
     Dl_info info;
@@ -99,7 +99,7 @@ CT_NOINSTR bool ct_lookup_symbol(const void *addr, const char **name_out, const 
 #endif
 }
 
-CT_NOINSTR bool ct_read_vtable_info(void *this_ptr, CtVtableInfo &info)
+CT_NODISCARD CT_NOINSTR bool ct_read_vtable_info(void *this_ptr, CtVtableInfo &info)
 {
     if (!this_ptr) {
         return false;
@@ -117,7 +117,7 @@ CT_NOINSTR bool ct_read_vtable_info(void *this_ptr, CtVtableInfo &info)
     return true;
 }
 
-CT_NOINSTR std::string ct_format_type_name(const std::type_info *typeinfo)
+CT_NODISCARD CT_NOINSTR std::string ct_format_type_name(const std::type_info *typeinfo)
 {
     if (!typeinfo) {
         return "<unknown>";
@@ -131,7 +131,7 @@ CT_NOINSTR std::string ct_format_type_name(const std::type_info *typeinfo)
     return name ? std::string(name) : "<unknown>";
 }
 
-CT_NOINSTR std::string ct_basename(const std::string &path)
+CT_NODISCARD CT_NOINSTR std::string ct_basename(const std::string &path)
 {
     if (path.empty()) {
         return {};
@@ -150,7 +150,7 @@ CT_NOINSTR std::string ct_basename(const std::string &path)
     return path.substr(pos + 1, end - pos - 1);
 }
 
-CT_NOINSTR std::string ct_make_realpath(const std::string &path)
+CT_NODISCARD CT_NOINSTR std::string ct_make_realpath(const std::string &path)
 {
     if (path.empty()) {
         return {};
@@ -162,7 +162,7 @@ CT_NOINSTR std::string ct_make_realpath(const std::string &path)
     return std::string(resolved);
 }
 
-CT_NOINSTR std::string ct_framework_name(const std::string &path)
+CT_NODISCARD CT_NOINSTR std::string ct_framework_name(const std::string &path)
 {
 #if defined(__APPLE__)
     const std::string marker = ".framework/";
@@ -186,7 +186,7 @@ CT_NOINSTR std::string ct_framework_name(const std::string &path)
 #endif
 }
 
-CT_NOINSTR const std::string &ct_executable_path(void)
+CT_NODISCARD CT_NOINSTR const std::string &ct_executable_path(void)
 {
     static std::string cached;
     static int initialized = 0;
@@ -223,7 +223,7 @@ CT_NOINSTR void ct_fill_module_paths(CtModuleInfo &info, const std::string &path
     info.framework = ct_framework_name(path);
 }
 
-CT_NOINSTR bool ct_address_on_stack(const void *addr)
+CT_NODISCARD CT_NOINSTR bool ct_address_on_stack(const void *addr)
 {
     if (!addr) {
         return false;
@@ -258,7 +258,7 @@ CT_NOINSTR bool ct_address_on_stack(const void *addr)
 #endif
 }
 
-CT_NOINSTR bool ct_modules_match(const CtModuleInfo &lhs, const CtModuleInfo &rhs)
+CT_NODISCARD CT_NOINSTR bool ct_modules_match(const CtModuleInfo &lhs, const CtModuleInfo &rhs)
 {
     if (!lhs.resolved || !rhs.resolved) {
         return false;
@@ -288,7 +288,7 @@ CT_NOINSTR bool ct_modules_match(const CtModuleInfo &lhs, const CtModuleInfo &rh
     return false;
 }
 
-CT_NOINSTR std::string ct_module_display_name(const CtModuleInfo &info)
+CT_NODISCARD CT_NOINSTR std::string ct_module_display_name(const CtModuleInfo &info)
 {
     if (!info.resolved) {
         return "<unresolved>";
@@ -315,7 +315,7 @@ struct CtLinuxFindContext {
     bool found = false;
 };
 
-CT_NOINSTR static int ct_linux_phdr_cb(struct dl_phdr_info *info, size_t, void *data)
+CT_NODISCARD CT_NOINSTR static int ct_linux_phdr_cb(struct dl_phdr_info *info, size_t, void *data)
 {
     auto *ctx = static_cast<CtLinuxFindContext *>(data);
     if (!ctx || !ctx->addr || !ctx->out) {
@@ -350,7 +350,7 @@ CT_NOINSTR static int ct_linux_phdr_cb(struct dl_phdr_info *info, size_t, void *
 #endif
 
 #if defined(__APPLE__)
-CT_NOINSTR bool ct_find_module_macos(const void *addr, CtModuleInfo &out)
+CT_NODISCARD CT_NOINSTR bool ct_find_module_macos(const void *addr, CtModuleInfo &out)
 {
     if (!addr) {
         return false;
@@ -421,7 +421,7 @@ CT_NOINSTR bool ct_find_module_macos(const void *addr, CtModuleInfo &out)
 }
 #endif
 
-CT_NOINSTR bool ct_resolve_module(const void *addr, CtModuleInfo &out)
+CT_NODISCARD CT_NOINSTR bool ct_resolve_module(const void *addr, CtModuleInfo &out)
 {
     if (!addr) {
         return false;
@@ -463,7 +463,7 @@ CT_NOINSTR bool ct_resolve_module(const void *addr, CtModuleInfo &out)
     return false;
 }
 
-CT_NOINSTR CtAddrInfo ct_resolve_address(const void *addr)
+CT_NODISCARD CT_NOINSTR CtAddrInfo ct_resolve_address(const void *addr)
 {
     CtAddrInfo info;
     if (!addr) {
@@ -587,7 +587,7 @@ CT_NOINSTR void ct_log_box(CTLevel level,
     ct_log(level, "{}", bottom);
 }
 
-CT_NOINSTR bool ct_is_unknown_type(const char *type_name)
+CT_NODISCARD CT_NOINSTR bool ct_is_unknown_type(const char *type_name)
 {
     if (!type_name || type_name[0] == '\0') {
         return true;
@@ -723,7 +723,7 @@ CT_NOINSTR void __ct_vcall_trace(void *this_ptr,
     const char *sym = nullptr;
     std::string demangled;
     if (target && ct_lookup_symbol(target, &sym, nullptr) && sym) {
-        ct_demangle_any(sym, demangled);
+        (void)ct_demangle_any(sym, demangled);
     }
 
     std::string this_value = this_ptr ? std::format("{:p}", this_ptr) : "<null>";

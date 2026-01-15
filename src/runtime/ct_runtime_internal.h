@@ -1,6 +1,8 @@
 #ifndef CT_RUNTIME_INTERNAL_H
 #define CT_RUNTIME_INTERNAL_H
 
+#include "compilerlib/attributes.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <errno.h>
@@ -91,15 +93,15 @@ extern size_t ct_early_trace_count;
 extern size_t ct_early_trace_limit;
 extern thread_local const char *ct_current_site;
 
-CT_NOINSTR size_t ct_strlen(const char *str);
-CT_NOINSTR int ct_streq(const char *lhs, const char *rhs);
-CT_NOINSTR std::string_view ct_color(CTColor color);
-CT_NOINSTR std::string_view ct_level_label(CTLevel level);
-CT_NOINSTR std::string_view ct_level_color(CTLevel level);
-CT_NOINSTR int ct_pid(void);
-CT_NOINSTR unsigned long long ct_thread_id(void);
-CT_NOINSTR const char *ct_site_name(const char *site);
-CT_NOINSTR int ct_log_is_enabled(void);
+CT_NODISCARD CT_NOINSTR size_t ct_strlen(const char *str);
+CT_NODISCARD CT_NOINSTR int ct_streq(const char *lhs, const char *rhs);
+CT_NODISCARD CT_NOINSTR std::string_view ct_color(CTColor color);
+CT_NODISCARD CT_NOINSTR std::string_view ct_level_label(CTLevel level);
+CT_NODISCARD CT_NOINSTR std::string_view ct_level_color(CTLevel level);
+CT_NODISCARD CT_NOINSTR int ct_pid(void);
+CT_NODISCARD CT_NOINSTR unsigned long long ct_thread_id(void);
+CT_NODISCARD CT_NOINSTR const char *ct_site_name(const char *site);
+CT_NODISCARD CT_NOINSTR int ct_log_is_enabled(void);
 CT_NOINSTR void ct_enable_logging(void);
 CT_NOINSTR void ct_disable_logging(void);
 CT_NOINSTR void ct_write_prefix(CTLevel level);
@@ -112,17 +114,17 @@ CT_NOINSTR void ct_maybe_install_backtrace(void);
 CT_NOINSTR void ct_init_env_once(void);
 CT_NOINSTR void ct_lock_acquire(void);
 CT_NOINSTR void ct_lock_release(void);
-CT_NOINSTR int ct_table_insert(void *ptr, size_t req_size, size_t size, const char *site);
-CT_NOINSTR int ct_table_remove(void *ptr,
+CT_NODISCARD CT_NOINSTR int ct_table_insert(void *ptr, size_t req_size, size_t size, const char *site);
+CT_NODISCARD CT_NOINSTR int ct_table_remove(void *ptr,
                                size_t *size_out,
                                size_t *req_size_out,
                                const char **site_out);
-CT_NOINSTR int ct_table_lookup(const void *ptr,
+CT_NODISCARD CT_NOINSTR int ct_table_lookup(const void *ptr,
                                size_t *size_out,
                                size_t *req_size_out,
                                const char **site_out,
                                unsigned char *state_out);
-CT_NOINSTR int ct_table_lookup_containing(const void *ptr,
+CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void *ptr,
                                           void **base_out,
                                           size_t *size_out,
                                           size_t *req_size_out,
@@ -130,7 +132,7 @@ CT_NOINSTR int ct_table_lookup_containing(const void *ptr,
                                           unsigned char *state_out);
 CT_NOINSTR void ct_shadow_poison_range(const void *addr, size_t size);
 CT_NOINSTR void ct_shadow_unpoison_range(const void *addr, size_t size);
-CT_NOINSTR int ct_shadow_check_access(const void *ptr,
+CT_NODISCARD CT_NOINSTR int ct_shadow_check_access(const void *ptr,
                                       size_t access_size,
                                       const void *base,
                                       size_t req_size,

@@ -42,7 +42,7 @@ CT_NOINSTR static void ct_shadow_lock_release(void)
     __atomic_store_n(&ct_shadow_lock, 0, __ATOMIC_RELEASE);
 }
 
-CT_NOINSTR static size_t ct_shadow_hash(uintptr_t page, size_t mask)
+CT_NODISCARD CT_NOINSTR static size_t ct_shadow_hash(uintptr_t page, size_t mask)
 {
     uintptr_t value = page;
     value ^= value >> 33;
@@ -51,7 +51,7 @@ CT_NOINSTR static size_t ct_shadow_hash(uintptr_t page, size_t mask)
     return static_cast<size_t>(value) & mask;
 }
 
-CT_NOINSTR static int ct_shadow_rehash_entry(struct ct_shadow_page_entry *table,
+CT_NODISCARD CT_NOINSTR static int ct_shadow_rehash_entry(struct ct_shadow_page_entry *table,
                                              size_t mask,
                                              size_t size,
                                              const struct ct_shadow_page_entry *entry)
@@ -68,7 +68,7 @@ CT_NOINSTR static int ct_shadow_rehash_entry(struct ct_shadow_page_entry *table,
     return 0;
 }
 
-CT_NOINSTR static int ct_shadow_grow_locked(void)
+CT_NODISCARD CT_NOINSTR static int ct_shadow_grow_locked(void)
 {
     if (ct_shadow_table_bits >= CT_SHADOW_TABLE_MAX_BITS) {
         return 0;
@@ -105,7 +105,7 @@ CT_NOINSTR static int ct_shadow_grow_locked(void)
     return 1;
 }
 
-CT_NOINSTR static unsigned char *ct_shadow_get_page_locked(uintptr_t page, int create)
+CT_NODISCARD CT_NOINSTR static unsigned char *ct_shadow_get_page_locked(uintptr_t page, int create)
 {
     for (int attempt = 0; attempt < 2; ++attempt) {
         size_t idx = ct_shadow_hash(page, ct_shadow_table_mask);
@@ -167,7 +167,7 @@ CT_NOINSTR static unsigned char *ct_shadow_get_page_locked(uintptr_t page, int c
     return nullptr;
 }
 
-CT_NOINSTR static unsigned char ct_shadow_get_byte_locked(uintptr_t shadow_index)
+CT_NODISCARD CT_NOINSTR static unsigned char ct_shadow_get_byte_locked(uintptr_t shadow_index)
 {
     uintptr_t page = shadow_index >> CT_SHADOW_PAGE_BITS;
     size_t offset = static_cast<size_t>(shadow_index & CT_SHADOW_PAGE_MASK);
@@ -232,7 +232,7 @@ CT_NOINSTR void ct_shadow_unpoison_range(const void *addr, size_t size)
     ct_shadow_lock_release();
 }
 
-CT_NOINSTR int ct_shadow_check_access(const void *ptr,
+CT_NODISCARD CT_NOINSTR int ct_shadow_check_access(const void *ptr,
                                       size_t access_size,
                                       const void *base,
                                       size_t req_size,

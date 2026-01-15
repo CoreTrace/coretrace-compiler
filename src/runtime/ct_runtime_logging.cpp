@@ -11,7 +11,7 @@ namespace
 int ct_log_enabled = 0;
 int ct_log_atexit_registered = 0;
 
-CT_NOINSTR int ct_use_color(void)
+CT_NODISCARD CT_NOINSTR int ct_use_color(void)
 {
     static int cached = -1;
 
@@ -43,7 +43,7 @@ CT_NOINSTR void ct_register_atexit(void)
 }
 } // namespace
 
-CT_NOINSTR size_t ct_strlen(const char *str)
+CT_NODISCARD CT_NOINSTR size_t ct_strlen(const char *str)
 {
     size_t len = 0;
 
@@ -56,7 +56,7 @@ CT_NOINSTR size_t ct_strlen(const char *str)
     return len;
 }
 
-CT_NOINSTR int ct_streq(const char *lhs, const char *rhs)
+CT_NODISCARD CT_NOINSTR int ct_streq(const char *lhs, const char *rhs)
 {
     if (!lhs || !rhs)
         return 0;
@@ -71,7 +71,7 @@ CT_NOINSTR int ct_streq(const char *lhs, const char *rhs)
     return *lhs == *rhs;
 }
 
-CT_NOINSTR std::string_view ct_color(CTColor color)
+CT_NODISCARD CT_NOINSTR std::string_view ct_color(CTColor color)
 {
     if (!ct_use_color())
         return {};
@@ -129,7 +129,7 @@ CT_NOINSTR std::string_view ct_color(CTColor color)
     return {};
 }
 
-CT_NOINSTR std::string_view ct_level_label(CTLevel level)
+CT_NODISCARD CT_NOINSTR std::string_view ct_level_label(CTLevel level)
 {
     switch (level)
     {
@@ -144,7 +144,7 @@ CT_NOINSTR std::string_view ct_level_label(CTLevel level)
     return "INFO";
 }
 
-CT_NOINSTR std::string_view ct_level_color(CTLevel level)
+CT_NODISCARD CT_NOINSTR std::string_view ct_level_color(CTLevel level)
 {
     switch (level)
     {
@@ -159,7 +159,7 @@ CT_NOINSTR std::string_view ct_level_color(CTLevel level)
     return ct_color(CTColor::Cyan);
 }
 
-CT_NOINSTR int ct_pid(void)
+CT_NODISCARD CT_NOINSTR int ct_pid(void)
 {
     static int cached = 0;
 
@@ -169,7 +169,7 @@ CT_NOINSTR int ct_pid(void)
     return cached;
 }
 
-CT_NOINSTR unsigned long long ct_thread_id(void)
+CT_NODISCARD CT_NOINSTR unsigned long long ct_thread_id(void)
 {
 #if defined(__APPLE__)
     uint64_t tid = 0;
@@ -182,7 +182,7 @@ CT_NOINSTR unsigned long long ct_thread_id(void)
 #endif
 }
 
-CT_NOINSTR const char *ct_site_name(const char *site)
+CT_NODISCARD CT_NOINSTR const char *ct_site_name(const char *site)
 {
     if (site && site[0] != '\0')
         return site;
@@ -194,7 +194,7 @@ CT_NOINSTR const char *ct_site_name(const char *site)
     return "<unknown>";
 }
 
-CT_NOINSTR int ct_log_is_enabled(void)
+CT_NODISCARD CT_NOINSTR int ct_log_is_enabled(void)
 {
     return __atomic_load_n(&ct_log_enabled, __ATOMIC_ACQUIRE) != 0;
 }
