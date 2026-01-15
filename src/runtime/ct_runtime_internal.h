@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <errno.h>
 #include <format>
 #include <string>
 #include <string_view>
@@ -102,6 +103,7 @@ CT_NOINSTR int ct_log_is_enabled(void);
 CT_NOINSTR void ct_enable_logging(void);
 CT_NOINSTR void ct_disable_logging(void);
 CT_NOINSTR void ct_write_prefix(CTLevel level);
+CT_NOINSTR void ct_write_raw(const char *data, size_t size);
 CT_NOINSTR void ct_write_str(std::string_view str);
 CT_NOINSTR void ct_write_cstr(const char *str);
 CT_NOINSTR void ct_write_dec(size_t value);
@@ -180,11 +182,11 @@ CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... arg
         prefix.append(ct_color(CTColor::Reset));
         prefix.push_back(' ');
 
-        (void)write(2, prefix.data(), prefix.size());
-        (void)write(2, msg.data(), msg.size());
+        ct_write_raw(prefix.data(), prefix.size());
+        ct_write_raw(msg.data(), msg.size());
     } catch (...) {
         static const char fallback[] = "ct: log format error\n";
-        (void)write(2, fallback, ct_strlen(fallback));
+        ct_write_raw(fallback, ct_strlen(fallback));
     }
 }
 
