@@ -17,6 +17,9 @@ struct RuntimeConfig {
     bool trace_enabled = true;
     bool alloc_enabled = true;
     bool bounds_enabled = true;
+    bool vtable_enabled = false;
+    bool vcall_trace_enabled = false;
+    bool vtable_diag_enabled = false;
     bool autofree_enabled = true;
     bool alloc_trace_enabled = true;
     bool bounds_without_alloc = false;

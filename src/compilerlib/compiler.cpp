@@ -1,9 +1,11 @@
 #include "compilerlib/compiler.h"
+#include "compilerlib/attributes.hpp"
 
 #include "compilerlib/instrumentation/alloc.hpp"
 #include "compilerlib/instrumentation/bounds.hpp"
 #include "compilerlib/instrumentation/config.hpp"
 #include "compilerlib/instrumentation/trace.hpp"
+#include "compilerlib/instrumentation/vtable.hpp"
 
 #include <clang/Frontend/FrontendActions.h>
 #include <clang/Driver/Compilation.h>
@@ -194,7 +196,7 @@ class ArgBuilder {
 public:
     explicit ArgBuilder(CompileContext &ctx) : ctx_(ctx) {}
 
-    bool build(std::string &error)
+    CT_NODISCARD bool build(std::string &error)
     {
         extractRuntimeConfig(ctx_.input_args, ctx_.filtered_args, ctx_.runtimeConfig);
         if (ctx_.runtimeConfig.bounds_without_alloc) {
@@ -250,6 +252,13 @@ public:
             ctx_.clang_args.push_back("-lc++");
 #else
             ctx_.clang_args.push_back("-lstdc++");
+#if defined(__linux__)
+            if (ctx_.runtimeConfig.vtable_enabled ||
+                ctx_.runtimeConfig.vcall_trace_enabled ||
+                ctx_.runtimeConfig.vtable_diag_enabled) {
+                ctx_.clang_args.push_back("-ldl");
+            }
+#endif
 #endif
 #else
             error = "instrumentation runtime path not configured";
@@ -261,7 +270,7 @@ public:
     }
 
 private:
-    bool resolveClangPath(std::string &error)
+    CT_NODISCARD bool resolveClangPath(std::string &error)
     {
         if (auto found = llvm::sys::findProgramByName("clang-20")) {
             ctx_.clang_path = *found;
@@ -274,7 +283,7 @@ private:
         return true;
     }
 
-    bool linkRequested() const
+    CT_NODISCARD bool linkRequested(void) const
     {
         return !(hasArg(ctx_.filtered_args, "-c") ||
                  hasArg(ctx_.filtered_args, "-S") ||
@@ -285,7 +294,8 @@ private:
     CompileContext &ctx_;
 };
 
-class DriverSession {
+class DriverSession
+{
 public:
     DriverSession(CompileContext &ctx, clang::DiagnosticsEngine &diags)
         : ctx_(ctx),
@@ -300,7 +310,7 @@ public:
         driver_->setCheckInputsExist(false);
     }
 
-    std::unique_ptr<clang::driver::Compilation> buildCompilation(std::string &error)
+    CT_NODISCARD std::unique_ptr<clang::driver::Compilation> buildCompilation(std::string &error)
     {
         auto comp = driver_->BuildCompilation(ctx_.clang_args);
         auto ownedComp = takeCompilation(std::move(comp));
@@ -321,49 +331,53 @@ private:
     std::unique_ptr<clang::driver::Driver> driver_;
 };
 
-struct JobPlan {
+struct JobPlan
+{
     llvm::SmallVector<const clang::driver::Command *, 4> cc1Jobs;
     llvm::SmallVector<const clang::driver::Command *, 4> otherJobs;
 };
 
-JobPlan buildJobPlan(const clang::driver::Compilation &comp)
+CT_NODISCARD JobPlan buildJobPlan(const clang::driver::Compilation &comp)
 {
     JobPlan plan;
-    for (const auto &job : comp.getJobs()) {
+
+    for (const auto &job : comp.getJobs())
+    {
         const auto &jobArgs = job.getArguments();
-        if (isCc1Command(jobArgs)) {
+
+        if (isCc1Command(jobArgs))
             plan.cc1Jobs.push_back(&job);
-        } else {
+        else
             plan.otherJobs.push_back(&job);
-        }
     }
     return plan;
 }
 
-bool emitObjectFile(llvm::Module &module,
+CT_NODISCARD bool emitObjectFile(llvm::Module &module,
                     const clang::CompilerInstance &ci,
                     llvm::StringRef outputPath,
                     std::string &error)
 {
     std::string targetTriple = module.getTargetTriple();
-    if (targetTriple.empty()) {
+
+    if (targetTriple.empty())
         targetTriple = llvm::sys::getDefaultTargetTriple();
-    }
     module.setTargetTriple(targetTriple);
 
     std::string targetError;
     const llvm::Target *target = llvm::TargetRegistry::lookupTarget(targetTriple, targetError);
-    if (!target) {
+    if (!target)
+    {
         error = targetError;
         return false;
     }
 
     const auto &targetOpts = ci.getTargetOpts();
     std::string features;
-    for (const auto &feature : targetOpts.FeaturesAsWritten) {
-        if (!features.empty()) {
+    for (const auto &feature : targetOpts.FeaturesAsWritten)
+    {
+        if (!features.empty())
             features += ",";
-        }
         features += feature;
     }
 
@@ -377,7 +391,8 @@ bool emitObjectFile(llvm::Module &module,
                                     std::nullopt,
                                     std::nullopt,
                                     codegenLevel));
-    if (!targetMachine) {
+    if (!targetMachine)
+    {
         error = "failed to create target machine";
         return false;
     }
@@ -386,13 +401,15 @@ bool emitObjectFile(llvm::Module &module,
 
     std::error_code ec;
     llvm::raw_fd_ostream dest(outputPath, ec, llvm::sys::fs::OF_None);
-    if (ec) {
+    if (ec)
+    {
         error = ec.message();
         return false;
     }
 
     llvm::legacy::PassManager pass;
-    if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, llvm::CodeGenFileType::ObjectFile)) {
+    if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, llvm::CodeGenFileType::ObjectFile))
+    {
         error = "target does not support object emission";
         return false;
     }
@@ -410,7 +427,7 @@ public:
         initTargetsOnce();
     }
 
-    bool runInstrumented(const clang::driver::Command &job, std::string &error)
+    CT_NODISCARD bool runInstrumented(const clang::driver::Command &job, std::string &error)
     {
         const llvm::opt::ArgStringList &ccArgs = job.getArguments();
         auto ci = makeCompilerInstance(ccArgs);
@@ -450,6 +467,11 @@ public:
         if (ctx_.runtimeConfig.bounds_enabled) {
             instrumentMemoryAccesses(*module);
         }
+        if (ctx_.runtimeConfig.vtable_enabled || ctx_.runtimeConfig.vcall_trace_enabled) {
+            instrumentVirtualCalls(*module,
+                                   ctx_.runtimeConfig.vcall_trace_enabled,
+                                   ctx_.runtimeConfig.vtable_enabled);
+        }
         emitRuntimeConfigGlobals(*module, ctx_.runtimeConfig);
 
         const char *outputObj = findArgValue(ccArgs, "-o");
@@ -472,7 +494,8 @@ public:
         result.diagnostics = {};
         result.llvmIR = {};
 
-        auto fail = [&](const char *fallback) -> CompileResult {
+        auto fail = [&](const char *fallback) -> CompileResult
+        {
             result.success = false;
             std::string diag = ctx_.dc.message.empty() ? fallback : std::move(ctx_.dc.message);
             result.diagnostics = mergeDiagnostics(ctx_.driver_diagnostics, diag);
@@ -491,28 +514,28 @@ public:
             case clang::frontend::EmitObj:
             {
                 clang::EmitObjAction action;
+
                 resetDiagnostics();
-                if (!ci->ExecuteAction(action)) {
+                if (!ci->ExecuteAction(action))
                     return fail("compilation failed");
-                }
                 break;
             }
             case clang::frontend::EmitAssembly:
             {
                 clang::EmitAssemblyAction action;
+
                 resetDiagnostics();
-                if (!ci->ExecuteAction(action)) {
+                if (!ci->ExecuteAction(action))
                     return fail("compilation failed");
-                }
                 break;
             }
             case clang::frontend::EmitBC:
             {
                 clang::EmitBCAction action;
+
                 resetDiagnostics();
-                if (!ci->ExecuteAction(action)) {
+                if (!ci->ExecuteAction(action))
                     return fail("compilation failed");
-                }
                 break;
             }
             case clang::frontend::EmitLLVM:
@@ -520,14 +543,15 @@ public:
                 if (ctx_.mode == OutputMode::ToFile)
                 {
                     clang::EmitLLVMAction action;
+
                     resetDiagnostics();
-                    if (!ci->ExecuteAction(action)) {
+                    if (!ci->ExecuteAction(action))
                         return fail("compilation failed");
-                    }
                 }
                 if (ctx_.mode == OutputMode::ToMemory)
                 {
                     clang::EmitLLVMOnlyAction action;
+
                     resetDiagnostics();
                     if (!ci->ExecuteAction(action))
                     {
@@ -539,16 +563,18 @@ public:
                     std::unique_ptr<llvm::Module> module = action.takeModule();
                     if (module)
                     {
-                        if (ctx_.instrument) {
-                            if (ctx_.runtimeConfig.trace_enabled) {
+                        if (ctx_.instrument)
+                        {
+                            if (ctx_.runtimeConfig.trace_enabled)
                                 instrumentModule(*module);
-                            }
-                            if (ctx_.runtimeConfig.alloc_enabled) {
+                            if (ctx_.runtimeConfig.alloc_enabled)
                                 wrapAllocCalls(*module);
-                            }
-                            if (ctx_.runtimeConfig.bounds_enabled) {
+                            if (ctx_.runtimeConfig.bounds_enabled)
                                 instrumentMemoryAccesses(*module);
-                            }
+                            if (ctx_.runtimeConfig.vtable_enabled || ctx_.runtimeConfig.vcall_trace_enabled)
+                                instrumentVirtualCalls(*module,
+                                                       ctx_.runtimeConfig.vcall_trace_enabled,
+                                                       ctx_.runtimeConfig.vtable_enabled);
                             emitRuntimeConfigGlobals(*module, ctx_.runtimeConfig);
                         }
                         std::string llvmIR;
@@ -575,9 +601,8 @@ private:
     static void initTargetsOnce(void)
     {
         static bool initialized = false;
-        if (initialized) {
+        if (initialized)
             return;
-        }
         initialized = true;
 
         LLVMInitializeAllTargetInfos();
@@ -587,13 +612,13 @@ private:
         LLVMInitializeAllAsmPrinters();
     }
 
-    void resetDiagnostics()
+    void resetDiagnostics(void)
     {
         ctx_.dc.message.clear();
         ctx_.dc.os.flush();
     }
 
-    std::unique_ptr<clang::CompilerInstance> makeCompilerInstance(const llvm::opt::ArgStringList &ccArgs)
+    CT_NODISCARD std::unique_ptr<clang::CompilerInstance> makeCompilerInstance(const llvm::opt::ArgStringList &ccArgs)
     {
         auto invoc = std::make_unique<clang::CompilerInvocation>();
         clang::CompilerInvocation::CreateFromArgs(*invoc, ccArgs, driverDiags_);
@@ -624,19 +649,22 @@ private:
     clang::DiagnosticsEngine &driverDiags_;
 };
 
-class Linker {
+class Linker
+{
 public:
-    bool run(const llvm::SmallVector<const clang::driver::Command *, 4> &jobs,
+    CT_NODISCARD bool run(const llvm::SmallVector<const clang::driver::Command *, 4> &jobs,
              std::string &error) const
     {
-        for (const auto *job : jobs) {
+        for (const auto *job : jobs)
+        {
             std::string errMsg;
             bool execFailed = false;
             int rc = job->Execute({}, &errMsg, &execFailed);
-            if (execFailed || rc != 0) {
-                if (errMsg.empty()) {
+
+            if (execFailed || rc != 0)
+            {
+                if (errMsg.empty())
                     errMsg = "link job failed";
-                }
                 error = std::move(errMsg);
                 return false;
             }
@@ -645,7 +673,7 @@ public:
     }
 };
 
-llvm::IntrusiveRefCntPtr<clang::DiagnosticsEngine> createDriverDiagnostics(CompileContext &ctx)
+CT_NODISCARD llvm::IntrusiveRefCntPtr<clang::DiagnosticsEngine> createDriverDiagnostics(CompileContext &ctx)
 {
     return clang::CompilerInstance::createDiagnostics(
 #if LLVM_VERSION_MAJOR >= 20
@@ -656,7 +684,7 @@ llvm::IntrusiveRefCntPtr<clang::DiagnosticsEngine> createDriverDiagnostics(Compi
         false);
 }
 
-CompileResult runNonInstrumentedCompilation(CompileContext &ctx,
+CT_NODISCARD CompileResult runNonInstrumentedCompilation(CompileContext &ctx,
                                             DriverSession &driver,
                                             clang::driver::Compilation &comp)
 {
@@ -673,14 +701,17 @@ CompileResult runNonInstrumentedCompilation(CompileContext &ctx,
     return result;
 }
 
-bool validateJobPlan(const JobPlan &plan, OutputMode mode, std::string &error)
+CT_NODISCARD bool validateJobPlan(const JobPlan &plan, OutputMode mode, std::string &error)
 {
-    if (plan.cc1Jobs.empty()) {
+    if (plan.cc1Jobs.empty())
+    {
         error = "no cc1 job found";
         return false;
     }
-    if (mode == OutputMode::ToMemory) {
-        if (plan.cc1Jobs.size() != 1 || !plan.otherJobs.empty()) {
+    if (mode == OutputMode::ToMemory)
+    {
+        if (plan.cc1Jobs.size() != 1 || !plan.otherJobs.empty())
+        {
             error = "in-memory output only supports a single compilation job";
             return false;
         }
@@ -688,38 +719,37 @@ bool validateJobPlan(const JobPlan &plan, OutputMode mode, std::string &error)
     return true;
 }
 
-CompileResult runInstrumentedToFile(CompileContext &ctx,
+CT_NODISCARD CompileResult runInstrumentedToFile(CompileContext &ctx,
                                     Cc1Runner &cc1,
                                     const JobPlan &plan,
                                     std::string &error)
 {
-    for (const auto *job : plan.cc1Jobs)
-    {
-        if (!cc1.runInstrumented(*job, error))
-        {
-            return {false, mergeDiagnostics(ctx.driver_diagnostics, error), {}};
-        }
-    }
-
     Linker linker;
-    if (!linker.run(plan.otherJobs, error)) {
+
+    for (const auto *job : plan.cc1Jobs)
+        if (!cc1.runInstrumented(*job, error))
+            return {false, mergeDiagnostics(ctx.driver_diagnostics, error), {}};
+
+    if (!linker.run(plan.otherJobs, error))
         return {false, mergeDiagnostics(ctx.driver_diagnostics, error), {}};
-    }
 
     return {true, mergeDiagnostics(ctx.driver_diagnostics, ctx.dc.message), {}};
 }
 
 } // namespace
 
-CompileResult compile(const std::vector<std::string>& input_args, OutputMode mode, bool instrument)
+CT_NODISCARD CompileResult compile(
+    const std::vector<std::string>& input_args,
+    OutputMode mode,
+    bool instrument
+)
 {
     CompileContext ctx(input_args, mode, instrument);
     ArgBuilder argBuilder(ctx);
     std::string error;
+
     if (!argBuilder.build(error))
-    {
         return {false, std::move(error), {}};
-    }
 
     auto diags = createDriverDiagnostics(ctx);
 
@@ -728,29 +758,22 @@ CompileResult compile(const std::vector<std::string>& input_args, OutputMode mod
     if (!comp)
     {
         if (error.empty())
-        {
             error = ctx.dc.message.empty() ? "failed to build compilation" : std::move(ctx.dc.message);
-        }
         return {false, std::move(error), {}};
     }
 
     if (comp->getJobs().empty())
-    {
         return {false, ctx.dc.message.empty() ? "no jobs to run" : std::move(ctx.dc.message), {}};
-    }
 
     if (mode == OutputMode::ToFile && !instrument)
-    {
         return runNonInstrumentedCompilation(ctx, driver, *comp);
-    }
 
     JobPlan plan = buildJobPlan(*comp);
     if (!validateJobPlan(plan, mode, error))
-    {
         return {false, std::move(error), {}};
-    }
 
-    if (instrument && !ctx.dc.message.empty()) {
+    if (instrument && !ctx.dc.message.empty())
+    {
         ctx.driver_diagnostics = std::move(ctx.dc.message);
         ctx.dc.message.clear();
         ctx.dc.os.flush();
@@ -758,9 +781,7 @@ CompileResult compile(const std::vector<std::string>& input_args, OutputMode mod
 
     Cc1Runner cc1(ctx, *diags);
     if (instrument && mode == OutputMode::ToFile)
-    {
         return runInstrumentedToFile(ctx, cc1, plan, error);
-    }
     return cc1.runSingle(*plan.cc1Jobs.front());
 }
 
@@ -771,13 +792,19 @@ extern "C" int compile_c(int argc, const char** argv, char* output_buffer, int b
     OutputMode mode = OutputMode::ToFile;
     bool instrument = false;
 
-    for (int i = 0; i < argc; ++i) {
+    for (int i = 0; i < argc; ++i)
+    {
         std::string arg = argv[i];
-        if (arg == "--in-mem" || arg == "--in-memory") {
+        if (arg == "--in-mem" || arg == "--in-memory")
+        {
             mode = OutputMode::ToMemory;
-        } else if (arg == "--instrument") {
+        }
+        else if (arg == "--instrument")
+        {
             instrument = true;
-        } else {
+        }
+        else
+        {
             args.emplace_back(std::move(arg));
         }
     }
