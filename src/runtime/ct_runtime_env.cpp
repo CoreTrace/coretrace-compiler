@@ -14,8 +14,10 @@ extern "C" {
 extern int __ct_config_shadow CT_WEAK_IMPORT;
 extern int __ct_config_shadow_aggressive CT_WEAK_IMPORT;
 extern int __ct_config_bounds_no_abort CT_WEAK_IMPORT;
+extern int __ct_config_disable_alloc CT_WEAK_IMPORT;
 extern int __ct_config_disable_autofree CT_WEAK_IMPORT;
 extern int __ct_config_disable_alloc_trace CT_WEAK_IMPORT;
+extern int __ct_config_vtable_diag CT_WEAK_IMPORT;
 }
 
 namespace {
@@ -37,11 +39,18 @@ CT_NOINSTR static void ct_apply_compiled_config(void)
     if (readWeak(&__ct_config_bounds_no_abort)) {
         ct_bounds_abort = 0;
     }
+    if (readWeak(&__ct_config_disable_alloc)) {
+        ct_disable_alloc = 1;
+        ct_alloc_disabled_by_config = 1;
+    }
     if (readWeak(&__ct_config_disable_autofree)) {
         ct_autofree_enabled = 0;
     }
     if (readWeak(&__ct_config_disable_alloc_trace)) {
         ct_alloc_trace_enabled = 0;
+    }
+    if (readWeak(&__ct_config_vtable_diag)) {
+        ct_vtable_diag_enabled = 1;
     }
 }
 
@@ -55,6 +64,7 @@ static void ct_runtime_init(void)
     }
     if (getenv("CT_DISABLE_ALLOC") != nullptr) {
         ct_disable_alloc = 1;
+        ct_alloc_disabled_by_env = 1;
     }
     if (getenv("CT_EARLY_TRACE") != nullptr) {
         ct_early_trace = 1;
@@ -98,6 +108,7 @@ CT_NOINSTR void ct_init_env_once(void)
     }
     if (getenv("CT_DISABLE_ALLOC") != nullptr) {
         ct_disable_alloc = 1;
+        ct_alloc_disabled_by_env = 1;
     }
     if (getenv("CT_EARLY_TRACE") != nullptr) {
         ct_early_trace = 1;

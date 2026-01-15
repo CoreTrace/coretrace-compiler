@@ -38,6 +38,7 @@ set(LIB_SOURCES
   src/compilerlib/instrumentation/common.cpp
   src/compilerlib/instrumentation/config.cpp
   src/compilerlib/instrumentation/trace.cpp
+  src/compilerlib/instrumentation/vtable.cpp
 )
 
 add_library(ct_instrument_runtime STATIC
@@ -50,6 +51,7 @@ add_library(ct_instrument_runtime STATIC
   src/runtime/ct_runtime_shadow.cpp
   src/runtime/ct_runtime_state.cpp
   src/runtime/ct_runtime_trace.cpp
+  src/runtime/ct_runtime_vtable.cpp
 )
 set_target_properties(ct_instrument_runtime PROPERTIES OUTPUT_NAME "ct_instrument_runtime")
 if(ENABLE_DEBUG_ASAN)
