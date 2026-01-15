@@ -1,5 +1,6 @@
 #include "compilerlib/instrumentation/bounds.hpp"
 #include "compilerlib/instrumentation/common.hpp"
+#include "compilerlib/attributes.hpp"
 
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallVector.h>
@@ -13,35 +14,38 @@
 #include <llvm/IR/Type.h>
 #include <llvm/Support/Casting.h>
 
-namespace compilerlib {
-namespace {
+namespace compilerlib
+{
+namespace
+{
 
-llvm::Constant *createSiteString(llvm::Module &module, llvm::StringRef site)
+CT_NODISCARD llvm::Constant *createSiteString(llvm::Module &module, llvm::StringRef site)
 {
     llvm::IRBuilder<> builder(module.getContext());
     auto *global = builder.CreateGlobalString(site, ".ct.site", 0, &module);
     auto *zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(module.getContext()), 0);
     llvm::Constant *indices[] = {zero, zero};
+
     return llvm::ConstantExpr::getInBoundsGetElementPtr(global->getValueType(), global, indices);
 }
 
-llvm::Value *getSiteString(llvm::Module &module,
+CT_NODISCARD llvm::Value *getSiteString(llvm::Module &module,
                            const llvm::Instruction &inst,
                            llvm::DenseMap<const llvm::DILocation *, llvm::Constant *> &cache,
                            llvm::Constant *&unknown)
 {
     llvm::DebugLoc loc = inst.getDebugLoc();
-    if (!loc) {
-        if (!unknown) {
+    if (!loc)
+    {
+        if (!unknown)
             unknown = createSiteString(module, "<unknown>");
-        }
         return unknown;
     }
 
     const llvm::DILocation *di = loc.get();
-    if (auto it = cache.find(di); it != cache.end()) {
+
+    if (auto it = cache.find(di); it != cache.end())
         return it->second;
-    }
 
     std::string site = formatSiteString(inst);
     llvm::Constant *value = createSiteString(module, site);
@@ -49,28 +53,35 @@ llvm::Value *getSiteString(llvm::Module &module,
     return value;
 }
 
-llvm::Value *stripPointerCastsAndGEPs(llvm::Value *value)
+CT_NODISCARD llvm::Value *stripPointerCastsAndGEPs(llvm::Value *value)
 {
     llvm::Value *current = value;
-    while (current) {
-        if (auto *cast = llvm::dyn_cast<llvm::BitCastInst>(current)) {
+    while (current)
+    {
+        if (auto *cast = llvm::dyn_cast<llvm::BitCastInst>(current))
+        {
             current = cast->getOperand(0);
             continue;
         }
-        if (auto *cast = llvm::dyn_cast<llvm::AddrSpaceCastInst>(current)) {
+        if (auto *cast = llvm::dyn_cast<llvm::AddrSpaceCastInst>(current))
+        {
             current = cast->getOperand(0);
             continue;
         }
-        if (auto *gep = llvm::dyn_cast<llvm::GEPOperator>(current)) {
+        if (auto *gep = llvm::dyn_cast<llvm::GEPOperator>(current))
+        {
             current = gep->getPointerOperand();
             continue;
         }
-        if (auto *ce = llvm::dyn_cast<llvm::ConstantExpr>(current)) {
-            if (ce->isCast()) {
+        if (auto *ce = llvm::dyn_cast<llvm::ConstantExpr>(current))
+        {
+            if (ce->isCast())
+            {
                 current = ce->getOperand(0);
                 continue;
             }
-            if (ce->getOpcode() == llvm::Instruction::GetElementPtr) {
+            if (ce->getOpcode() == llvm::Instruction::GetElementPtr)
+            {
                 current = ce->getOperand(0);
                 continue;
             }
@@ -80,18 +91,22 @@ llvm::Value *stripPointerCastsAndGEPs(llvm::Value *value)
     return current;
 }
 
-llvm::Value *findSingleStoredValue(llvm::AllocaInst *alloca)
+CT_NODISCARD llvm::Value *findSingleStoredValue(llvm::AllocaInst *alloca)
 {
     llvm::Value *stored = nullptr;
-    for (llvm::User *user : alloca->users()) {
+    for (llvm::User *user : alloca->users())
+    {
         auto *store = llvm::dyn_cast<llvm::StoreInst>(user);
-        if (!store) {
+        if (!store)
+        {
             continue;
         }
-        if (store->getPointerOperand() != alloca) {
+        if (store->getPointerOperand() != alloca)
+        {
             continue;
         }
-        if (stored) {
+        if (stored)
+        {
             return nullptr;
         }
         stored = store->getValueOperand();
@@ -99,22 +114,25 @@ llvm::Value *findSingleStoredValue(llvm::AllocaInst *alloca)
     return stored;
 }
 
-llvm::Value *resolveBasePointer(llvm::Value *ptr)
+CT_NODISCARD llvm::Value *resolveBasePointer(llvm::Value *ptr)
 {
     llvm::Value *base = stripPointerCastsAndGEPs(ptr);
     auto *load = llvm::dyn_cast<llvm::LoadInst>(base);
-    if (!load) {
+    if (!load)
+    {
         return base ? base : ptr;
     }
 
     llvm::Value *loadSrc = stripPointerCastsAndGEPs(load->getPointerOperand());
     auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(loadSrc);
-    if (!alloca) {
+    if (!alloca)
+    {
         return base ? base : ptr;
     }
 
     llvm::Value *stored = findSingleStoredValue(alloca);
-    if (!stored) {
+    if (!stored)
+    {
         return base ? base : ptr;
     }
 
@@ -134,10 +152,13 @@ void emitBoundsCheck(llvm::IRBuilder<> &builder,
 {
     llvm::Value *baseCast = base;
     llvm::Value *ptrCast = ptr;
-    if (baseCast->getType() != voidPtrTy) {
+
+    if (baseCast->getType() != voidPtrTy)
+    {
         baseCast = builder.CreateBitCast(baseCast, voidPtrTy);
     }
-    if (ptrCast->getType() != voidPtrTy) {
+    if (ptrCast->getType() != voidPtrTy)
+    {
         ptrCast = builder.CreateBitCast(ptrCast, voidPtrTy);
     }
     llvm::Value *writeVal = llvm::ConstantInt::get(intTy, isWrite ? 1 : 0);

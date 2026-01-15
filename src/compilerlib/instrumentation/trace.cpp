@@ -11,8 +11,10 @@
 #include <llvm/IR/Type.h>
 #include <llvm/Support/Casting.h>
 
-namespace compilerlib {
-namespace {
+namespace compilerlib
+{
+namespace
+{
 
 llvm::Value *getStringLiteral(llvm::Module &module,
                               llvm::StringRef text,

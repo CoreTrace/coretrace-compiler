@@ -1,5 +1,6 @@
 #include "compilerlib/instrumentation/alloc.hpp"
 #include "compilerlib/instrumentation/common.hpp"
+#include "compilerlib/attributes.hpp"
 
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallPtrSet.h>
@@ -15,109 +16,129 @@
 #include <llvm/IR/Type.h>
 #include <llvm/Support/Casting.h>
 
-namespace compilerlib {
-namespace {
-
-llvm::Function *getCalledFunction(llvm::CallBase &call)
+namespace compilerlib
 {
-    if (auto *fn = call.getCalledFunction()) {
+namespace
+{
+
+CT_NODISCARD llvm::Function *getCalledFunction(llvm::CallBase &call)
+{
+    if (auto *fn = call.getCalledFunction())
+    {
         return fn;
     }
     auto *callee = call.getCalledOperand();
-    if (!callee) {
+    if (!callee)
+    {
         return nullptr;
     }
     callee = callee->stripPointerCasts();
     return llvm::dyn_cast<llvm::Function>(callee);
 }
 
-bool isMallocLike(const llvm::Function &fn)
+CT_NODISCARD bool isMallocLike(const llvm::Function &fn)
 {
-    if (!fn.isDeclaration()) {
+    if (!fn.isDeclaration())
+    {
         return false;
     }
     const auto *fnTy = fn.getFunctionType();
-    if (!fnTy || fnTy->isVarArg() || fnTy->getNumParams() != 1) {
+    if (!fnTy || fnTy->isVarArg() || fnTy->getNumParams() != 1)
+    {
         return false;
     }
-    if (!fnTy->getReturnType()->isPointerTy()) {
+    if (!fnTy->getReturnType()->isPointerTy())
+    {
         return false;
     }
     return fnTy->getParamType(0)->isIntegerTy();
 }
 
-bool isCallocLike(const llvm::Function &fn)
+CT_NODISCARD bool isCallocLike(const llvm::Function &fn)
 {
-    if (!fn.isDeclaration()) {
+    if (!fn.isDeclaration())
+    {
         return false;
     }
     const auto *fnTy = fn.getFunctionType();
-    if (!fnTy || fnTy->isVarArg() || fnTy->getNumParams() != 2) {
+    if (!fnTy || fnTy->isVarArg() || fnTy->getNumParams() != 2)
+    {
         return false;
     }
-    if (!fnTy->getReturnType()->isPointerTy()) {
+    if (!fnTy->getReturnType()->isPointerTy())
+    {
         return false;
     }
     return fnTy->getParamType(0)->isIntegerTy() && fnTy->getParamType(1)->isIntegerTy();
 }
 
-bool isReallocLike(const llvm::Function &fn)
+CT_NODISCARD bool isReallocLike(const llvm::Function &fn)
 {
-    if (!fn.isDeclaration()) {
+    if (!fn.isDeclaration())
+    {
         return false;
     }
     const auto *fnTy = fn.getFunctionType();
-    if (!fnTy || fnTy->isVarArg() || fnTy->getNumParams() != 2) {
+    if (!fnTy || fnTy->isVarArg() || fnTy->getNumParams() != 2)
+    {
         return false;
     }
-    if (!fnTy->getReturnType()->isPointerTy()) {
+    if (!fnTy->getReturnType()->isPointerTy())
+    {
         return false;
     }
     return fnTy->getParamType(0)->isPointerTy() && fnTy->getParamType(1)->isIntegerTy();
 }
 
-bool isFreeLike(const llvm::Function &fn)
+CT_NODISCARD bool isFreeLike(const llvm::Function &fn)
 {
-    if (!fn.isDeclaration()) {
+    if (!fn.isDeclaration())
+    {
         return false;
     }
     const auto *fnTy = fn.getFunctionType();
-    if (!fnTy || fnTy->isVarArg() || fnTy->getNumParams() != 1) {
+    if (!fnTy || fnTy->isVarArg() || fnTy->getNumParams() != 1)
+    {
         return false;
     }
-    if (!fnTy->getReturnType()->isVoidTy()) {
+    if (!fnTy->getReturnType()->isVoidTy())
+    {
         return false;
     }
     return fnTy->getParamType(0)->isPointerTy();
 }
 
-bool isOperatorNewName(llvm::StringRef name, bool &isArray)
+CT_NODISCARD bool isOperatorNewName(llvm::StringRef name, bool &isArray)
 {
-    if (name == "_Znwm" || name == "__Znwm") {
+    if (name == "_Znwm" || name == "__Znwm")
+    {
         isArray = false;
         return true;
     }
-    if (name == "_Znam" || name == "__Znam") {
+    if (name == "_Znam" || name == "__Znam")
+    {
         isArray = true;
         return true;
     }
     return false;
 }
 
-bool isOperatorDeleteName(llvm::StringRef name, bool &isArray)
+CT_NODISCARD bool isOperatorDeleteName(llvm::StringRef name, bool &isArray)
 {
-    if (name == "_ZdlPv" || name == "__ZdlPv") {
+    if (name == "_ZdlPv" || name == "__ZdlPv")
+    {
         isArray = false;
         return true;
     }
-    if (name == "_ZdaPv" || name == "__ZdaPv") {
+    if (name == "_ZdaPv" || name == "__ZdaPv")
+    {
         isArray = true;
         return true;
     }
     return false;
 }
 
-llvm::Constant *createSiteString(llvm::Module &module, llvm::StringRef site)
+CT_NODISCARD llvm::Constant *createSiteString(llvm::Module &module, llvm::StringRef site)
 {
     llvm::IRBuilder<> builder(module.getContext());
     auto *global = builder.CreateGlobalString(site, ".ct.site", 0, &module);
@@ -126,21 +147,24 @@ llvm::Constant *createSiteString(llvm::Module &module, llvm::StringRef site)
     return llvm::ConstantExpr::getInBoundsGetElementPtr(global->getValueType(), global, indices);
 }
 
-llvm::Value *getSiteString(llvm::Module &module,
+CT_NODISCARD llvm::Value *getSiteString(llvm::Module &module,
                            const llvm::Instruction &inst,
                            llvm::DenseMap<const llvm::DILocation *, llvm::Constant *> &cache,
                            llvm::Constant *&unknown)
 {
     llvm::DebugLoc loc = inst.getDebugLoc();
-    if (!loc) {
-        if (!unknown) {
+    if (!loc)
+    {
+        if (!unknown)
+        {
             unknown = createSiteString(module, "<unknown>");
         }
         return unknown;
     }
 
     const llvm::DILocation *di = loc.get();
-    if (auto it = cache.find(di); it != cache.end()) {
+    if (auto it = cache.find(di); it != cache.end())
+    {
         return it->second;
     }
 
@@ -150,11 +174,12 @@ llvm::Value *getSiteString(llvm::Module &module,
     return value;
 }
 
-llvm::CallBase *replaceCall(llvm::CallBase *call,
+CT_NODISCARD llvm::CallBase *replaceCall(llvm::CallBase *call,
                             llvm::FunctionCallee target,
                             llvm::ArrayRef<llvm::Value *> args)
 {
-    if (auto *invoke = llvm::dyn_cast<llvm::InvokeInst>(call)) {
+    if (auto *invoke = llvm::dyn_cast<llvm::InvokeInst>(call))
+    {
         llvm::IRBuilder<> builder(invoke);
         auto *newInvoke = builder.CreateInvoke(target,
                                                invoke->getNormalDest(),
@@ -178,7 +203,7 @@ llvm::CallBase *replaceCall(llvm::CallBase *call,
     return newCall;
 }
 
-bool isEffectivelyUnused(llvm::Value *value)
+CT_NODISCARD bool isEffectivelyUnused(llvm::Value *value)
 {
     llvm::SmallVector<llvm::Value *, 8> worklist;
     llvm::SmallPtrSet<llvm::Value *, 8> visited;
@@ -186,28 +211,38 @@ bool isEffectivelyUnused(llvm::Value *value)
     worklist.push_back(value);
     visited.insert(value);
 
-    while (!worklist.empty()) {
+    while (!worklist.empty())
+    {
         llvm::Value *current = worklist.pop_back_val();
-        for (llvm::Use &use : current->uses()) {
+        for (llvm::Use &use : current->uses())
+        {
             auto *user = use.getUser();
-            if (llvm::isa<llvm::DbgInfoIntrinsic>(user)) {
+            if (llvm::isa<llvm::DbgInfoIntrinsic>(user))
+            {
                 continue;
             }
-            if (auto *cast = llvm::dyn_cast<llvm::BitCastInst>(user)) {
-                if (visited.insert(cast).second) {
+            if (auto *cast = llvm::dyn_cast<llvm::BitCastInst>(user))
+            {
+                if (visited.insert(cast).second)
+                {
                     worklist.push_back(cast);
                 }
                 continue;
             }
-            if (auto *cast = llvm::dyn_cast<llvm::AddrSpaceCastInst>(user)) {
-                if (visited.insert(cast).second) {
+            if (auto *cast = llvm::dyn_cast<llvm::AddrSpaceCastInst>(user))
+            {
+                if (visited.insert(cast).second)
+                {
                     worklist.push_back(cast);
                 }
                 continue;
             }
-            if (auto *ce = llvm::dyn_cast<llvm::ConstantExpr>(user)) {
-                if (ce->isCast()) {
-                    if (visited.insert(ce).second) {
+            if (auto *ce = llvm::dyn_cast<llvm::ConstantExpr>(user))
+            {
+                if (ce->isCast())
+                {
+                    if (visited.insert(ce).second)
+                    {
                         worklist.push_back(ce);
                     }
                     continue;
