@@ -376,21 +376,22 @@ CT_NOINSTR static void ct_log_alloc_details(const char *label,
                                             size_t real_size,
                                             void *ptr,
                                             const char *site,
-                                            CTColor color)
+                                            CTColor color,
+                                            CTLevel lvl)
 {
-    ct_log(CTLevel::Warn,
+    ct_log(lvl,
            "{}{}{} :: tid={} site={}\n",
            ct_color(color),
            label,
            ct_color(CTColor::Reset),
            ct_thread_id(),
            ct_site_name(site));
-    ct_log(CTLevel::Warn, "┌-----------------------------------┐\n");
-    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "status", status);
-    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "req_size", req_size);
-    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "total_alloc_size", real_size);
-    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "ptr", std::format("{:p}", ptr));
-    ct_log(CTLevel::Warn, "└-----------------------------------┘\n");
+    ct_log(lvl, "┌-----------------------------------┐\n");
+    ct_log(lvl, "| {:<16} : {:<14} |\n", "status", status);
+    ct_log(lvl, "| {:<16} : {:<14} |\n", "req_size", req_size);
+    ct_log(lvl, "| {:<16} : {:<14} |\n", "total_alloc_size", real_size);
+    ct_log(lvl, "| {:<16} : {:<14} |\n", "ptr", std::format("{:p}", ptr));
+    ct_log(lvl, "└-----------------------------------┘\n");
 }
 
 CT_NOINSTR static void ct_log_realloc_details(const char *label,
@@ -458,7 +459,8 @@ CT_NODISCARD CT_NOINSTR static void *ct_malloc_impl(size_t size, const char *sit
                                  real_size,
                                  ptr,
                                  site,
-                                 CTColor::Yellow);
+                                 CTColor::Yellow,
+                                 CTLevel::Warn);
         }
         if (ptr && ct_autofree_enabled)
         {
@@ -475,7 +477,8 @@ CT_NODISCARD CT_NOINSTR static void *ct_malloc_impl(size_t size, const char *sit
                                  real_size,
                                  ptr,
                                  site,
-                                 CTColor::Yellow);
+                                 CTColor::Yellow,
+                                 CTLevel::Info);
         }
     }
 
@@ -524,7 +527,8 @@ CT_NODISCARD CT_NOINSTR static void *ct_calloc_impl(size_t count, size_t size, c
                                  real_size,
                                  ptr,
                                  site,
-                                 CTColor::Yellow);
+                                 CTColor::Yellow,
+                                 CTLevel::Warn);
         }
         if (ptr && ct_autofree_enabled)
         {
@@ -541,7 +545,8 @@ CT_NODISCARD CT_NOINSTR static void *ct_calloc_impl(size_t count, size_t size, c
                                  real_size,
                                  ptr,
                                  site,
-                                 CTColor::Yellow);
+                                 CTColor::Yellow,
+                                 CTLevel::Info);
         }
     }
 
@@ -589,7 +594,8 @@ CT_NODISCARD CT_NOINSTR static void *ct_new_impl(size_t size, const char *site, 
                                  real_size,
                                  ptr,
                                  site,
-                                 CTColor::Yellow);
+                                 CTColor::Yellow,
+                                 CTLevel::Warn);
         }
         if (ptr && ct_autofree_enabled)
         {
@@ -606,7 +612,8 @@ CT_NODISCARD CT_NOINSTR static void *ct_new_impl(size_t size, const char *site, 
                                  real_size,
                                  ptr,
                                  site,
-                                 CTColor::Yellow);
+                                 CTColor::Yellow,
+                                 CTLevel::Info);
         }
     }
 
