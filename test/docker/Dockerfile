@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     ninja-build \
+    python3-venv \
     python3 \
     git \
     && rm -rf /var/lib/apt/lists/*
@@ -39,5 +40,9 @@ RUN rm -rf build \
 
 RUN bash test/scripts/linux_compile.sh
 
-RUN PYTHONPATH=./test python3 test/examples/test_smoke.py
-RUN PYTHONPATH=./test python3 test/examples/test_extern_project.py
+RUN python3 -m venv .venv \
+    && . .venv/bin/activate \
+    && python -m pip install --upgrade pip \
+    && python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git \
+    && python test/examples/test_smoke.py \
+    && python test/examples/test_extern_project.py
