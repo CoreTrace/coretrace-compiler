@@ -244,23 +244,23 @@ public:
             ctx_.clang_args.push_back("-fno-builtin");
             ctx_.clang_args.push_back("-fno-builtin-malloc");
             ctx_.clang_args.push_back("-fno-builtin-free");
-            // On Linux, ensure position-independent code for all object files
-            // to avoid relocation errors with modern PIE-enabled distributions
-#if defined(__linux__)
-            if (!hasArg(ctx_.filtered_args, "-fPIE") && !hasArg(ctx_.filtered_args, "-fPIC")) {
-                ctx_.clang_args.push_back("-fPIE");
+            // Ensure position-independent code for Linux targets
+            // to avoid relocation errors with PIE-enabled distributions
+            if (kTargetTriple.contains("linux")) {
+                if (!hasArg(ctx_.filtered_args, "-fPIE") && !hasArg(ctx_.filtered_args, "-fPIC")) {
+                    ctx_.clang_args.push_back("-fPIE");
+                }
             }
-#endif
         }
 
         if (ctx_.instrument && ctx_.mode == OutputMode::ToFile && linkRequested()) {
 #ifdef CT_RUNTIME_LIB_PATH
-            // On Linux, ensure position-independent executable linking
-#if defined(__linux__)
-            if (!hasArg(ctx_.filtered_args, "-pie")) {
-                ctx_.clang_args.push_back("-pie");
+            // Ensure position-independent executable linking on Linux
+            if (kTargetTriple.contains("linux")) {
+                if (!hasArg(ctx_.filtered_args, "-pie")) {
+                    ctx_.clang_args.push_back("-pie");
+                }
             }
-#endif
             ctx_.clang_args.push_back("-x");
             ctx_.clang_args.push_back("none");
             ctx_.clang_args.push_back(CT_RUNTIME_LIB_PATH);
