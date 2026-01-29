@@ -46,4 +46,3 @@ RUN python3 -m venv .venv \
     && python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git \
     && python test/examples/test_smoke.py \
     && python test/examples/test_extern_project.py
-RUN PYTHONPATH=./test python3 test/examples/test_extern_project.py
