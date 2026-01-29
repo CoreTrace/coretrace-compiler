@@ -406,12 +406,15 @@ CT_NODISCARD bool emitObjectFile(llvm::Module &module,
 
     llvm::TargetOptions options;
     auto codegenLevel = toCodeGenOptLevel(ci.getCodeGenOpts().OptimizationLevel);
+    // For position-independent code (needed for instrumented code and PIE executables),
+    // explicitly set the relocation model to PIC
+    llvm::Reloc::Model relocModel = llvm::Reloc::PIC_;
     std::unique_ptr<llvm::TargetMachine> targetMachine(
         target->createTargetMachine(targetTriple,
                                     targetOpts.CPU,
                                     features,
                                     options,
-                                    std::nullopt,
+                                    relocModel,
                                     std::nullopt,
                                     codegenLevel));
     if (!targetMachine)
