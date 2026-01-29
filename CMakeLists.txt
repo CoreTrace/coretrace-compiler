@@ -33,6 +33,7 @@ endif()
 
 set(LIB_SOURCES
   src/compilerlib/compiler.cpp
+  src/compilerlib/toolchain.cpp
   src/compilerlib/instrumentation/alloc.cpp
   src/compilerlib/instrumentation/bounds.cpp
   src/compilerlib/instrumentation/common.cpp
@@ -65,13 +66,43 @@ add_library(compilerlib_static STATIC ${LIB_SOURCES})
 set(CLANG_RESOURCE_DIR "" CACHE STRING "Path to Clang resource directory")
 
 if(NOT CLANG_RESOURCE_DIR)
+  set(_CLANG_VERSIONED_CANDIDATES
+    clang-${LLVM_VERSION_MAJOR}
+    clang++-${LLVM_VERSION_MAJOR}
+  )
+  set(_CLANG_GENERIC_CANDIDATES
+    clang
+    clang++
+  )
+  get_filename_component(_LLVM_PREFIX "${LLVM_DIR}/../../.." ABSOLUTE)
+  set(_LLVM_BIN_DIR "${_LLVM_PREFIX}/bin")
   find_program(CLANG_EXECUTABLE
-    NAMES clang-20 clang
+    NAMES ${_CLANG_VERSIONED_CANDIDATES} ${_CLANG_GENERIC_CANDIDATES}
+    PATHS ${LLVM_TOOLS_BINARY_DIR} ${_LLVM_BIN_DIR}
+    NO_DEFAULT_PATH
     DOC "Path to the clang executable used to detect resource dir"
   )
+  if(NOT CLANG_EXECUTABLE)
+    find_program(CLANG_EXECUTABLE
+      NAMES ${_CLANG_VERSIONED_CANDIDATES}
+      DOC "Path to the clang executable used to detect resource dir"
+    )
+  endif()
 
   if(NOT CLANG_EXECUTABLE)
     message(FATAL_ERROR "Unable to find clang executable. Please set CLANG_RESOURCE_DIR manually.")
+  endif()
+
+  execute_process(
+    COMMAND ${CLANG_EXECUTABLE} --version
+    OUTPUT_VARIABLE _CLANG_VERSION_OUTPUT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  string(REGEX MATCH "(Apple clang|clang) version ([0-9]+)" _CLANG_VERSION_MATCH "${_CLANG_VERSION_OUTPUT}")
+  if(NOT _CLANG_VERSION_MATCH)
+    message(WARNING "Unable to parse clang version from: ${_CLANG_VERSION_OUTPUT}")
+  elseif(NOT CMAKE_MATCH_2 STREQUAL "${LLVM_VERSION_MAJOR}")
+    message(FATAL_ERROR "Clang version mismatch: found ${CMAKE_MATCH_2}, expected ${LLVM_VERSION_MAJOR}. Please set CLANG_RESOURCE_DIR or CLANG_EXECUTABLE explicitly.")
   endif()
 
   execute_process(
@@ -103,9 +134,9 @@ if(NOT LLVM_ENABLE_RTTI)
 endif()
 
 if(CLANG_LINK_CLANG_DYLIB)
-  target_link_libraries(compilerlib_static PRIVATE clang-cpp)
+  target_link_libraries(compilerlib_static PUBLIC clang-cpp)
 else()
-  target_link_libraries(compilerlib_static PRIVATE
+  target_link_libraries(compilerlib_static PUBLIC
   clangAST
   clangBasic
   clangCodeGen
@@ -118,9 +149,19 @@ else()
 endif()
 
 if(LLVM_LINK_LLVM_DYLIB)
-  target_link_libraries(compilerlib_static PRIVATE LLVM)
+  target_link_libraries(compilerlib_static PUBLIC LLVM)
 else()
-  target_link_libraries(compilerlib_static PRIVATE LLVMOption LLVMSupport LLVMTarget LLVMX86AsmParser LLVMX86CodeGen LLVMX86Desc LLVMX86Info )
+  target_link_libraries(compilerlib_static PUBLIC
+  LLVMOption
+  LLVMSupport
+  LLVMTarget
+    LLVMX86AsmParser
+    LLVMX86CodeGen
+    LLVMX86Desc
+    LLVMX86Info
+    LLVMObject
+    LLVMBinaryFormat
+  )
 endif()
 
 add_library(compilerlib_shared SHARED ${LIB_SOURCES})
@@ -163,6 +204,8 @@ else()
   LLVMX86CodeGen
   LLVMX86Desc
   LLVMX86Info
+  LLVMObject
+  LLVMBinaryFormat
   )
 endif()
 
@@ -175,6 +218,18 @@ foreach(tgt compilerlib_static compilerlib_shared cc)
       PRIVATE
         CLANG_RESOURCE_DIR=\"${CLANG_RESOURCE_DIR}\"
     )
+    if(_LLVM_BIN_DIR)
+      target_compile_definitions(${tgt}
+        PRIVATE
+          CT_LLVM_BIN_DIR=\"${_LLVM_BIN_DIR}\"
+      )
+    endif()
+    if(CLANG_EXECUTABLE)
+      target_compile_definitions(${tgt}
+        PRIVATE
+          CT_CLANG_EXECUTABLE=\"${CLANG_EXECUTABLE}\"
+      )
+    endif()
   endif()
 endforeach()
 
@@ -183,6 +238,37 @@ if(NOT LLVM_ENABLE_RTTI)
 endif()
 
 target_link_libraries(cc PRIVATE compilerlib_static)
+
+if(CLANG_LINK_CLANG_DYLIB)
+  target_link_libraries(cc PRIVATE clang-cpp)
+else()
+  target_link_libraries(cc PRIVATE
+    clangAST
+    clangBasic
+    clangCodeGen
+    clangDriver
+    clangFrontend
+    clangLex
+    clangParse
+    clangSema
+  )
+endif()
+
+if(LLVM_LINK_LLVM_DYLIB)
+  target_link_libraries(cc PRIVATE LLVM)
+else()
+  target_link_libraries(cc PRIVATE
+    LLVMOption
+    LLVMSupport
+    LLVMTarget
+    LLVMX86AsmParser
+    LLVMX86CodeGen
+    LLVMX86Desc
+    LLVMX86Info
+    LLVMObject
+    LLVMBinaryFormat
+  )
+endif()
 
 install(TARGETS compilerlib_static compilerlib_shared cc ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 install(DIRECTORY include/ DESTINATION include)

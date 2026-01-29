@@ -1,5 +1,6 @@
 #include "compilerlib/compiler.h"
 #include "compilerlib/attributes.hpp"
+#include "compilerlib/toolchain.hpp"
 
 #include "compilerlib/instrumentation/alloc.hpp"
 #include "compilerlib/instrumentation/bounds.hpp"
@@ -114,6 +115,11 @@ const char *findArgValue(const llvm::opt::ArgStringList &args, llvm::StringRef o
         if (opt == args[i]) {
             return args[i + 1];
         }
+        if (llvm::StringRef(args[i]).starts_with(opt) &&
+            llvm::StringRef(args[i]).size() > opt.size() &&
+            llvm::StringRef(args[i])[opt.size()] == '=') {
+            return args[i] + opt.size() + 1;
+        }
     }
     return nullptr;
 }
@@ -184,6 +190,8 @@ struct CompileContext {
     std::vector<std::string> filtered_args;
     std::vector<const char *> clang_args;
     std::string clang_path;
+    std::string clang_resource_dir;
+    std::string clang_sysroot;
     llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs;
     DiagsSaver dc;
     std::string driver_diagnostics;
@@ -199,39 +207,32 @@ public:
     CT_NODISCARD bool build(std::string &error)
     {
         extractRuntimeConfig(ctx_.input_args, ctx_.filtered_args, ctx_.runtimeConfig);
+        normalizeEqualsArgs(ctx_.filtered_args);
         if (ctx_.runtimeConfig.bounds_without_alloc) {
             ctx_.dc.os << "warning: ct: bounds instrumentation requires alloc tracking; use --ct-alloc or disable bounds\n";
             ctx_.dc.os.flush();
         }
-        if (!resolveClangPath(error)) {
+        DriverConfig driverCfg;
+        if (!resolveDriverConfig(ctx_.filtered_args, driverCfg, error)) {
             return false;
         }
+        ctx_.clang_path = driverCfg.clang_path;
+        ctx_.clang_resource_dir = driverCfg.resource_dir;
+        ctx_.clang_sysroot = driverCfg.sysroot;
 
         ctx_.clang_args.clear();
         ctx_.clang_args.push_back(ctx_.clang_path.c_str());
-#ifdef __APPLE__
-        ctx_.clang_args.push_back("-isysroot");
-        ctx_.clang_args.push_back("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
-        ctx_.clang_args.push_back("-I");
-        ctx_.clang_args.push_back("/Library/Developer/CommandLineTools/usr/include");
-        ctx_.clang_args.push_back("-I");
-        ctx_.clang_args.push_back("/Library/Developer/CommandLineTools/usr/include/c++/v1");
-#ifdef CLANG_RESOURCE_DIR
-        ctx_.clang_args.push_back("-resource-dir");
-        ctx_.clang_args.push_back(CLANG_RESOURCE_DIR);
-#endif
-#else
-        ctx_.clang_args.push_back("-I");
-        ctx_.clang_args.push_back("/usr/include");
-        ctx_.clang_args.push_back("-I");
-        ctx_.clang_args.push_back("/usr/include/c++/11");
-        ctx_.clang_args.push_back("-I");
-        ctx_.clang_args.push_back("/usr/local/include");
-#ifdef CLANG_RESOURCE_DIR
-        ctx_.clang_args.push_back("-resource-dir");
-        ctx_.clang_args.push_back(CLANG_RESOURCE_DIR);
-#endif
-#endif
+        if (driverCfg.force_cxx_driver) {
+            ctx_.clang_args.push_back("--driver-mode=g++");
+        }
+        if (driverCfg.add_resource_dir) {
+            ctx_.clang_args.push_back("-resource-dir");
+            ctx_.clang_args.push_back(ctx_.clang_resource_dir.c_str());
+        }
+        if (driverCfg.add_sysroot) {
+            ctx_.clang_args.push_back("-isysroot");
+            ctx_.clang_args.push_back(ctx_.clang_sysroot.c_str());
+        }
         for (const auto &arg : ctx_.filtered_args) {
             ctx_.clang_args.push_back(arg.c_str());
         }
@@ -243,10 +244,25 @@ public:
             ctx_.clang_args.push_back("-fno-builtin");
             ctx_.clang_args.push_back("-fno-builtin-malloc");
             ctx_.clang_args.push_back("-fno-builtin-free");
+            // Ensure position-independent code for Linux targets
+            // to avoid relocation errors with PIE-enabled distributions
+            if (kTargetTriple.contains("linux")) {
+                if (!hasArg(ctx_.filtered_args, "-fPIE") && !hasArg(ctx_.filtered_args, "-fPIC")) {
+                    ctx_.clang_args.push_back("-fPIE");
+                }
+            }
         }
 
         if (ctx_.instrument && ctx_.mode == OutputMode::ToFile && linkRequested()) {
 #ifdef CT_RUNTIME_LIB_PATH
+            // Ensure position-independent executable linking on Linux
+            if (kTargetTriple.contains("linux")) {
+                if (!hasArg(ctx_.filtered_args, "-pie")) {
+                    ctx_.clang_args.push_back("-pie");
+                }
+            }
+            ctx_.clang_args.push_back("-x");
+            ctx_.clang_args.push_back("none");
             ctx_.clang_args.push_back(CT_RUNTIME_LIB_PATH);
 #ifdef __APPLE__
             ctx_.clang_args.push_back("-lc++");
@@ -270,17 +286,24 @@ public:
     }
 
 private:
-    CT_NODISCARD bool resolveClangPath(std::string &error)
+    static void normalizeEqualsArgs(std::vector<std::string> &args)
     {
-        if (auto found = llvm::sys::findProgramByName("clang-20")) {
-            ctx_.clang_path = *found;
-        } else if (auto found = llvm::sys::findProgramByName("clang")) {
-            ctx_.clang_path = *found;
-        } else {
-            error = "unable to find clang executable in PATH";
-            return false;
+        std::vector<std::string> out;
+        out.reserve(args.size() + 2);
+        for (auto &arg : args) {
+            if (llvm::StringRef(arg).starts_with("-o=")) {
+                out.push_back("-o");
+                out.push_back(arg.substr(3));
+                continue;
+            }
+            if (llvm::StringRef(arg).starts_with("-x=")) {
+                out.push_back("-x");
+                out.push_back(arg.substr(3));
+                continue;
+            }
+            out.push_back(std::move(arg));
         }
-        return true;
+        args.swap(out);
     }
 
     CT_NODISCARD bool linkRequested(void) const
@@ -383,12 +406,15 @@ CT_NODISCARD bool emitObjectFile(llvm::Module &module,
 
     llvm::TargetOptions options;
     auto codegenLevel = toCodeGenOptLevel(ci.getCodeGenOpts().OptimizationLevel);
+    // For position-independent code (needed for instrumented code and PIE executables),
+    // explicitly set the relocation model to PIC
+    llvm::Reloc::Model relocModel = llvm::Reloc::PIC_;
     std::unique_ptr<llvm::TargetMachine> targetMachine(
         target->createTargetMachine(targetTriple,
                                     targetOpts.CPU,
                                     features,
                                     options,
-                                    std::nullopt,
+                                    relocModel,
                                     std::nullopt,
                                     codegenLevel));
     if (!targetMachine)
@@ -487,7 +513,7 @@ public:
         return true;
     }
 
-    CompileResult runSingle(const clang::driver::Command &job)
+    CompileResult runSingle(const clang::driver::Command &job, bool includeDriverDiags = true)
     {
         CompileResult result;
         result.success = false;
@@ -498,7 +524,7 @@ public:
         {
             result.success = false;
             std::string diag = ctx_.dc.message.empty() ? fallback : std::move(ctx_.dc.message);
-            result.diagnostics = mergeDiagnostics(ctx_.driver_diagnostics, diag);
+            result.diagnostics = includeDriverDiags ? mergeDiagnostics(ctx_.driver_diagnostics, diag) : std::move(diag);
             return result;
         };
 
@@ -556,8 +582,12 @@ public:
                     if (!ci->ExecuteAction(action))
                     {
                         result.success     = false;
-                        result.diagnostics = mergeDiagnostics(ctx_.driver_diagnostics,
-                                                              std::move(ctx_.dc.message));
+                        if (includeDriverDiags) {
+                            result.diagnostics = mergeDiagnostics(ctx_.driver_diagnostics,
+                                                                  std::move(ctx_.dc.message));
+                        } else {
+                            result.diagnostics = std::move(ctx_.dc.message);
+                        }
                         return result;
                     }
                     std::unique_ptr<llvm::Module> module = action.takeModule();
@@ -586,6 +616,33 @@ public:
                 }
                 break;
             }
+            case clang::frontend::PrintPreprocessedInput:
+            {
+                clang::PrintPreprocessedAction action;
+
+                resetDiagnostics();
+                if (!ci->ExecuteAction(action))
+                    return fail("preprocessing failed");
+                break;
+            }
+            case clang::frontend::RunPreprocessorOnly:
+            {
+                clang::PreprocessOnlyAction action;
+
+                resetDiagnostics();
+                if (!ci->ExecuteAction(action))
+                    return fail("preprocessing failed");
+                break;
+            }
+            case clang::frontend::ParseSyntaxOnly:
+            {
+                clang::SyntaxOnlyAction action;
+
+                resetDiagnostics();
+                if (!ci->ExecuteAction(action))
+                    return fail("parsing failed");
+                break;
+            }
             default:
                 result.success = false;
                 result.diagnostics = "Unhandled action";
@@ -593,7 +650,11 @@ public:
         }
 
         result.success     = true;
-        result.diagnostics = mergeDiagnostics(ctx_.driver_diagnostics, ctx_.dc.message);
+        if (includeDriverDiags) {
+            result.diagnostics = mergeDiagnostics(ctx_.driver_diagnostics, ctx_.dc.message);
+        } else {
+            result.diagnostics = std::move(ctx_.dc.message);
+        }
         return result;
     }
 
@@ -703,11 +764,6 @@ CT_NODISCARD CompileResult runNonInstrumentedCompilation(CompileContext &ctx,
 
 CT_NODISCARD bool validateJobPlan(const JobPlan &plan, OutputMode mode, std::string &error)
 {
-    if (plan.cc1Jobs.empty())
-    {
-        error = "no cc1 job found";
-        return false;
-    }
     if (mode == OutputMode::ToMemory)
     {
         if (plan.cc1Jobs.size() != 1 || !plan.otherJobs.empty())
@@ -715,6 +771,14 @@ CT_NODISCARD bool validateJobPlan(const JobPlan &plan, OutputMode mode, std::str
             error = "in-memory output only supports a single compilation job";
             return false;
         }
+        return true;
+    }
+    if (plan.cc1Jobs.empty())
+    {
+        if (mode == OutputMode::ToFile && !plan.otherJobs.empty())
+            return true;
+        error = "no cc1 job found";
+        return false;
     }
     return true;
 }
@@ -725,15 +789,43 @@ CT_NODISCARD CompileResult runInstrumentedToFile(CompileContext &ctx,
                                     std::string &error)
 {
     Linker linker;
+    std::string cc1_diags;
 
     for (const auto *job : plan.cc1Jobs)
+    {
         if (!cc1.runInstrumented(*job, error))
-            return {false, mergeDiagnostics(ctx.driver_diagnostics, error), {}};
+            return {false, mergeDiagnostics(ctx.driver_diagnostics, mergeDiagnostics(cc1_diags, error)), {}};
+        appendDiagnostics(cc1_diags, ctx.dc.message);
+        ctx.dc.message.clear();
+        ctx.dc.os.flush();
+    }
 
     if (!linker.run(plan.otherJobs, error))
-        return {false, mergeDiagnostics(ctx.driver_diagnostics, error), {}};
+        return {false, mergeDiagnostics(ctx.driver_diagnostics, mergeDiagnostics(cc1_diags, error)), {}};
 
-    return {true, mergeDiagnostics(ctx.driver_diagnostics, ctx.dc.message), {}};
+    return {true, mergeDiagnostics(ctx.driver_diagnostics, cc1_diags), {}};
+}
+
+CT_NODISCARD CompileResult runPlainToFile(CompileContext &ctx,
+                                Cc1Runner &cc1,
+                                const JobPlan &plan,
+                                std::string &error)
+{
+    Linker linker;
+    std::string cc1_diags;
+
+    for (const auto *job : plan.cc1Jobs)
+    {
+        CompileResult res = cc1.runSingle(*job, false);
+        if (!res.success)
+            return {false, mergeDiagnostics(ctx.driver_diagnostics, mergeDiagnostics(cc1_diags, res.diagnostics)), {}};
+        appendDiagnostics(cc1_diags, res.diagnostics);
+    }
+
+    if (!linker.run(plan.otherJobs, error))
+        return {false, mergeDiagnostics(ctx.driver_diagnostics, mergeDiagnostics(cc1_diags, error)), {}};
+
+    return {true, mergeDiagnostics(ctx.driver_diagnostics, cc1_diags), {}};
 }
 
 } // namespace
@@ -765,14 +857,14 @@ CT_NODISCARD CompileResult compile(
     if (comp->getJobs().empty())
         return {false, ctx.dc.message.empty() ? "no jobs to run" : std::move(ctx.dc.message), {}};
 
-    if (mode == OutputMode::ToFile && !instrument)
+    if (!instrument && mode == OutputMode::ToFile)
         return runNonInstrumentedCompilation(ctx, driver, *comp);
 
     JobPlan plan = buildJobPlan(*comp);
     if (!validateJobPlan(plan, mode, error))
         return {false, std::move(error), {}};
 
-    if (instrument && !ctx.dc.message.empty())
+    if (!ctx.dc.message.empty())
     {
         ctx.driver_diagnostics = std::move(ctx.dc.message);
         ctx.dc.message.clear();
@@ -780,9 +872,20 @@ CT_NODISCARD CompileResult compile(
     }
 
     Cc1Runner cc1(ctx, *diags);
-    if (instrument && mode == OutputMode::ToFile)
+    if (mode == OutputMode::ToMemory)
+        return cc1.runSingle(*plan.cc1Jobs.front());
+
+    if (plan.cc1Jobs.empty())
+    {
+        Linker linker;
+        if (!linker.run(plan.otherJobs, error))
+            return {false, mergeDiagnostics(ctx.driver_diagnostics, error), {}};
+        return {true, mergeDiagnostics(ctx.driver_diagnostics, {}), {}};
+    }
+
+    if (instrument)
         return runInstrumentedToFile(ctx, cc1, plan, error);
-    return cc1.runSingle(*plan.cc1Jobs.front());
+    return runPlainToFile(ctx, cc1, plan, error);
 }
 
 extern "C" int compile_c(int argc, const char** argv, char* output_buffer, int buffer_size)
