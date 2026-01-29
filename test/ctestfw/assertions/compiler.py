@@ -48,6 +48,7 @@ def assert_output_exists() -> Assertion:
 def assert_output_kind(expected: ArtifactKind) -> Assertion:
     def _check(res: CompileResult) -> None:
         require(res.output_path is not None, "no output_path provided to test")
+        require(res.output_path.exists(), f"output does not exist: {res.output_path}")
         info = detect_artifact_kind(res.output_path)
         require(info.kind == expected,
                 f"output kind expected {expected.name}, got {info.kind.name} ({info.path})")
@@ -68,6 +69,7 @@ def assert_output_exists_at(path: Union[str, Path]) -> Assertion:
 def assert_output_kind_at(path: Union[str, Path], expected: ArtifactKind) -> Assertion:
     def _check(res: CompileResult) -> None:
         p = _resolve_output_path(res, path)
+        require(p.exists(), f"output does not exist: {p}")
         info = detect_artifact_kind(p)
         require(info.kind == expected,
                 f"output kind expected {expected.name}, got {info.kind.name} ({info.path})")
@@ -90,6 +92,7 @@ def assert_native_binary_kind() -> Assertion:
     def _check(res: CompileResult) -> None:
         require(res.output_path is not None, "no output_path provided to test")
         require(res.platform is not None, "platform info missing in CompileResult")
+        require(res.output_path.exists(), f"output does not exist: {res.output_path}")
 
         expected = ArtifactKind.MACHO if res.platform.os == OS.MACOS else ArtifactKind.ELF
         info = detect_artifact_kind(res.output_path)
@@ -104,6 +107,7 @@ def assert_native_binary_kind_at(path: Union[str, Path]) -> Assertion:
     def _check(res: CompileResult) -> None:
         require(res.platform is not None, "platform info missing in CompileResult")
         p = _resolve_output_path(res, path)
+        require(p.exists(), f"output does not exist: {p}")
         expected = ArtifactKind.MACHO if res.platform.os == OS.MACOS else ArtifactKind.ELF
         info = detect_artifact_kind(p)
         require(
