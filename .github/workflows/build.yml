@@ -82,7 +82,10 @@ jobs:
     - name: Run Python smoke tests (Linux/macOS)
       if: runner.os == 'Linux' || runner.os == 'macOS'
       run: |
-        PYTHONPATH=./test python3 test/examples/test_smoke.py
+        python3 -m pip install --upgrade pip
+        python3 -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git
+        python3 test/examples/test_smoke.py
+        python3 test/examples/test_extern_project.py
 
     - name: Docker tests (multi-arch, Linux)
       if: runner.os == 'Linux'
