@@ -68,3 +68,8 @@ jobs:
           echo "Test échoué: Fichier LLVM IR non généré"
           exit 1
         fi
+
+    - name: Run Python smoke tests (Linux/macOS)
+      if: runner.os == 'Linux' || runner.os == 'macOS'
+      run: |
+        PYTHONPATH=./test python3 test/examples/test_smoke.py

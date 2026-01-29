@@ -7,14 +7,27 @@ mkdir -p build && cd build
 ./build.sh
 ```
 
-or
+#### BUILD (macOS)
 
 ```zsh
 mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release \
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
          -DLLVM_DIR=$(brew --prefix llvm)/lib/cmake/llvm \
          -DClang_DIR=$(brew --prefix llvm)/lib/cmake/clang \
          -DUSE_SHARED_LIB=OFF
+```
+
+#### BUILD (Linux)
+
+```zsh
+mkdir -p build && cd build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+      -DLLVM_DIR=/usr/lib/llvm-${LLVM_VERSION}/lib/cmake/llvm \
+      -DClang_DIR=/usr/lib/llvm-${LLVM_VERSION}/lib/cmake/clang \
+      -DCLANG_LINK_CLANG_DYLIB=ON \
+      -DLLVM_LINK_LLVM_DYLIB=ON \
+      -DUSE_SHARED_LIB=OFF \
+  && cmake --build build -j"$(nproc)"
 ```
 
 #### CORETRACE-COMPILER USAGE
@@ -25,6 +38,10 @@ cmake .. -DCMAKE_BUILD_TYPE=Release \
 ./cc -c test.c
 ./cc -c test.c -O2
 ./cc --instrument -o app main.c
+./cc --instrument -o=app main.c
+./cc -x c++ -o=appCpp main.cpp
+./cc -x=c++ -o appCpp main.cpp
+./cc --instrument --ct-modules=trace,alloc,bounds,vtable main.cpp
 ./cc --instrument --ct-shadow -o app main.c
 ./cc --instrument --ct-shadow-aggressive --ct-bounds-no-abort -o app main.c
 ./cc --instrument --ct-modules=vtable --ct-vcall-trace -o app main.cpp
