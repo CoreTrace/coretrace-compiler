@@ -11,26 +11,25 @@ namespace
 #endif
 } // namespace
 
-extern "C" {
-extern int __ct_config_shadow CT_WEAK_IMPORT;
-extern int __ct_config_shadow_aggressive CT_WEAK_IMPORT;
-extern int __ct_config_bounds_no_abort CT_WEAK_IMPORT;
-extern int __ct_config_disable_alloc CT_WEAK_IMPORT;
-extern int __ct_config_disable_autofree CT_WEAK_IMPORT;
-extern int __ct_config_disable_alloc_trace CT_WEAK_IMPORT;
-extern int __ct_config_vtable_diag CT_WEAK_IMPORT;
+extern "C"
+{
+    extern int __ct_config_shadow CT_WEAK_IMPORT;
+    extern int __ct_config_shadow_aggressive CT_WEAK_IMPORT;
+    extern int __ct_config_bounds_no_abort CT_WEAK_IMPORT;
+    extern int __ct_config_disable_alloc CT_WEAK_IMPORT;
+    extern int __ct_config_disable_autofree CT_WEAK_IMPORT;
+    extern int __ct_config_disable_alloc_trace CT_WEAK_IMPORT;
+    extern int __ct_config_vtable_diag CT_WEAK_IMPORT;
 }
 
-namespace {
-int ct_env_initialized = 0;
+namespace
+{
+    int ct_env_initialized = 0;
 }
 
 CT_NOINSTR static void ct_apply_compiled_config(void)
 {
-    auto readWeak = [](const int *ptr) -> int
-    {
-        return ptr ? *ptr : 0;
-    };
+    auto readWeak = [](const int* ptr) -> int { return ptr ? *ptr : 0; };
 
     if (readWeak(&__ct_config_shadow) || readWeak(&__ct_config_shadow_aggressive))
     {
@@ -63,8 +62,7 @@ CT_NOINSTR static void ct_apply_compiled_config(void)
     }
 }
 
-CT_NOINSTR __attribute__((constructor))
-static void ct_runtime_init(void)
+CT_NOINSTR __attribute__((constructor)) static void ct_runtime_init(void)
 {
     ct_maybe_install_backtrace();
     ct_apply_compiled_config();
@@ -111,11 +109,7 @@ static void ct_runtime_init(void)
 CT_NOINSTR void ct_init_env_once(void)
 {
     int expected = 0;
-    if (!__atomic_compare_exchange_n(&ct_env_initialized,
-                                     &expected,
-                                     1,
-                                     false,
-                                     __ATOMIC_ACQ_REL,
+    if (!__atomic_compare_exchange_n(&ct_env_initialized, &expected, 1, false, __ATOMIC_ACQ_REL,
                                      __ATOMIC_ACQUIRE))
     {
         return;

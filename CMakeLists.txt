@@ -298,3 +298,16 @@ if(BUILD_TESTS)
     message(STATUS "Test file test/test_compiler.cpp not found, skipping test build")
   endif()
 endif()
+
+# ============
+#  FORMATTING
+# ============
+add_custom_target(format
+  COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/format.sh"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Run clang-format on source files")
+
+add_custom_target(format-check
+  COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/format-check.sh"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  COMMENT "Verify clang-format compliance")

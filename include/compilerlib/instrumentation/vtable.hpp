@@ -1,13 +1,15 @@
 #ifndef COMPILERLIB_INSTRUMENTATION_VTABLE_HPP
 #define COMPILERLIB_INSTRUMENTATION_VTABLE_HPP
 
-namespace llvm {
-class Module;
+namespace llvm
+{
+    class Module;
 } // namespace llvm
 
-namespace compilerlib {
+namespace compilerlib
+{
 
-void instrumentVirtualCalls(llvm::Module &module, bool trace_calls, bool dump_vtable);
+    void instrumentVirtualCalls(llvm::Module& module, bool trace_calls, bool dump_vtable);
 
 } // namespace compilerlib
 

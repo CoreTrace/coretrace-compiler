@@ -4,32 +4,34 @@
 #include <string>
 #include <vector>
 
-namespace llvm {
-class Module;
+namespace llvm
+{
+    class Module;
 } // namespace llvm
 
-namespace compilerlib {
+namespace compilerlib
+{
 
-struct RuntimeConfig {
-    bool shadow_enabled = false;
-    bool shadow_aggressive = false;
-    bool bounds_no_abort = false;
-    bool trace_enabled = true;
-    bool alloc_enabled = true;
-    bool bounds_enabled = true;
-    bool vtable_enabled = false;
-    bool vcall_trace_enabled = false;
-    bool vtable_diag_enabled = false;
-    bool autofree_enabled = true;
-    bool alloc_trace_enabled = true;
-    bool bounds_without_alloc = false;
-};
+    struct RuntimeConfig
+    {
+        bool shadow_enabled = false;
+        bool shadow_aggressive = false;
+        bool bounds_no_abort = false;
+        bool trace_enabled = true;
+        bool alloc_enabled = true;
+        bool bounds_enabled = true;
+        bool vtable_enabled = false;
+        bool vcall_trace_enabled = false;
+        bool vtable_diag_enabled = false;
+        bool autofree_enabled = true;
+        bool alloc_trace_enabled = true;
+        bool bounds_without_alloc = false;
+    };
 
-void extractRuntimeConfig(const std::vector<std::string> &input,
-                          std::vector<std::string> &filtered,
-                          RuntimeConfig &config);
+    void extractRuntimeConfig(const std::vector<std::string>& input,
+                              std::vector<std::string>& filtered, RuntimeConfig& config);
 
-void emitRuntimeConfigGlobals(llvm::Module &module, const RuntimeConfig &config);
+    void emitRuntimeConfigGlobals(llvm::Module& module, const RuntimeConfig& config);
 
 } // namespace compilerlib
 

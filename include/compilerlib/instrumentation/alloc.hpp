@@ -1,13 +1,15 @@
 #ifndef COMPILERLIB_INSTRUMENTATION_ALLOC_HPP
 #define COMPILERLIB_INSTRUMENTATION_ALLOC_HPP
 
-namespace llvm {
-class Module;
+namespace llvm
+{
+    class Module;
 } // namespace llvm
 
-namespace compilerlib {
+namespace compilerlib
+{
 
-void wrapAllocCalls(llvm::Module &module);
+    void wrapAllocCalls(llvm::Module& module);
 
 } // namespace compilerlib
 

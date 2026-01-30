@@ -8,42 +8,38 @@
 
 namespace
 {
-int ct_log_enabled = 0;
-int ct_log_atexit_registered = 0;
+    int ct_log_enabled = 0;
+    int ct_log_atexit_registered = 0;
 
-CT_NODISCARD CT_NOINSTR int ct_use_color(void)
-{
-    static int cached = -1;
-
-    if (cached != -1)
-        return cached;
-
-
-    if (getenv("NO_COLOR") != nullptr)
+    CT_NODISCARD CT_NOINSTR int ct_use_color(void)
     {
-        cached = 0;
+        static int cached = -1;
+
+        if (cached != -1)
+            return cached;
+
+        if (getenv("NO_COLOR") != nullptr)
+        {
+            cached = 0;
+            return cached;
+        }
+
+        cached = isatty(2) ? 1 : 0;
         return cached;
     }
 
-    cached = isatty(2) ? 1 : 0;
-    return cached;
-}
-
-CT_NOINSTR void ct_register_atexit(void)
-{
-    int expected = 0;
-    if (__atomic_compare_exchange_n(&ct_log_atexit_registered,
-                                    &expected,
-                                    1,
-                                    false,
-                                    __ATOMIC_ACQ_REL,
-                                    __ATOMIC_ACQUIRE)) {
-        std::atexit(ct_disable_logging);
+    CT_NOINSTR void ct_register_atexit(void)
+    {
+        int expected = 0;
+        if (__atomic_compare_exchange_n(&ct_log_atexit_registered, &expected, 1, false,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        {
+            std::atexit(ct_disable_logging);
+        }
     }
-}
 } // namespace
 
-CT_NODISCARD CT_NOINSTR size_t ct_strlen(const char *str)
+CT_NODISCARD CT_NOINSTR size_t ct_strlen(const char* str)
 {
     size_t len = 0;
 
@@ -56,7 +52,7 @@ CT_NODISCARD CT_NOINSTR size_t ct_strlen(const char *str)
     return len;
 }
 
-CT_NODISCARD CT_NOINSTR int ct_streq(const char *lhs, const char *rhs)
+CT_NODISCARD CT_NOINSTR int ct_streq(const char* lhs, const char* rhs)
 {
     if (!lhs || !rhs)
         return 0;
@@ -78,52 +74,93 @@ CT_NODISCARD CT_NOINSTR std::string_view ct_color(CTColor color)
 
     switch (color)
     {
-        case CTColor::Reset:            return "\x1b[0m";
+    case CTColor::Reset:
+        return "\x1b[0m";
 
-        case CTColor::Dim:              return "\x1b[2m";
-        case CTColor::Bold:             return "\x1b[1m";
-        case CTColor::Underline:        return "\x1b[4m";
-        case CTColor::Italic:           return "\x1b[3m";
-        case CTColor::Blink:            return "\x1b[5m";
-        case CTColor::Reverse:          return "\x1b[7m";
-        case CTColor::Hidden:           return "\x1b[8m";
-        case CTColor::Strike:           return "\x1b[9m";
+    case CTColor::Dim:
+        return "\x1b[2m";
+    case CTColor::Bold:
+        return "\x1b[1m";
+    case CTColor::Underline:
+        return "\x1b[4m";
+    case CTColor::Italic:
+        return "\x1b[3m";
+    case CTColor::Blink:
+        return "\x1b[5m";
+    case CTColor::Reverse:
+        return "\x1b[7m";
+    case CTColor::Hidden:
+        return "\x1b[8m";
+    case CTColor::Strike:
+        return "\x1b[9m";
 
-        case CTColor::Black:            return "\x1b[30m";
-        case CTColor::Red:              return "\x1b[31m";
-        case CTColor::Green:            return "\x1b[32m";
-        case CTColor::Yellow:           return "\x1b[33m";
-        case CTColor::Blue:             return "\x1b[34m";
-        case CTColor::Magenta:          return "\x1b[35m";
-        case CTColor::Cyan:             return "\x1b[36m";
-        case CTColor::White:            return "\x1b[37m";
+    case CTColor::Black:
+        return "\x1b[30m";
+    case CTColor::Red:
+        return "\x1b[31m";
+    case CTColor::Green:
+        return "\x1b[32m";
+    case CTColor::Yellow:
+        return "\x1b[33m";
+    case CTColor::Blue:
+        return "\x1b[34m";
+    case CTColor::Magenta:
+        return "\x1b[35m";
+    case CTColor::Cyan:
+        return "\x1b[36m";
+    case CTColor::White:
+        return "\x1b[37m";
 
-        case CTColor::Gray:             return "\x1b[90m";
-        case CTColor::BrightRed:        return "\x1b[91m";
-        case CTColor::BrightGreen:      return "\x1b[92m";
-        case CTColor::BrightYellow:     return "\x1b[93m";
-        case CTColor::BrightBlue:       return "\x1b[94m";
-        case CTColor::BrightMagenta:    return "\x1b[95m";
-        case CTColor::BrightCyan:       return "\x1b[96m";
-        case CTColor::BrightWhite:      return "\x1b[97m";
+    case CTColor::Gray:
+        return "\x1b[90m";
+    case CTColor::BrightRed:
+        return "\x1b[91m";
+    case CTColor::BrightGreen:
+        return "\x1b[92m";
+    case CTColor::BrightYellow:
+        return "\x1b[93m";
+    case CTColor::BrightBlue:
+        return "\x1b[94m";
+    case CTColor::BrightMagenta:
+        return "\x1b[95m";
+    case CTColor::BrightCyan:
+        return "\x1b[96m";
+    case CTColor::BrightWhite:
+        return "\x1b[97m";
 
-        case CTColor::BgBlack:          return "\x1b[40m";
-        case CTColor::BgRed:            return "\x1b[41m";
-        case CTColor::BgGreen:          return "\x1b[42m";
-        case CTColor::BgYellow:         return "\x1b[43m";
-        case CTColor::BgBlue:           return "\x1b[44m";
-        case CTColor::BgMagenta:        return "\x1b[45m";
-        case CTColor::BgCyan:           return "\x1b[46m";
-        case CTColor::BgWhite:          return "\x1b[47m";
+    case CTColor::BgBlack:
+        return "\x1b[40m";
+    case CTColor::BgRed:
+        return "\x1b[41m";
+    case CTColor::BgGreen:
+        return "\x1b[42m";
+    case CTColor::BgYellow:
+        return "\x1b[43m";
+    case CTColor::BgBlue:
+        return "\x1b[44m";
+    case CTColor::BgMagenta:
+        return "\x1b[45m";
+    case CTColor::BgCyan:
+        return "\x1b[46m";
+    case CTColor::BgWhite:
+        return "\x1b[47m";
 
-        case CTColor::BgGray:           return "\x1b[100m";
-        case CTColor::BgBrightRed:      return "\x1b[101m";
-        case CTColor::BgBrightGreen:    return "\x1b[102m";
-        case CTColor::BgBrightYellow:   return "\x1b[103m";
-        case CTColor::BgBrightBlue:     return "\x1b[104m";
-        case CTColor::BgBrightMagenta:  return "\x1b[105m";
-        case CTColor::BgBrightCyan:     return "\x1b[106m";
-        case CTColor::BgBrightWhite:    return "\x1b[107m";
+    case CTColor::BgGray:
+        return "\x1b[100m";
+    case CTColor::BgBrightRed:
+        return "\x1b[101m";
+    case CTColor::BgBrightGreen:
+        return "\x1b[102m";
+    case CTColor::BgBrightYellow:
+        return "\x1b[103m";
+    case CTColor::BgBrightBlue:
+        return "\x1b[104m";
+    case CTColor::BgBrightMagenta:
+        return "\x1b[105m";
+    case CTColor::BgBrightCyan:
+        return "\x1b[106m";
+    case CTColor::BgBrightWhite:
+        return "\x1b[107m";
     }
 
     return {};
@@ -133,12 +170,12 @@ CT_NODISCARD CT_NOINSTR std::string_view ct_level_label(CTLevel level)
 {
     switch (level)
     {
-        case CTLevel::Info:
-            return "INFO";
-        case CTLevel::Warn:
-            return "WARN";
-        case CTLevel::Error:
-            return "ERROR";
+    case CTLevel::Info:
+        return "INFO";
+    case CTLevel::Warn:
+        return "WARN";
+    case CTLevel::Error:
+        return "ERROR";
     }
 
     return "INFO";
@@ -148,12 +185,12 @@ CT_NODISCARD CT_NOINSTR std::string_view ct_level_color(CTLevel level)
 {
     switch (level)
     {
-        case CTLevel::Info:
-            return ct_color(CTColor::Green);
-        case CTLevel::Warn:
-            return ct_color(CTColor::Yellow);
-        case CTLevel::Error:
-            return ct_color(CTColor::Red);
+    case CTLevel::Info:
+        return ct_color(CTColor::Green);
+    case CTLevel::Warn:
+        return ct_color(CTColor::Yellow);
+    case CTLevel::Error:
+        return ct_color(CTColor::Red);
     }
 
     return ct_color(CTColor::Cyan);
@@ -182,7 +219,7 @@ CT_NODISCARD CT_NOINSTR unsigned long long ct_thread_id(void)
 #endif
 }
 
-CT_NODISCARD CT_NOINSTR const char *ct_site_name(const char *site)
+CT_NODISCARD CT_NOINSTR const char* ct_site_name(const char* site)
 {
     if (site && site[0] != '\0')
         return site;
@@ -210,7 +247,7 @@ CT_NOINSTR void ct_enable_logging(void)
     ct_register_atexit();
 }
 
-CT_NOINSTR void ct_write_raw(const char *data, size_t size)
+CT_NOINSTR void ct_write_raw(const char* data, size_t size)
 {
     if (!data || size == 0)
         return;
@@ -237,7 +274,7 @@ CT_NOINSTR void ct_write_str(std::string_view value)
     ct_write_raw(value.data(), value.size());
 }
 
-CT_NOINSTR void ct_write_cstr(const char *value)
+CT_NOINSTR void ct_write_cstr(const char* value)
 {
     if (!value)
         return;
@@ -252,7 +289,9 @@ CT_NOINSTR void ct_write_dec(size_t value)
     if (value == 0)
     {
         buf[idx++] = '0';
-    } else {
+    }
+    else
+    {
         while (value != 0 && idx < sizeof(buf))
         {
             buf[idx++] = static_cast<char>('0' + (value % 10));
@@ -286,7 +325,8 @@ CT_NOINSTR void ct_write_hex(uintptr_t value)
             continue;
 
         started = true;
-        if (nibble < 10) {
+        if (nibble < 10)
+        {
             buf[idx++] = static_cast<char>('0' + nibble);
         }
         else
