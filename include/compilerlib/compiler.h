@@ -7,32 +7,32 @@
 namespace compilerlib
 {
 
-enum class OutputMode
-{
-    ToFile,
-    ToMemory,
-};
+    enum class OutputMode
+    {
+        ToFile,
+        ToMemory,
+    };
 
-struct CompileResult
-{
-    bool success;
-    std::string diagnostics;
-    std::string llvmIR;
-};
+    struct CompileResult
+    {
+        bool success;
+        std::string diagnostics;
+        std::string llvmIR;
+    };
 
-// std::pair<bool, std::string> compile(const std::vector<std::string>& args);
-CompileResult compile(const std::vector<std::string>& args,
-                      OutputMode mode = OutputMode::ToFile,
-                      bool instrument = false);
+    // std::pair<bool, std::string> compile(const std::vector<std::string>& args);
+    CompileResult compile(const std::vector<std::string>& args,
+                          OutputMode mode = OutputMode::ToFile, bool instrument = false);
 
 #ifdef __cplusplus
-extern "C" {
+    extern "C"
+    {
 #endif
 
-int compile_c(int argc, const char **argv, char *output_buffer, int buffer_size);
+        int compile_c(int argc, const char** argv, char* output_buffer, int buffer_size);
 
 #ifdef __cplusplus
-}
+    }
 #endif
 
 } // namespace compilerlib

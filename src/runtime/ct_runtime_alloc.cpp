@@ -12,10 +12,10 @@
 
 struct ct_alloc_entry
 {
-    void *ptr;
+    void* ptr;
     size_t size;
     size_t req_size;
-    const char *site;
+    const char* site;
     unsigned char state;
 };
 
@@ -24,7 +24,7 @@ struct ct_alloc_entry
 #define CT_ALLOC_TABLE_SIZE (1u << CT_ALLOC_TABLE_BITS)
 
 static struct ct_alloc_entry ct_alloc_table_storage[CT_ALLOC_TABLE_SIZE];
-static struct ct_alloc_entry *ct_alloc_table = ct_alloc_table_storage;
+static struct ct_alloc_entry* ct_alloc_table = ct_alloc_table_storage;
 static size_t ct_alloc_table_bits = CT_ALLOC_TABLE_BITS;
 static size_t ct_alloc_table_size = CT_ALLOC_TABLE_SIZE;
 static size_t ct_alloc_table_mask = CT_ALLOC_TABLE_SIZE - 1u;
@@ -34,7 +34,7 @@ static int ct_alloc_table_full_logged = 0;
 
 extern "C"
 {
-CT_NOINSTR void __ct_autofree(void *ptr);
+    CT_NOINSTR void __ct_autofree(void* ptr);
 }
 
 CT_NOINSTR void ct_lock_acquire(void)
@@ -49,7 +49,7 @@ CT_NOINSTR void ct_lock_release(void)
     __atomic_store_n(&ct_alloc_lock, 0, __ATOMIC_RELEASE);
 }
 
-CT_NODISCARD CT_NOINSTR static size_t ct_hash_ptr(const void *ptr, size_t mask)
+CT_NODISCARD CT_NOINSTR static size_t ct_hash_ptr(const void* ptr, size_t mask)
 {
     uintptr_t value = reinterpret_cast<uintptr_t>(ptr);
     value ^= value >> 4;
@@ -57,16 +57,15 @@ CT_NODISCARD CT_NOINSTR static size_t ct_hash_ptr(const void *ptr, size_t mask)
     return static_cast<size_t>(value) & mask;
 }
 
-CT_NODISCARD CT_NOINSTR static int ct_alloc_rehash_entry(struct ct_alloc_entry *table,
-                                            size_t mask,
-                                            size_t size,
-                                            const struct ct_alloc_entry *entry)
+CT_NODISCARD CT_NOINSTR static int ct_alloc_rehash_entry(struct ct_alloc_entry* table, size_t mask,
+                                                         size_t size,
+                                                         const struct ct_alloc_entry* entry)
 {
     size_t idx = ct_hash_ptr(entry->ptr, mask);
     for (size_t i = 0; i < size; ++i)
     {
         size_t pos = (idx + i) & mask;
-        struct ct_alloc_entry *slot = &table[pos];
+        struct ct_alloc_entry* slot = &table[pos];
 
         if (slot->state == CT_ENTRY_EMPTY)
         {
@@ -84,9 +83,8 @@ CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
 
     size_t new_bits = ct_alloc_table_bits + 1u;
     size_t new_size = 1u << new_bits;
-    auto *new_table =
-        static_cast<struct ct_alloc_entry *>(
-            std::malloc(sizeof(struct ct_alloc_entry) * new_size));
+    auto* new_table =
+        static_cast<struct ct_alloc_entry*>(std::malloc(sizeof(struct ct_alloc_entry) * new_size));
     if (!new_table)
         return 0;
 
@@ -96,7 +94,7 @@ CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
     size_t new_count = 0;
     for (size_t i = 0; i < ct_alloc_table_size; ++i)
     {
-        struct ct_alloc_entry *entry = &ct_alloc_table[i];
+        struct ct_alloc_entry* entry = &ct_alloc_table[i];
 
         if (entry->state != CT_ENTRY_USED && entry->state != CT_ENTRY_FREED)
             continue;
@@ -121,7 +119,8 @@ CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
     return 1;
 }
 
-CT_NODISCARD CT_NOINSTR int ct_table_insert(void *ptr, size_t req_size, size_t size, const char *site)
+CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t size,
+                                            const char* site)
 {
     for (int attempt = 0; attempt < 2; ++attempt)
     {
@@ -131,7 +130,7 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void *ptr, size_t req_size, size_t s
         for (size_t i = 0; i < ct_alloc_table_size; ++i)
         {
             size_t pos = (idx + i) & ct_alloc_table_mask;
-            struct ct_alloc_entry *entry = &ct_alloc_table[pos];
+            struct ct_alloc_entry* entry = &ct_alloc_table[pos];
 
             if (entry->state == CT_ENTRY_USED)
             {
@@ -147,7 +146,7 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void *ptr, size_t req_size, size_t s
 
             if ((entry->state == CT_ENTRY_TOMB || entry->state == CT_ENTRY_FREED) &&
                 tombstone == static_cast<size_t>(-1))
-                {
+            {
                 tombstone = pos;
                 continue;
             }
@@ -170,7 +169,7 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void *ptr, size_t req_size, size_t s
 
         if (tombstone != static_cast<size_t>(-1))
         {
-            struct ct_alloc_entry *entry = &ct_alloc_table[tombstone];
+            struct ct_alloc_entry* entry = &ct_alloc_table[tombstone];
             entry->ptr = ptr;
             entry->size = size;
             entry->req_size = req_size;
@@ -189,17 +188,15 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void *ptr, size_t req_size, size_t s
     return 0;
 }
 
-CT_NODISCARD CT_NOINSTR int ct_table_remove(void *ptr,
-                               size_t *size_out,
-                               size_t *req_size_out,
-                               const char **site_out)
+CT_NODISCARD CT_NOINSTR int ct_table_remove(void* ptr, size_t* size_out, size_t* req_size_out,
+                                            const char** site_out)
 {
     size_t idx = ct_hash_ptr(ptr, ct_alloc_table_mask);
 
     for (size_t i = 0; i < ct_alloc_table_size; ++i)
     {
         size_t pos = (idx + i) & ct_alloc_table_mask;
-        struct ct_alloc_entry *entry = &ct_alloc_table[pos];
+        struct ct_alloc_entry* entry = &ct_alloc_table[pos];
 
         if (entry->state == CT_ENTRY_EMPTY)
         {
@@ -247,18 +244,15 @@ CT_NODISCARD CT_NOINSTR int ct_table_remove(void *ptr,
     return 0;
 }
 
-CT_NODISCARD CT_NOINSTR int ct_table_lookup(const void *ptr,
-                               size_t *size_out,
-                               size_t *req_size_out,
-                               const char **site_out,
-                               unsigned char *state_out)
+CT_NODISCARD CT_NOINSTR int ct_table_lookup(const void* ptr, size_t* size_out, size_t* req_size_out,
+                                            const char** site_out, unsigned char* state_out)
 {
     size_t idx = ct_hash_ptr(ptr, ct_alloc_table_mask);
 
     for (size_t i = 0; i < ct_alloc_table_size; ++i)
     {
         size_t pos = (idx + i) & ct_alloc_table_mask;
-        struct ct_alloc_entry *entry = &ct_alloc_table[pos];
+        struct ct_alloc_entry* entry = &ct_alloc_table[pos];
 
         if (entry->state == CT_ENTRY_EMPTY)
         {
@@ -289,12 +283,10 @@ CT_NODISCARD CT_NOINSTR int ct_table_lookup(const void *ptr,
     return 0;
 }
 
-CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void *ptr,
-                                          void **base_out,
-                                          size_t *size_out,
-                                          size_t *req_size_out,
-                                          const char **site_out,
-                                          unsigned char *state_out)
+CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void* ptr, void** base_out,
+                                                       size_t* size_out, size_t* req_size_out,
+                                                       const char** site_out,
+                                                       unsigned char* state_out)
 {
     if (!ptr)
         return 0;
@@ -303,7 +295,7 @@ CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void *ptr,
 
     for (size_t i = 0; i < ct_alloc_table_size; ++i)
     {
-        struct ct_alloc_entry *entry = &ct_alloc_table[i];
+        struct ct_alloc_entry* entry = &ct_alloc_table[i];
         if (entry->state != CT_ENTRY_USED && entry->state != CT_ENTRY_FREED)
             continue;
 
@@ -340,7 +332,7 @@ CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void *ptr,
     return 0;
 }
 
-CT_NODISCARD CT_NOINSTR static size_t ct_malloc_usable_size(void *ptr, size_t fallback)
+CT_NODISCARD CT_NOINSTR static size_t ct_malloc_usable_size(void* ptr, size_t fallback)
 {
     if (!ptr)
         return 0;
@@ -354,7 +346,7 @@ CT_NODISCARD CT_NOINSTR static size_t ct_malloc_usable_size(void *ptr, size_t fa
 #endif
 }
 
-CT_NOINSTR static void ct_shadow_track_alloc(void *ptr, size_t req_size, size_t real_size)
+CT_NOINSTR static void ct_shadow_track_alloc(void* ptr, size_t req_size, size_t real_size)
 {
     if (!ct_shadow_enabled || !ptr)
         return;
@@ -365,27 +357,17 @@ CT_NOINSTR static void ct_shadow_track_alloc(void *ptr, size_t req_size, size_t 
     uintptr_t poison_start = (start + 7u) & ~static_cast<uintptr_t>(7u);
     if (poison_start < end)
     {
-        ct_shadow_poison_range(reinterpret_cast<void *>(poison_start),
+        ct_shadow_poison_range(reinterpret_cast<void*>(poison_start),
                                static_cast<size_t>(end - poison_start));
     }
 }
 
-CT_NOINSTR static void ct_log_alloc_details(const char *label,
-                                            const char *status,
-                                            size_t req_size,
-                                            size_t real_size,
-                                            void *ptr,
-                                            const char *site,
-                                            CTColor color,
-                                            CTLevel lvl)
+CT_NOINSTR static void ct_log_alloc_details(const char* label, const char* status, size_t req_size,
+                                            size_t real_size, void* ptr, const char* site,
+                                            CTColor color, CTLevel lvl)
 {
-    ct_log(lvl,
-           "{}{}{} :: tid={} site={}\n",
-           ct_color(color),
-           label,
-           ct_color(CTColor::Reset),
-           ct_thread_id(),
-           ct_site_name(site));
+    ct_log(lvl, "{}{}{} :: tid={} site={}\n", ct_color(color), label, ct_color(CTColor::Reset),
+           ct_thread_id(), ct_site_name(site));
     ct_log(lvl, "┌-----------------------------------┐\n");
     ct_log(lvl, "| {:<16} : {:<14} |\n", "status", status);
     ct_log(lvl, "| {:<16} : {:<14} |\n", "req_size", req_size);
@@ -394,24 +376,14 @@ CT_NOINSTR static void ct_log_alloc_details(const char *label,
     ct_log(lvl, "└-----------------------------------┘\n");
 }
 
-CT_NOINSTR static void ct_log_realloc_details(const char *label,
-                                              const char *status,
-                                              size_t old_req_size,
-                                              size_t old_real_size,
-                                              void *old_ptr,
-                                              size_t new_req_size,
-                                              size_t new_real_size,
-                                              void *new_ptr,
-                                              const char *site,
+CT_NOINSTR static void ct_log_realloc_details(const char* label, const char* status,
+                                              size_t old_req_size, size_t old_real_size,
+                                              void* old_ptr, size_t new_req_size,
+                                              size_t new_real_size, void* new_ptr, const char* site,
                                               CTColor color)
 {
-    ct_log(CTLevel::Warn,
-           "{}{}{} :: tid={} site={}\n",
-           ct_color(color),
-           label,
-           ct_color(CTColor::Reset),
-           ct_thread_id(),
-           ct_site_name(site));
+    ct_log(CTLevel::Warn, "{}{}{} :: tid={} site={}\n", ct_color(color), label,
+           ct_color(CTColor::Reset), ct_thread_id(), ct_site_name(site));
     ct_log(CTLevel::Warn, "┌-----------------------------------┐\n");
     ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "status", status);
     ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "old_req_size", old_req_size);
@@ -423,13 +395,13 @@ CT_NOINSTR static void ct_log_realloc_details(const char *label,
     ct_log(CTLevel::Warn, "└-----------------------------------┘\n");
 }
 
-CT_NODISCARD CT_NOINSTR static void *ct_malloc_impl(size_t size, const char *site, int unreachable)
+CT_NODISCARD CT_NOINSTR static void* ct_malloc_impl(size_t size, const char* site, int unreachable)
 {
     ct_init_env_once();
     if (ct_disable_alloc)
         return malloc(size);
 
-    void *ptr = malloc(size);
+    void* ptr = malloc(size);
     size_t real_size = ct_malloc_usable_size(ptr, size);
 
     ct_lock_acquire();
@@ -438,11 +410,8 @@ CT_NODISCARD CT_NOINSTR static void *ct_malloc_impl(size_t size, const char *sit
         if (!ct_alloc_table_full_logged)
         {
             ct_alloc_table_full_logged = 1;
-            ct_log(CTLevel::Warn,
-                   "{}alloc table full ({} entries){}\n",
-                   ct_color(CTColor::Red),
-                   ct_alloc_table_size,
-                   ct_color(CTColor::Reset));
+            ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
+                   ct_alloc_table_size, ct_color(CTColor::Reset));
         }
     }
     ct_lock_release();
@@ -453,14 +422,8 @@ CT_NODISCARD CT_NOINSTR static void *ct_malloc_impl(size_t size, const char *sit
     {
         if (ct_alloc_trace_enabled)
         {
-            ct_log_alloc_details("tracing-malloc-unreachable",
-                                 "unreachable",
-                                 size,
-                                 real_size,
-                                 ptr,
-                                 site,
-                                 CTColor::Yellow,
-                                 CTLevel::Warn);
+            ct_log_alloc_details("tracing-malloc-unreachable", "unreachable", size, real_size, ptr,
+                                 site, CTColor::Yellow, CTLevel::Warn);
         }
         if (ptr && ct_autofree_enabled)
         {
@@ -471,21 +434,16 @@ CT_NODISCARD CT_NOINSTR static void *ct_malloc_impl(size_t size, const char *sit
     {
         if (ct_alloc_trace_enabled)
         {
-            ct_log_alloc_details("tracing-malloc",
-                                 "reachable",
-                                 size,
-                                 real_size,
-                                 ptr,
-                                 site,
-                                 CTColor::Yellow,
-                                 CTLevel::Info);
+            ct_log_alloc_details("tracing-malloc", "reachable", size, real_size, ptr, site,
+                                 CTColor::Yellow, CTLevel::Info);
         }
     }
 
     return ptr;
 }
 
-CT_NODISCARD CT_NOINSTR static void *ct_calloc_impl(size_t count, size_t size, const char *site, int unreachable)
+CT_NODISCARD CT_NOINSTR static void* ct_calloc_impl(size_t count, size_t size, const char* site,
+                                                    int unreachable)
 {
     ct_init_env_once();
     if (ct_disable_alloc)
@@ -496,7 +454,7 @@ CT_NODISCARD CT_NOINSTR static void *ct_calloc_impl(size_t count, size_t size, c
     if (overflow)
         req_size = 0;
 
-    void *ptr = calloc(count, size);
+    void* ptr = calloc(count, size);
     size_t real_size = ct_malloc_usable_size(ptr, req_size);
     size_t shadow_size = overflow ? real_size : req_size;
 
@@ -506,11 +464,8 @@ CT_NODISCARD CT_NOINSTR static void *ct_calloc_impl(size_t count, size_t size, c
         if (!ct_alloc_table_full_logged)
         {
             ct_alloc_table_full_logged = 1;
-            ct_log(CTLevel::Warn,
-                   "{}alloc table full ({} entries){}\n",
-                   ct_color(CTColor::Red),
-                   ct_alloc_table_size,
-                   ct_color(CTColor::Reset));
+            ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
+                   ct_alloc_table_size, ct_color(CTColor::Reset));
         }
     }
     ct_lock_release();
@@ -521,14 +476,8 @@ CT_NODISCARD CT_NOINSTR static void *ct_calloc_impl(size_t count, size_t size, c
     {
         if (ct_alloc_trace_enabled)
         {
-            ct_log_alloc_details("tracing-calloc-unreachable",
-                                 "unreachable",
-                                 req_size,
-                                 real_size,
-                                 ptr,
-                                 site,
-                                 CTColor::Yellow,
-                                 CTLevel::Warn);
+            ct_log_alloc_details("tracing-calloc-unreachable", "unreachable", req_size, real_size,
+                                 ptr, site, CTColor::Yellow, CTLevel::Warn);
         }
         if (ptr && ct_autofree_enabled)
         {
@@ -539,28 +488,22 @@ CT_NODISCARD CT_NOINSTR static void *ct_calloc_impl(size_t count, size_t size, c
     {
         if (ct_alloc_trace_enabled)
         {
-            ct_log_alloc_details("tracing-calloc",
-                                 "reachable",
-                                 req_size,
-                                 real_size,
-                                 ptr,
-                                 site,
-                                 CTColor::Yellow,
-                                 CTLevel::Info);
+            ct_log_alloc_details("tracing-calloc", "reachable", req_size, real_size, ptr, site,
+                                 CTColor::Yellow, CTLevel::Info);
         }
     }
 
     return ptr;
 }
 
-CT_NODISCARD CT_NOINSTR static void *ct_new_impl(size_t size, const char *site, int unreachable, int is_array)
+CT_NODISCARD CT_NOINSTR static void* ct_new_impl(size_t size, const char* site, int unreachable,
+                                                 int is_array)
 {
     ct_init_env_once();
     if (ct_disable_alloc)
         return is_array ? ::operator new[](size) : ::operator new(size);
 
-
-    void *ptr = is_array ? ::operator new[](size) : ::operator new(size);
+    void* ptr = is_array ? ::operator new[](size) : ::operator new(size);
     size_t real_size = ct_malloc_usable_size(ptr, size);
 
     ct_lock_acquire();
@@ -569,33 +512,24 @@ CT_NODISCARD CT_NOINSTR static void *ct_new_impl(size_t size, const char *site, 
         if (!ct_alloc_table_full_logged)
         {
             ct_alloc_table_full_logged = 1;
-            ct_log(CTLevel::Warn,
-                   "{}alloc table full ({} entries){}\n",
-                   ct_color(CTColor::Red),
-                   ct_alloc_table_size,
-                   ct_color(CTColor::Reset));
+            ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
+                   ct_alloc_table_size, ct_color(CTColor::Reset));
         }
     }
     ct_lock_release();
 
     ct_shadow_track_alloc(ptr, size, real_size);
 
-    const char *label = is_array ? "tracing-new-array" : "tracing-new";
-    const char *label_unreachable =
+    const char* label = is_array ? "tracing-new-array" : "tracing-new";
+    const char* label_unreachable =
         is_array ? "tracing-new-array-unreachable" : "tracing-new-unreachable";
 
     if (unreachable)
     {
         if (ct_alloc_trace_enabled)
         {
-            ct_log_alloc_details(label_unreachable,
-                                 "unreachable",
-                                 size,
-                                 real_size,
-                                 ptr,
-                                 site,
-                                 CTColor::Yellow,
-                                 CTLevel::Warn);
+            ct_log_alloc_details(label_unreachable, "unreachable", size, real_size, ptr, site,
+                                 CTColor::Yellow, CTLevel::Warn);
         }
         if (ptr && ct_autofree_enabled)
         {
@@ -606,13 +540,7 @@ CT_NODISCARD CT_NOINSTR static void *ct_new_impl(size_t size, const char *site, 
     {
         if (ct_alloc_trace_enabled)
         {
-            ct_log_alloc_details(label,
-                                 "reachable",
-                                 size,
-                                 real_size,
-                                 ptr,
-                                 site,
-                                 CTColor::Yellow,
+            ct_log_alloc_details(label, "reachable", size, real_size, ptr, site, CTColor::Yellow,
                                  CTLevel::Info);
         }
     }
@@ -620,7 +548,7 @@ CT_NODISCARD CT_NOINSTR static void *ct_new_impl(size_t size, const char *site, 
     return ptr;
 }
 
-CT_NODISCARD CT_NOINSTR static void *ct_realloc_impl(void *ptr, size_t size, const char *site)
+CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, const char* site)
 {
     ct_init_env_once();
     if (ct_disable_alloc)
@@ -636,21 +564,13 @@ CT_NODISCARD CT_NOINSTR static void *ct_realloc_impl(void *ptr, size_t size, con
 
     ct_lock_release();
 
-    void *new_ptr = realloc(ptr, size);
+    void* new_ptr = realloc(ptr, size);
     if (!new_ptr && size > 0)
     {
         if (ct_alloc_trace_enabled)
         {
-            ct_log_realloc_details("tracing-realloc",
-                                   "failed",
-                                   old_req_size,
-                                   old_size,
-                                   ptr,
-                                   size,
-                                   0,
-                                   nullptr,
-                                   site,
-                                   CTColor::Yellow);
+            ct_log_realloc_details("tracing-realloc", "failed", old_req_size, old_size, ptr, size,
+                                   0, nullptr, site, CTColor::Yellow);
         }
         return nullptr;
     }
@@ -668,11 +588,8 @@ CT_NODISCARD CT_NOINSTR static void *ct_realloc_impl(void *ptr, size_t size, con
             if (!ct_alloc_table_full_logged)
             {
                 ct_alloc_table_full_logged = 1;
-                ct_log(CTLevel::Warn,
-                       "{}alloc table full ({} entries){}\n",
-                       ct_color(CTColor::Red),
-                       ct_alloc_table_size,
-                       ct_color(CTColor::Reset));
+                ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
+                       ct_alloc_table_size, ct_color(CTColor::Reset));
             }
         }
     }
@@ -700,7 +617,7 @@ CT_NODISCARD CT_NOINSTR static void *ct_realloc_impl(void *ptr, size_t size, con
 
     if (ct_alloc_trace_enabled)
     {
-        const char *status = "updated";
+        const char* status = "updated";
         if (size == 0 && ptr)
         {
             status = "freed";
@@ -718,22 +635,14 @@ CT_NODISCARD CT_NOINSTR static void *ct_realloc_impl(void *ptr, size_t size, con
             status = "moved";
         }
 
-        ct_log_realloc_details("tracing-realloc",
-                               status,
-                               old_req_size,
-                               old_size,
-                               ptr,
-                               size,
-                               real_size,
-                               new_ptr,
-                               site,
-                               CTColor::Yellow);
+        ct_log_realloc_details("tracing-realloc", status, old_req_size, old_size, ptr, size,
+                               real_size, new_ptr, site, CTColor::Yellow);
     }
 
     return new_ptr;
 }
 
-CT_NOINSTR static void ct_delete_impl(void *ptr, int is_array)
+CT_NOINSTR static void ct_delete_impl(void* ptr, int is_array)
 {
     ct_init_env_once();
     if (ct_disable_alloc)
@@ -751,7 +660,7 @@ CT_NOINSTR static void ct_delete_impl(void *ptr, int is_array)
 
     size_t size = 0;
     size_t req_size = 0;
-    const char *site = nullptr;
+    const char* site = nullptr;
     int found = 0;
     (void)req_size;
 
@@ -761,45 +670,38 @@ CT_NOINSTR static void ct_delete_impl(void *ptr, int is_array)
 
     ct_lock_release();
 
-    const char *label = is_array ? "tracing-delete-array" : "tracing-delete";
+    const char* label = is_array ? "tracing-delete-array" : "tracing-delete";
 
     if (!ptr)
     {
-        ct_log(CTLevel::Warn,
-               "{}{} ptr=null{}\n",
-               ct_color(CTColor::Yellow),
-               label,
+        ct_log(CTLevel::Warn, "{}{} ptr=null{}\n", ct_color(CTColor::Yellow), label,
                ct_color(CTColor::Reset));
         if (is_array)
         {
             ::operator delete[](ptr);
-        } else {
+        }
+        else
+        {
             ::operator delete(ptr);
         }
         return;
     }
     if (found == -1)
     {
-        ct_log(CTLevel::Warn,
-               "{}{} ptr={:p} (double free){}\n",
-               ct_color(CTColor::Red),
-               label,
-               ptr,
+        ct_log(CTLevel::Warn, "{}{} ptr={:p} (double free){}\n", ct_color(CTColor::Red), label, ptr,
                ct_color(CTColor::Reset));
         return;
     }
     if (found == 0)
     {
-        ct_log(CTLevel::Warn,
-               "{}{} ptr={:p} (unknown){}\n",
-               ct_color(CTColor::Red),
-               label,
-               ptr,
+        ct_log(CTLevel::Warn, "{}{} ptr={:p} (unknown){}\n", ct_color(CTColor::Red), label, ptr,
                ct_color(CTColor::Reset));
         if (is_array)
         {
             ::operator delete[](ptr);
-        } else {
+        }
+        else
+        {
             ::operator delete(ptr);
         }
         return;
@@ -812,216 +714,190 @@ CT_NOINSTR static void ct_delete_impl(void *ptr, int is_array)
 
     if (ct_alloc_trace_enabled)
     {
-        ct_log(CTLevel::Info,
-               "{}{} ptr={:p} size={}{}\n",
-               ct_color(CTColor::Cyan),
-               label,
-               ptr,
-               size,
-               ct_color(CTColor::Reset));
+        ct_log(CTLevel::Info, "{}{} ptr={:p} size={}{}\n", ct_color(CTColor::Cyan), label, ptr,
+               size, ct_color(CTColor::Reset));
     }
 
     if (is_array)
     {
         ::operator delete[](ptr);
-    } else {
+    }
+    else
+    {
         ::operator delete(ptr);
     }
 }
 
-extern "C" {
-
-CT_NODISCARD CT_NOINSTR void *__ct_malloc(size_t size, const char *site)
+extern "C"
 {
-    return ct_malloc_impl(size, site, 0);
-}
 
-CT_NODISCARD CT_NOINSTR void *__ct_malloc_unreachable(size_t size, const char *site)
-{
-    return ct_malloc_impl(size, site, 1);
-}
-
-CT_NODISCARD CT_NOINSTR void *__ct_calloc(size_t count, size_t size, const char *site)
-{
-    return ct_calloc_impl(count, size, site, 0);
-}
-
-CT_NODISCARD CT_NOINSTR void *__ct_calloc_unreachable(size_t count, size_t size, const char *site)
-{
-    return ct_calloc_impl(count, size, site, 1);
-}
-
-CT_NODISCARD CT_NOINSTR void *__ct_new(size_t size, const char *site)
-{
-    return ct_new_impl(size, site, 0, 0);
-}
-
-CT_NODISCARD CT_NOINSTR void *__ct_new_unreachable(size_t size, const char *site)
-{
-    return ct_new_impl(size, site, 1, 0);
-}
-
-CT_NODISCARD CT_NOINSTR void *__ct_new_array(size_t size, const char *site)
-{
-    return ct_new_impl(size, site, 0, 1);
-}
-
-CT_NODISCARD CT_NOINSTR void *__ct_new_array_unreachable(size_t size, const char *site)
-{
-    return ct_new_impl(size, site, 1, 1);
-}
-
-CT_NODISCARD CT_NOINSTR void *__ct_realloc(void *ptr, size_t size, const char *site)
-{
-    return ct_realloc_impl(ptr, size, site);
-}
-
-CT_NOINSTR void __ct_autofree(void *ptr)
-{
-    ct_init_env_once();
-    if (ct_disable_alloc)
+    CT_NODISCARD CT_NOINSTR void* __ct_malloc(size_t size, const char* site)
     {
-        return;
-    }
-    if (!ct_autofree_enabled)
-    {
-        return;
-    }
-    if (!ptr)
-    {
-        ct_log(CTLevel::Warn,
-               "{}ct: auto-free ptr=null{}\n",
-               ct_color(CTColor::BgBrightYellow),
-               ct_color(CTColor::Reset));
-        return;
+        return ct_malloc_impl(size, site, 0);
     }
 
-    size_t size = 0;
-    size_t req_size = 0;
-    const char *site = nullptr;
-    int found = 0;
-    (void)req_size;
-
-    ct_lock_acquire();
-    found = ct_table_remove(ptr, &size, &req_size, &site);
-    ct_lock_release();
-
-    if (found == -1)
+    CT_NODISCARD CT_NOINSTR void* __ct_malloc_unreachable(size_t size, const char* site)
     {
-        ct_log(CTLevel::Warn,
-               "{}ct: auto-free skipped ptr={:p} (already freed){}\n",
-               ct_color(CTColor::BgBrightYellow),
-               ptr,
-               ct_color(CTColor::Reset));
-        return;
-    }
-    if (found == 0)
-    {
-        ct_log(CTLevel::Warn,
-               "{}ct: auto-free skipped ptr={:p} (unknown){}\n",
-               ct_color(CTColor::BgBrightYellow),
-               ptr,
-               ct_color(CTColor::Reset));
-        return;
+        return ct_malloc_impl(size, site, 1);
     }
 
-    if (ct_shadow_enabled)
+    CT_NODISCARD CT_NOINSTR void* __ct_calloc(size_t count, size_t size, const char* site)
     {
-        ct_shadow_poison_range(ptr, size);
+        return ct_calloc_impl(count, size, site, 0);
     }
 
-    ct_log(CTLevel::Warn,
-           "{}auto-free ptr={:p} size={} site={}{}\n",
-           ct_color(CTColor::BgBrightYellow),
-           ptr,
-           size,
-           ct_site_name(site),
-           ct_color(CTColor::Reset));
-    free(ptr);
-}
-
-CT_NOINSTR void __ct_free(void *ptr)
-{
-    ct_init_env_once();
-    if (ct_disable_alloc)
+    CT_NODISCARD CT_NOINSTR void* __ct_calloc_unreachable(size_t count, size_t size,
+                                                          const char* site)
     {
-        free(ptr);
-        return;
+        return ct_calloc_impl(count, size, site, 1);
     }
 
-    size_t size = 0;
-    size_t req_size = 0;
-    const char *site = nullptr;
-    int found = 0;
-    (void)req_size;
-
-    ct_lock_acquire();
-    if (ptr)
+    CT_NODISCARD CT_NOINSTR void* __ct_new(size_t size, const char* site)
     {
+        return ct_new_impl(size, site, 0, 0);
+    }
+
+    CT_NODISCARD CT_NOINSTR void* __ct_new_unreachable(size_t size, const char* site)
+    {
+        return ct_new_impl(size, site, 1, 0);
+    }
+
+    CT_NODISCARD CT_NOINSTR void* __ct_new_array(size_t size, const char* site)
+    {
+        return ct_new_impl(size, site, 0, 1);
+    }
+
+    CT_NODISCARD CT_NOINSTR void* __ct_new_array_unreachable(size_t size, const char* site)
+    {
+        return ct_new_impl(size, site, 1, 1);
+    }
+
+    CT_NODISCARD CT_NOINSTR void* __ct_realloc(void* ptr, size_t size, const char* site)
+    {
+        return ct_realloc_impl(ptr, size, site);
+    }
+
+    CT_NOINSTR void __ct_autofree(void* ptr)
+    {
+        ct_init_env_once();
+        if (ct_disable_alloc)
+        {
+            return;
+        }
+        if (!ct_autofree_enabled)
+        {
+            return;
+        }
+        if (!ptr)
+        {
+            ct_log(CTLevel::Warn, "{}ct: auto-free ptr=null{}\n", ct_color(CTColor::BgBrightYellow),
+                   ct_color(CTColor::Reset));
+            return;
+        }
+
+        size_t size = 0;
+        size_t req_size = 0;
+        const char* site = nullptr;
+        int found = 0;
+        (void)req_size;
+
+        ct_lock_acquire();
         found = ct_table_remove(ptr, &size, &req_size, &site);
-    }
-    ct_lock_release();
+        ct_lock_release();
 
-    if (!ptr)
-    {
-        ct_log(CTLevel::Warn,
-               "{}tracing-free ptr=null{}\n",
-               ct_color(CTColor::Yellow),
+        if (found == -1)
+        {
+            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} (already freed){}\n",
+                   ct_color(CTColor::BgBrightYellow), ptr, ct_color(CTColor::Reset));
+            return;
+        }
+        if (found == 0)
+        {
+            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} (unknown){}\n",
+                   ct_color(CTColor::BgBrightYellow), ptr, ct_color(CTColor::Reset));
+            return;
+        }
+
+        if (ct_shadow_enabled)
+        {
+            ct_shadow_poison_range(ptr, size);
+        }
+
+        ct_log(CTLevel::Warn, "{}auto-free ptr={:p} size={} site={}{}\n",
+               ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
                ct_color(CTColor::Reset));
         free(ptr);
-        return;
     }
-    if (found == -1)
+
+    CT_NOINSTR void __ct_free(void* ptr)
     {
-        ct_log(CTLevel::Warn,
-               "{}tracing-free ptr={:p} (double free){}\n",
-               ct_color(CTColor::Red),
-               ptr,
-               ct_color(CTColor::Reset));
-        return;
-    }
-    if (found == 0)
-    {
-        ct_log(CTLevel::Warn,
-               "{}tracing-free ptr={:p} (unknown){}\n",
-               ct_color(CTColor::Red),
-               ptr,
-               ct_color(CTColor::Reset));
+        ct_init_env_once();
+        if (ct_disable_alloc)
+        {
+            free(ptr);
+            return;
+        }
+
+        size_t size = 0;
+        size_t req_size = 0;
+        const char* site = nullptr;
+        int found = 0;
+        (void)req_size;
+
+        ct_lock_acquire();
+        if (ptr)
+        {
+            found = ct_table_remove(ptr, &size, &req_size, &site);
+        }
+        ct_lock_release();
+
+        if (!ptr)
+        {
+            ct_log(CTLevel::Warn, "{}tracing-free ptr=null{}\n", ct_color(CTColor::Yellow),
+                   ct_color(CTColor::Reset));
+            free(ptr);
+            return;
+        }
+        if (found == -1)
+        {
+            ct_log(CTLevel::Warn, "{}tracing-free ptr={:p} (double free){}\n",
+                   ct_color(CTColor::Red), ptr, ct_color(CTColor::Reset));
+            return;
+        }
+        if (found == 0)
+        {
+            ct_log(CTLevel::Warn, "{}tracing-free ptr={:p} (unknown){}\n", ct_color(CTColor::Red),
+                   ptr, ct_color(CTColor::Reset));
+            free(ptr);
+            return;
+        }
+
+        if (ct_shadow_enabled)
+        {
+            ct_shadow_poison_range(ptr, size);
+        }
+
+        if (ct_alloc_trace_enabled)
+        {
+            ct_log(CTLevel::Info, "{}tracing-free ptr={:p} size={}{}\n", ct_color(CTColor::Cyan),
+                   ptr, size, ct_color(CTColor::Reset));
+        }
         free(ptr);
-        return;
     }
 
-    if (ct_shadow_enabled)
+    CT_NOINSTR void __ct_delete(void* ptr)
     {
-        ct_shadow_poison_range(ptr, size);
+        ct_delete_impl(ptr, 0);
     }
 
-    if (ct_alloc_trace_enabled)
+    CT_NOINSTR void __ct_delete_array(void* ptr)
     {
-        ct_log(CTLevel::Info,
-               "{}tracing-free ptr={:p} size={}{}\n",
-               ct_color(CTColor::Cyan),
-               ptr,
-               size,
-               ct_color(CTColor::Reset));
+        ct_delete_impl(ptr, 1);
     }
-    free(ptr);
-}
-
-CT_NOINSTR void __ct_delete(void *ptr)
-{
-    ct_delete_impl(ptr, 0);
-}
-
-CT_NOINSTR void __ct_delete_array(void *ptr)
-{
-    ct_delete_impl(ptr, 1);
-}
 
 } // extern "C"
 
-CT_NOINSTR __attribute__((destructor))
-static void ct_report_leaks(void)
+CT_NOINSTR __attribute__((destructor)) static void ct_report_leaks(void)
 {
     if (ct_alloc_count == 0)
         return;

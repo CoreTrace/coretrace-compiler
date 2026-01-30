@@ -1,6 +1,6 @@
 #include <cstdio>
 
-extern "C" void __ct_vtable_dump(void *this_ptr, const char *site, const char *static_type);
+extern "C" void __ct_vtable_dump(void* this_ptr, const char* site, const char* static_type);
 
 int main()
 {

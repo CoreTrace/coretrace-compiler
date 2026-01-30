@@ -1,18 +1,20 @@
 #include <cstdio>
 #include <cstdlib>
 
-extern "C" void __ct_vtable_dump(void *this_ptr, const char *site, const char *static_type);
+extern "C" void __ct_vtable_dump(void* this_ptr, const char* site, const char* static_type);
 
-struct FakeObject {
-    void **vptr;
+struct FakeObject
+{
+    void** vptr;
 };
 
 int main()
 {
     std::puts("ct_vtable_diag_fake");
 
-    void **table = static_cast<void **>(std::calloc(4, sizeof(void *)));
-    if (!table) {
+    void** table = static_cast<void**>(std::calloc(4, sizeof(void*)));
+    if (!table)
+    {
         return 1;
     }
 

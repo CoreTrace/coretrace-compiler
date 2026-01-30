@@ -1,13 +1,15 @@
 #ifndef COMPILERLIB_INSTRUMENTATION_BOUNDS_HPP
 #define COMPILERLIB_INSTRUMENTATION_BOUNDS_HPP
 
-namespace llvm {
-class Module;
+namespace llvm
+{
+    class Module;
 } // namespace llvm
 
-namespace compilerlib {
+namespace compilerlib
+{
 
-void instrumentMemoryAccesses(llvm::Module &module);
+    void instrumentMemoryAccesses(llvm::Module& module);
 
 } // namespace compilerlib
 

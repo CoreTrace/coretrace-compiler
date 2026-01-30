@@ -14,4 +14,4 @@ int ct_alloc_disabled_by_env = 0;
 int ct_early_trace = 0;
 size_t ct_early_trace_count = 0;
 size_t ct_early_trace_limit = 200;
-thread_local const char *ct_current_site = nullptr;
+thread_local const char* ct_current_site = nullptr;

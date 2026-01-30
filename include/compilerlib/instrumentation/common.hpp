@@ -3,15 +3,17 @@
 
 #include <string>
 
-namespace llvm {
-class Function;
-class Instruction;
+namespace llvm
+{
+    class Function;
+    class Instruction;
 } // namespace llvm
 
-namespace compilerlib {
+namespace compilerlib
+{
 
-bool shouldInstrument(const llvm::Function &func);
-std::string formatSiteString(const llvm::Instruction &inst);
+    bool shouldInstrument(const llvm::Function& func);
+    std::string formatSiteString(const llvm::Instruction& inst);
 
 } // namespace compilerlib
 

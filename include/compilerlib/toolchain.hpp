@@ -9,19 +9,18 @@
 namespace compilerlib
 {
 
-struct DriverConfig
-{
-    std::string clang_path;
-    std::string resource_dir;
-    std::string sysroot;
-    bool add_resource_dir = false;
-    bool add_sysroot = false;
-    bool force_cxx_driver = false;
-};
+    struct DriverConfig
+    {
+        std::string clang_path;
+        std::string resource_dir;
+        std::string sysroot;
+        bool add_resource_dir = false;
+        bool add_sysroot = false;
+        bool force_cxx_driver = false;
+    };
 
-CT_NODISCARD bool resolveDriverConfig(const std::vector<std::string> &args,
-                                      DriverConfig &out,
-                                      std::string &error);
+    CT_NODISCARD bool resolveDriverConfig(const std::vector<std::string>& args, DriverConfig& out,
+                                          std::string& error);
 
 } // namespace compilerlib
 
