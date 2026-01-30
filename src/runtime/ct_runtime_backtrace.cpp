@@ -43,7 +43,9 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
         return;
     }
 
-    struct sigaction sa{};
+    struct sigaction sa
+    {
+    };
     sa.sa_handler = ct_signal_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESETHAND;
