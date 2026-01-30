@@ -302,12 +302,16 @@ endif()
 # ============
 #  FORMATTING
 # ============
-add_custom_target(format
-  COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/format.sh"
-  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMENT "Run clang-format on source files")
+# Only expose formatting targets when this project is the top-level build to
+# avoid name clashes when used via FetchContent.
+if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+  add_custom_target(format
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/format.sh"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Run clang-format on source files")
 
-add_custom_target(format-check
-  COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/format-check.sh"
-  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-  COMMENT "Verify clang-format compliance")
+  add_custom_target(format-check
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/format-check.sh"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Verify clang-format compliance")
+endif()
