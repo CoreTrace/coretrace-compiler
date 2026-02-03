@@ -6,6 +6,7 @@
 #include <format>
 #include <new>
 #include <chrono>
+#include <atomic>
 #include <time.h>
 #include <sys/mman.h>
 #if defined(__APPLE__)
@@ -58,23 +59,24 @@ static size_t ct_alloc_table_mask = CT_ALLOC_TABLE_SIZE - 1u;
 static size_t ct_alloc_count = 0;
 static int ct_alloc_lock = 0;
 static int ct_alloc_table_full_logged = 0;
-static int ct_autofree_scan_initialized = 0;
-static int ct_autofree_scan_enabled = 0;
-static int ct_autofree_scan_start = 0;
-static int ct_autofree_scan_in_progress = 0;
-static int ct_autofree_scan_stack = 1;
-static int ct_autofree_scan_regs = 1;
-static int ct_autofree_scan_globals = 1;
-static int ct_autofree_scan_interior = 1;
-static int ct_autofree_scan_debug = 0;
-static int ct_autofree_scan_ptr = 1;
-static uint64_t ct_autofree_scan_interval_ns = 0;
-static uint64_t ct_autofree_scan_period_ns = 0;
-static uint64_t ct_autofree_scan_budget_ns = 0;
-static uint64_t ct_autofree_scan_last_ns = 0;
-static uint64_t ct_autofree_scan_last_gc_ns = 0;
+static std::atomic<int> ct_autofree_scan_initialized{0};
+static std::atomic<int> ct_autofree_scan_enabled{0};
+static std::atomic<int> ct_autofree_scan_start{0};
+static std::atomic<int> ct_autofree_scan_in_progress{0};
+static std::atomic<int> ct_autofree_scan_stack{1};
+static std::atomic<int> ct_autofree_scan_regs{1};
+static std::atomic<int> ct_autofree_scan_globals{1};
+static std::atomic<int> ct_autofree_scan_interior{1};
+static std::atomic<int> ct_autofree_scan_debug{0};
+static std::atomic<int> ct_autofree_scan_ptr{1};
+static std::atomic<uint64_t> ct_autofree_scan_interval_ns{0};
+static std::atomic<uint64_t> ct_autofree_scan_period_ns{0};
+static std::atomic<uint64_t> ct_autofree_scan_budget_ns{0};
+static std::atomic<uint64_t> ct_autofree_scan_last_ns{0};
+static std::atomic<uint64_t> ct_autofree_scan_last_gc_ns{0};
 static pthread_t ct_autofree_scan_thread;
-static int ct_autofree_scan_thread_started = 0;
+static std::atomic<int> ct_autofree_scan_thread_started{0};
+static size_t ct_autofree_scan_timeout_check_freq = 100;
 
 extern "C"
 {
@@ -164,100 +166,127 @@ CT_NODISCARD CT_NOINSTR static int ct_env_flag(const char* name, int def_value)
 
 CT_NOINSTR static void ct_autofree_scan_init_once(void)
 {
-    if (ct_autofree_scan_initialized)
+    int expected = 0;
+    if (!ct_autofree_scan_initialized.compare_exchange_strong(expected, 1,
+                                                              std::memory_order_acq_rel))
     {
         return;
     }
-    ct_autofree_scan_initialized = 1;
-    ct_autofree_scan_enabled = ct_env_flag("CT_AUTOFREE_SCAN", 0);
-    ct_autofree_scan_start = ct_env_flag("CT_AUTOFREE_SCAN_START", 0);
-    ct_autofree_scan_stack = ct_env_flag("CT_AUTOFREE_SCAN_STACK", 1);
-    ct_autofree_scan_regs = ct_env_flag("CT_AUTOFREE_SCAN_REGS", 1);
-    ct_autofree_scan_globals = ct_env_flag("CT_AUTOFREE_SCAN_GLOBALS", 1);
-    ct_autofree_scan_interior = ct_env_flag("CT_AUTOFREE_SCAN_INTERIOR", 1);
-    ct_autofree_scan_debug = ct_env_flag("CT_DEBUG_AUTOFREE_SCAN", 0);
-    ct_autofree_scan_ptr = ct_env_flag("CT_AUTOFREE_SCAN_PTR", 1);
-    ct_autofree_scan_interval_ns =
+
+    const int scan_enabled = ct_env_flag("CT_AUTOFREE_SCAN", 0);
+    const int scan_start = ct_env_flag("CT_AUTOFREE_SCAN_START", 0);
+    const int scan_stack = ct_env_flag("CT_AUTOFREE_SCAN_STACK", 1);
+    const int scan_regs = ct_env_flag("CT_AUTOFREE_SCAN_REGS", 1);
+    const int scan_globals = ct_env_flag("CT_AUTOFREE_SCAN_GLOBALS", 1);
+    const int scan_interior = ct_env_flag("CT_AUTOFREE_SCAN_INTERIOR", 1);
+    const int scan_debug = static_cast<int>(ct_env_u64("CT_DEBUG_AUTOFREE_SCAN", 0));
+    const int scan_ptr = ct_env_flag("CT_AUTOFREE_SCAN_PTR", 1);
+    const uint64_t interval_ns =
         ct_env_u64("CT_AUTOFREE_SCAN_INTERVAL_MS", 0) * 1000000ULL;
 
     const uint64_t period_ns = ct_env_u64("CT_AUTOFREE_SCAN_PERIOD_NS", 0);
     const uint64_t period_us = ct_env_u64("CT_AUTOFREE_SCAN_PERIOD_US", 0);
     const double period_ms = ct_env_f64("CT_AUTOFREE_SCAN_PERIOD_MS", 0.0);
 
+    uint64_t final_period_ns = 0;
     if (period_ns)
     {
-        ct_autofree_scan_period_ns = period_ns;
+        final_period_ns = period_ns;
     }
     else if (period_us)
     {
-        ct_autofree_scan_period_ns = period_us * 1000ULL;
+        final_period_ns = period_us * 1000ULL;
     }
     else if (period_ms > 0.0)
     {
-        ct_autofree_scan_period_ns = static_cast<uint64_t>(period_ms * 1000000.0);
-    }
-    else
-    {
-        ct_autofree_scan_period_ns = 0;
+        final_period_ns = static_cast<uint64_t>(period_ms * 1000000.0);
     }
 
     const uint64_t budget_ns = ct_env_u64("CT_AUTOFREE_SCAN_BUDGET_NS", 0);
     const uint64_t budget_us = ct_env_u64("CT_AUTOFREE_SCAN_BUDGET_US", 0);
     const double budget_ms = ct_env_f64("CT_AUTOFREE_SCAN_BUDGET_MS", 5.0);
 
+    uint64_t final_budget_ns = 0;
     if (budget_ns)
     {
-        ct_autofree_scan_budget_ns = budget_ns;
+        final_budget_ns = budget_ns;
     }
     else if (budget_us)
     {
-        ct_autofree_scan_budget_ns = budget_us * 1000ULL;
+        final_budget_ns = budget_us * 1000ULL;
     }
     else if (budget_ms > 0.0)
     {
-        ct_autofree_scan_budget_ns = static_cast<uint64_t>(budget_ms * 1000000.0);
+        final_budget_ns = static_cast<uint64_t>(budget_ms * 1000000.0);
     }
-    else
+
+    int final_scan_enabled = scan_enabled;
+    if (scan_start)
     {
-        ct_autofree_scan_budget_ns = 0;
-    }
-    if (ct_autofree_scan_start)
-    {
-        ct_autofree_scan_enabled = 1;
-        if (ct_autofree_scan_period_ns == 0)
+        final_scan_enabled = 1;
+        if (final_period_ns == 0)
         {
-            ct_autofree_scan_period_ns = 1000000000ULL;
+            final_period_ns = 1000000000ULL;
         }
     }
+
+    ct_autofree_scan_enabled.store(final_scan_enabled, std::memory_order_release);
+    ct_autofree_scan_start.store(scan_start, std::memory_order_release);
+    ct_autofree_scan_stack.store(scan_stack, std::memory_order_release);
+    ct_autofree_scan_regs.store(scan_regs, std::memory_order_release);
+    ct_autofree_scan_globals.store(scan_globals, std::memory_order_release);
+    ct_autofree_scan_interior.store(scan_interior, std::memory_order_release);
+    ct_autofree_scan_debug.store(scan_debug, std::memory_order_release);
+    ct_autofree_scan_ptr.store(scan_ptr, std::memory_order_release);
+    ct_autofree_scan_interval_ns.store(interval_ns, std::memory_order_release);
+    ct_autofree_scan_period_ns.store(final_period_ns, std::memory_order_release);
+    ct_autofree_scan_budget_ns.store(final_budget_ns, std::memory_order_release);
 }
 
 CT_NODISCARD CT_NOINSTR static int ct_autofree_scan_should_run(void)
 {
-    if (!ct_autofree_scan_enabled)
+    if (!ct_autofree_scan_enabled.load(std::memory_order_acquire))
     {
         return 0;
     }
-    if (ct_autofree_scan_in_progress)
+    if (ct_autofree_scan_in_progress.load(std::memory_order_acquire))
     {
         return 0;
     }
     uint64_t now = ct_time_ns();
-    if (ct_autofree_scan_interval_ns != 0 &&
-        now - ct_autofree_scan_last_ns < ct_autofree_scan_interval_ns)
+    uint64_t interval_ns = ct_autofree_scan_interval_ns.load(std::memory_order_relaxed);
+    uint64_t last_ns = ct_autofree_scan_last_ns.load(std::memory_order_relaxed);
+    if (interval_ns != 0 && now - last_ns < interval_ns)
     {
         return 0;
     }
-    ct_autofree_scan_last_ns = now;
+    ct_autofree_scan_last_ns.store(now, std::memory_order_relaxed);
     return 1;
 }
 
 CT_NODISCARD CT_NOINSTR static int ct_scan_time_exceeded(uint64_t start_ns)
 {
-    if (ct_autofree_scan_budget_ns == 0)
+    if (ct_autofree_scan_budget_ns.load(std::memory_order_relaxed) == 0)
     {
         return 0;
     }
-    return (ct_time_ns() - start_ns) >= ct_autofree_scan_budget_ns;
+    return (ct_time_ns() - start_ns) >=
+        ct_autofree_scan_budget_ns.load(std::memory_order_relaxed);
+}
+
+CT_NODISCARD CT_NOINSTR static int ct_scan_time_exceeded_fast(uint64_t start_ns, size_t* check_counter)
+{
+    if (ct_autofree_scan_budget_ns.load(std::memory_order_relaxed) == 0)
+    {
+        return 0;
+    }
+    if (++(*check_counter) >= ct_autofree_scan_timeout_check_freq)
+    {
+        *check_counter = 0;
+        return (ct_time_ns() - start_ns) >=
+            ct_autofree_scan_budget_ns.load(std::memory_order_relaxed);
+    }
+    return 0;
 }
 
 CT_NODISCARD CT_NOINSTR static struct ct_alloc_entry* ct_table_find_entry(const void* ptr)
@@ -322,7 +351,7 @@ CT_NOINSTR static void ct_autofree_mark_value(uintptr_t value)
         entry->mark = 1;
         return;
     }
-    if (!ct_autofree_scan_interior)
+    if (!ct_autofree_scan_interior.load(std::memory_order_relaxed))
     {
         return;
     }
@@ -335,20 +364,23 @@ CT_NOINSTR static void ct_autofree_mark_value(uintptr_t value)
 
 CT_NODISCARD CT_NOINSTR static int ct_autofree_gc_should_run(void)
 {
-    if (!ct_autofree_scan_enabled || !ct_autofree_scan_start)
+    if (!ct_autofree_scan_enabled.load(std::memory_order_acquire) ||
+        !ct_autofree_scan_start.load(std::memory_order_acquire))
     {
         return 0;
     }
-    if (ct_autofree_scan_period_ns == 0)
+    if (ct_autofree_scan_period_ns.load(std::memory_order_relaxed) == 0)
     {
         return 1;
     }
     uint64_t now = ct_time_ns();
-    if (now - ct_autofree_scan_last_gc_ns < ct_autofree_scan_period_ns)
+    uint64_t period_ns = ct_autofree_scan_period_ns.load(std::memory_order_relaxed);
+    uint64_t last_gc = ct_autofree_scan_last_gc_ns.load(std::memory_order_relaxed);
+    if (now - last_gc < period_ns)
     {
         return 0;
     }
-    ct_autofree_scan_last_gc_ns = now;
+    ct_autofree_scan_last_gc_ns.store(now, std::memory_order_relaxed);
     return 1;
 }
 
@@ -396,12 +428,9 @@ CT_NODISCARD CT_NOINSTR static int ct_scan_range_for_ptr(uintptr_t base, size_t 
             return 1;
         }
         ++cursor;
-        if ((++counter & 0xFF) == 0)
+        if (ct_scan_time_exceeded_fast(start_ns, &counter))
         {
-            if (ct_scan_time_exceeded(start_ns))
-            {
-                return 1;
-            }
+            return 1;
         }
     }
     return 0;
@@ -436,16 +465,13 @@ CT_NOINSTR static void ct_scan_range_for_marks(const void* begin, const void* en
     {
         ct_autofree_mark_value(*cursor);
         ++cursor;
-        if ((++counter & 0xFF) == 0)
+        if (ct_scan_time_exceeded_fast(start_ns, &counter))
         {
-            if (ct_scan_time_exceeded(start_ns))
+            if (timed_out)
             {
-                if (timed_out)
-                {
-                    *timed_out = 1;
-                }
-                return;
+                *timed_out = 1;
             }
+            return;
         }
     }
 }
@@ -689,6 +715,29 @@ CT_NOINSTR static void ct_scan_thread_stack_for_marks(thread_t thread, uint64_t 
                             start_ns, timed_out);
 }
 
+// Optimized function: scan regs and stack together in one pass
+CT_NOINSTR static void ct_scan_thread_regs_and_stack_marks(thread_t thread, uint64_t start_ns,
+                                                           int* timed_out)
+{
+    if (timed_out && *timed_out)
+    {
+        return;
+    }
+    
+    // Scan regs if enabled
+    if (ct_autofree_scan_regs.load(std::memory_order_relaxed))
+    {
+        ct_scan_regs_for_marks(thread, start_ns, timed_out);
+    }
+    
+    // Then scan stack if enabled and not timed out
+    if (ct_autofree_scan_stack.load(std::memory_order_relaxed) &&
+        (!timed_out || !*timed_out))
+    {
+        ct_scan_thread_stack_for_marks(thread, start_ns, timed_out);
+    }
+}
+
 CT_NODISCARD CT_NOINSTR static int ct_scan_globals_for_ptr(uintptr_t base, size_t size,
                                                            uint64_t start_ns)
 {
@@ -812,7 +861,7 @@ CT_NODISCARD CT_NOINSTR static int ct_autofree_scan_for_ptr(void* ptr, size_t si
     for (mach_msg_type_number_t i = 0; i < thread_count && !found; ++i)
     {
         thread_t thread = threads[i];
-        if (ct_autofree_scan_regs)
+        if (ct_autofree_scan_regs.load(std::memory_order_relaxed))
         {
             if (ct_scan_regs_for_ptr(thread, base, size, start_ns))
             {
@@ -820,7 +869,7 @@ CT_NODISCARD CT_NOINSTR static int ct_autofree_scan_for_ptr(void* ptr, size_t si
                 break;
             }
         }
-        if (ct_autofree_scan_stack)
+        if (ct_autofree_scan_stack.load(std::memory_order_relaxed))
         {
             if (ct_scan_thread_stack_for_ptr(thread, base, size, start_ns))
             {
@@ -835,7 +884,7 @@ CT_NODISCARD CT_NOINSTR static int ct_autofree_scan_for_ptr(void* ptr, size_t si
         }
     }
 
-    if (!found && ct_autofree_scan_globals)
+    if (!found && ct_autofree_scan_globals.load(std::memory_order_relaxed))
     {
         if (ct_scan_globals_for_ptr(base, size, start_ns))
         {
@@ -854,7 +903,8 @@ CT_NODISCARD CT_NOINSTR static int ct_autofree_scan_for_ptr(void* ptr, size_t si
     vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads),
                   thread_count * sizeof(thread_t));
 
-    if (ct_autofree_scan_debug)
+    const int debug_level = ct_autofree_scan_debug.load(std::memory_order_relaxed);
+    if (debug_level > 1 || (debug_level == 1 && found))
     {
         ct_log(CTLevel::Warn, "{}ct: autofree scan {} for ptr={:p} size={}{}\n",
                ct_color(CTColor::BgBrightYellow), found ? "found" : "clear", ptr, size,
@@ -961,11 +1011,12 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
 {
     ct_init_env_once();
     ct_autofree_scan_init_once();
-    if (!ct_autofree_scan_enabled || !ct_autofree_enabled || ct_disable_alloc)
+    if (!ct_autofree_scan_enabled.load(std::memory_order_acquire) || !ct_autofree_enabled ||
+        ct_disable_alloc)
     {
         return;
     }
-    if (ct_autofree_scan_in_progress)
+    if (ct_autofree_scan_in_progress.exchange(1, std::memory_order_acq_rel))
     {
         return;
     }
@@ -974,14 +1025,12 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
         return;
     }
 
-    ct_autofree_scan_in_progress = 1;
-
     uint64_t start_ns = ct_time_ns();
     thread_act_array_t threads = nullptr;
     mach_msg_type_number_t thread_count = 0;
     if (task_threads(mach_task_self(), &threads, &thread_count) != KERN_SUCCESS)
     {
-        ct_autofree_scan_in_progress = 0;
+        ct_autofree_scan_in_progress.store(0, std::memory_order_release);
         return;
     }
 
@@ -996,6 +1045,7 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
         thread_suspend(threads[i]);
     }
 
+    // Single pass: reset marks for used entries
     for (size_t i = 0; i < ct_alloc_table_size; ++i)
     {
         if (ct_alloc_table[i].state == CT_ENTRY_USED)
@@ -1007,21 +1057,23 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
     int timed_out = 0;
     for (mach_msg_type_number_t i = 0; i < thread_count && !timed_out; ++i)
     {
-        if (ct_autofree_scan_regs)
+        if (ct_autofree_scan_regs.load(std::memory_order_relaxed) ||
+            ct_autofree_scan_stack.load(std::memory_order_relaxed))
         {
-            ct_scan_regs_for_marks(threads[i], start_ns, &timed_out);
-        }
-        if (ct_autofree_scan_stack && !timed_out)
-        {
-            ct_scan_thread_stack_for_marks(threads[i], start_ns, &timed_out);
+            // Optimized: combine regs and stack scan
+            ct_scan_thread_regs_and_stack_marks(threads[i], start_ns, &timed_out);
         }
     }
-    if (!timed_out && ct_autofree_scan_globals)
+    if (!timed_out && ct_autofree_scan_globals.load(std::memory_order_relaxed))
     {
         ct_scan_globals_for_marks(start_ns, &timed_out);
     }
 
+    // Single pass: count and collect unmarked entries
     size_t to_free_count = 0;
+    size_t idx = 0;
+    struct ct_autofree_free_item* items = nullptr;
+    
     if (!timed_out)
     {
         for (size_t i = 0; i < ct_alloc_table_size; ++i)
@@ -1033,17 +1085,18 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
         }
     }
 
-    struct ct_autofree_free_item* items = nullptr;
+    ct_lock_release();
+
     if (!timed_out && to_free_count > 0)
     {
         items = static_cast<struct ct_autofree_free_item*>(
             std::malloc(sizeof(struct ct_autofree_free_item) * to_free_count));
     }
 
-    size_t idx = 0;
-    if (!timed_out && to_free_count > 0 && items)
+    ct_lock_acquire();
+    if (!timed_out && items)
     {
-        for (size_t i = 0; i < ct_alloc_table_size; ++i)
+        for (size_t i = 0; i < ct_alloc_table_size && idx < to_free_count; ++i)
         {
             struct ct_alloc_entry* entry = &ct_alloc_table[i];
             if (entry->state == CT_ENTRY_USED && entry->mark == 0)
@@ -1061,10 +1114,10 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
             }
         }
     }
-
     ct_lock_release();
 
-    if (ct_autofree_scan_debug)
+    const int debug_level = ct_autofree_scan_debug.load(std::memory_order_relaxed);
+    if (debug_level > 1 || (debug_level == 1 && (timed_out || to_free_count > 0)))
     {
         ct_log(CTLevel::Warn, "{}ct: scan({}) done timed_out={} free_count={}{}\n",
                ct_color(CTColor::BgBrightYellow), reason ? reason : "periodic", timed_out,
@@ -1094,7 +1147,7 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
     vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads),
                   thread_count * sizeof(thread_t));
 
-    ct_autofree_scan_in_progress = 0;
+    ct_autofree_scan_in_progress.store(0, std::memory_order_release);
 }
 
 CT_NOINSTR static void ct_autofree_scan_sleep(uint64_t ns)
@@ -1115,7 +1168,8 @@ CT_NOINSTR static void* ct_autofree_scan_thread_main(void*)
 {
     ct_init_env_once();
     ct_autofree_scan_init_once();
-    if (!ct_autofree_scan_enabled || !ct_autofree_scan_start)
+    if (!ct_autofree_scan_enabled.load(std::memory_order_acquire) ||
+        !ct_autofree_scan_start.load(std::memory_order_acquire))
     {
         return nullptr;
     }
@@ -1123,7 +1177,7 @@ CT_NOINSTR static void* ct_autofree_scan_thread_main(void*)
     for (;;)
     {
         ct_autofree_gc_scan(0, "periodic");
-        uint64_t interval = ct_autofree_scan_period_ns;
+        uint64_t interval = ct_autofree_scan_period_ns.load(std::memory_order_relaxed);
         if (interval == 0)
         {
             interval = 1000000000ULL;
@@ -1135,11 +1189,12 @@ CT_NOINSTR static void* ct_autofree_scan_thread_main(void*)
 
 CT_NOINSTR static void ct_autofree_scan_start_thread(void)
 {
-    if (ct_autofree_scan_thread_started)
+    int expected = 0;
+    if (!ct_autofree_scan_thread_started.compare_exchange_strong(expected, 1,
+                                                                 std::memory_order_acq_rel))
     {
         return;
     }
-    ct_autofree_scan_thread_started = 1;
     if (pthread_create(&ct_autofree_scan_thread, nullptr, ct_autofree_scan_thread_main, nullptr) ==
         0)
     {
@@ -1165,7 +1220,7 @@ CT_NOINSTR __attribute__((constructor)) static void ct_autofree_scan_ctor(void)
 {
     ct_init_env_once();
     ct_autofree_scan_init_once();
-    if (ct_autofree_scan_start)
+    if (ct_autofree_scan_start.load(std::memory_order_acquire))
     {
         ct_autofree_scan_start_thread();
         ct_autofree_gc_scan(1, "startup");
@@ -2424,16 +2479,27 @@ extern "C"
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-
+#if defined(__APPLE__)
         void* rc = brk(addr);
+        void* ret = rc;
+#else
+        int rc = brk(addr);
+        void* ret = (rc == 0) ? addr : reinterpret_cast<void*>(-1);
+#endif
 #pragma clang diagnostic pop
         if (ct_alloc_trace_enabled)
         {
+#if defined(__APPLE__)
             ct_log(CTLevel::Info, "{}tracing-brk addr={:p} rc={:p} site={}{}\n",
                    ct_color(CTColor::Cyan), addr, rc, ct_site_name(site),
                    ct_color(CTColor::Reset));
+#else
+            ct_log(CTLevel::Info, "{}tracing-brk addr={:p} rc={} ret={:p} site={}{}\n",
+                   ct_color(CTColor::Cyan), addr, rc, ret, ct_site_name(site),
+                   ct_color(CTColor::Reset));
+#endif
         }
-        return rc;
+        return ret;
     }
 
     CT_NOINSTR void __ct_autofree(void* ptr)
@@ -2461,7 +2527,8 @@ extern "C"
         int found = 0;
         (void)req_size;
 
-        if (ct_autofree_scan_enabled && ct_autofree_scan_ptr)
+        if (ct_autofree_scan_enabled.load(std::memory_order_acquire) &&
+            ct_autofree_scan_ptr.load(std::memory_order_acquire))
         {
             unsigned char state = CT_ENTRY_EMPTY;
             ct_lock_acquire();
@@ -2529,7 +2596,8 @@ extern "C"
         int found = 0;
         (void)req_size;
 
-        if (ct_autofree_scan_enabled && ct_autofree_scan_ptr)
+        if (ct_autofree_scan_enabled.load(std::memory_order_acquire) &&
+            ct_autofree_scan_ptr.load(std::memory_order_acquire))
         {
             unsigned char state = CT_ENTRY_EMPTY;
             ct_lock_acquire();
@@ -2592,7 +2660,8 @@ extern "C"
         int found = 0;
         (void)req_size;
 
-        if (ct_autofree_scan_enabled && ct_autofree_scan_ptr)
+        if (ct_autofree_scan_enabled.load(std::memory_order_acquire) &&
+            ct_autofree_scan_ptr.load(std::memory_order_acquire))
         {
             unsigned char state = CT_ENTRY_EMPTY;
             ct_lock_acquire();
@@ -2666,7 +2735,8 @@ extern "C"
         int found = 0;
         (void)req_size;
 
-        if (ct_autofree_scan_enabled && ct_autofree_scan_ptr)
+        if (ct_autofree_scan_enabled.load(std::memory_order_acquire) &&
+            ct_autofree_scan_ptr.load(std::memory_order_acquire))
         {
             unsigned char state = CT_ENTRY_EMPTY;
             ct_lock_acquire();
@@ -2729,7 +2799,8 @@ extern "C"
         int found = 0;
         (void)req_size;
 
-        if (ct_autofree_scan_enabled && ct_autofree_scan_ptr)
+        if (ct_autofree_scan_enabled.load(std::memory_order_acquire) &&
+            ct_autofree_scan_ptr.load(std::memory_order_acquire))
         {
             unsigned char state = CT_ENTRY_EMPTY;
             ct_lock_acquire();
