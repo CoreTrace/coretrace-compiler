@@ -95,6 +95,29 @@ extern size_t ct_early_trace_count;
 extern size_t ct_early_trace_limit;
 extern thread_local const char* ct_current_site;
 
+// Feature flags (C API friendly).
+#define CT_FEATURE_TRACE (1ull << 0)
+#define CT_FEATURE_ALLOC (1ull << 1)
+#define CT_FEATURE_BOUNDS (1ull << 2)
+#define CT_FEATURE_SHADOW (1ull << 3)
+#define CT_FEATURE_SHADOW_AGGR (1ull << 4)
+#define CT_FEATURE_AUTOFREE (1ull << 5)
+#define CT_FEATURE_ALLOC_TRACE (1ull << 6)
+#define CT_FEATURE_VTABLE_DIAG (1ull << 7)
+#define CT_FEATURE_EARLY_TRACE (1ull << 8)
+
+extern "C"
+{
+    CT_NODISCARD CT_NOINSTR int ct_is_enabled(uint64_t feature);
+    CT_NOINSTR void ct_set_enabled(uint64_t feature, int enabled);
+    CT_NODISCARD CT_NOINSTR uint64_t ct_get_features(void);
+
+    CT_NODISCARD CT_NOINSTR int ct_bounds_abort_enabled(void);
+    CT_NOINSTR void ct_set_bounds_abort(int enabled);
+
+    CT_NODISCARD CT_NOINSTR int ct_early_trace_should_log(void);
+}
+
 CT_NODISCARD CT_NOINSTR size_t ct_strlen(const char* str);
 CT_NODISCARD CT_NOINSTR int ct_streq(const char* lhs, const char* rhs);
 CT_NODISCARD CT_NOINSTR std::string_view ct_color(CTColor color);

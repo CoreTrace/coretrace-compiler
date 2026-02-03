@@ -35,7 +35,7 @@ CT_NOINSTR void ct_report_bounds_error(const void* base, const void* ptr, size_t
         ct_log(CTLevel::Error, "  usable_size={}\n", alloc_size);
     }
 
-    if (ct_bounds_abort)
+    if (ct_bounds_abort_enabled())
     {
         abort();
     }
@@ -47,7 +47,7 @@ extern "C"
     CT_NOINSTR void __ct_check_bounds(const void* base, const void* ptr, size_t access_size,
                                       const char* site, int is_write)
     {
-        if (ct_disable_bounds)
+        if (!ct_is_enabled(CT_FEATURE_BOUNDS))
         {
             return;
         }
@@ -71,7 +71,8 @@ extern "C"
 
         ct_lock_acquire();
         found = ct_table_lookup(base, &alloc_size, &req_size, &alloc_site, &state);
-        if (!found && ct_shadow_enabled && ct_shadow_aggressive)
+        if (!found && ct_is_enabled(CT_FEATURE_SHADOW) &&
+            ct_is_enabled(CT_FEATURE_SHADOW_AGGR))
         {
             void* found_base = nullptr;
             found = ct_table_lookup_containing(ptr, &found_base, &alloc_size, &req_size,
@@ -88,14 +89,14 @@ extern "C"
             return;
         }
 
-        if (state == CT_ENTRY_FREED && !ct_shadow_enabled)
+        if (state == CT_ENTRY_FREED && !ct_is_enabled(CT_FEATURE_SHADOW))
         {
             ct_report_bounds_error(alloc_base, ptr, access_size, site, is_write, req_size,
                                    alloc_size, alloc_site, state);
             return;
         }
 
-        if (ct_shadow_enabled)
+        if (ct_is_enabled(CT_FEATURE_SHADOW))
         {
             (void)ct_shadow_check_access(ptr, access_size, alloc_base, req_size, alloc_size,
                                          alloc_site, site, is_write, state);

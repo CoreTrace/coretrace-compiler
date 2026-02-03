@@ -682,7 +682,7 @@ namespace
     CT_NOINSTR void ct_log_vtable_diag_state(void)
     {
         static int logged = 0;
-        if (!ct_vtable_diag_enabled)
+        if (!ct_is_enabled(CT_FEATURE_VTABLE_DIAG))
         {
             return;
         }
@@ -693,7 +693,7 @@ namespace
             return;
         }
 
-        if (!ct_disable_alloc)
+        if (ct_is_enabled(CT_FEATURE_ALLOC))
         {
             ct_log(CTLevel::Info, "[VTABLE-DIAG]: alloc-tracking=enabled\n");
             return;
@@ -744,13 +744,13 @@ extern "C"
         }
         lines.push_back({"type", type_name});
 
-        if (ct_vtable_diag_enabled && !ct_is_unknown_type(static_type))
+        if (ct_is_enabled(CT_FEATURE_VTABLE_DIAG) && !ct_is_unknown_type(static_type))
         {
             lines.push_back({"static", static_type});
         }
 
         std::vector<std::string> warnings;
-        if (ct_vtable_diag_enabled)
+        if (ct_is_enabled(CT_FEATURE_VTABLE_DIAG))
         {
             if (!this_ptr)
             {
@@ -778,7 +778,7 @@ extern "C"
                 }
             }
 
-            if (!ct_disable_alloc)
+            if (ct_is_enabled(CT_FEATURE_ALLOC))
             {
                 unsigned char state = 0;
                 if (ct_table_lookup_containing(this_ptr, nullptr, nullptr, nullptr, nullptr,
@@ -843,7 +843,7 @@ extern "C"
         lines.push_back({"target", target_value});
         lines.push_back({"symbol", sym_name});
         lines.push_back({"demangled", demangled_name});
-        if (ct_vtable_diag_enabled && !ct_is_unknown_type(static_type))
+        if (ct_is_enabled(CT_FEATURE_VTABLE_DIAG) && !ct_is_unknown_type(static_type))
         {
             lines.push_back({"static", static_type});
         }
@@ -851,7 +851,7 @@ extern "C"
         std::vector<std::string> warnings;
         CtAddrInfo vtable_addr;
         CtAddrInfo target_addr;
-        if (ct_vtable_diag_enabled)
+        if (ct_is_enabled(CT_FEATURE_VTABLE_DIAG))
         {
             if (!this_ptr)
             {
@@ -888,7 +888,7 @@ extern "C"
                 }
             }
 
-            if (!ct_disable_alloc)
+            if (ct_is_enabled(CT_FEATURE_ALLOC))
             {
                 unsigned char state = 0;
                 if (ct_table_lookup_containing(this_ptr, nullptr, nullptr, nullptr, nullptr,

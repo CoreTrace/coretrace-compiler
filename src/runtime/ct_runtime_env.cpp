@@ -33,32 +33,32 @@ CT_NOINSTR static void ct_apply_compiled_config(void)
 
     if (readWeak(&__ct_config_shadow) || readWeak(&__ct_config_shadow_aggressive))
     {
-        ct_shadow_enabled = 1;
+        ct_set_enabled(CT_FEATURE_SHADOW, 1);
     }
     if (readWeak(&__ct_config_shadow_aggressive))
     {
-        ct_shadow_aggressive = 1;
+        ct_set_enabled(CT_FEATURE_SHADOW_AGGR, 1);
     }
     if (readWeak(&__ct_config_bounds_no_abort))
     {
-        ct_bounds_abort = 0;
+        ct_set_bounds_abort(0);
     }
     if (readWeak(&__ct_config_disable_alloc))
     {
-        ct_disable_alloc = 1;
+        ct_set_enabled(CT_FEATURE_ALLOC, 0);
         ct_alloc_disabled_by_config = 1;
     }
     if (readWeak(&__ct_config_disable_autofree))
     {
-        ct_autofree_enabled = 0;
+        ct_set_enabled(CT_FEATURE_AUTOFREE, 0);
     }
     if (readWeak(&__ct_config_disable_alloc_trace))
     {
-        ct_alloc_trace_enabled = 0;
+        ct_set_enabled(CT_FEATURE_ALLOC_TRACE, 0);
     }
     if (readWeak(&__ct_config_vtable_diag))
     {
-        ct_vtable_diag_enabled = 1;
+        ct_set_enabled(CT_FEATURE_VTABLE_DIAG, 1);
     }
 }
 
@@ -68,41 +68,41 @@ CT_NOINSTR __attribute__((constructor)) static void ct_runtime_init(void)
     ct_apply_compiled_config();
     if (getenv("CT_DISABLE_TRACE") != nullptr)
     {
-        ct_disable_trace = 1;
+        ct_set_enabled(CT_FEATURE_TRACE, 0);
     }
     if (getenv("CT_DISABLE_ALLOC") != nullptr)
     {
-        ct_disable_alloc = 1;
+        ct_set_enabled(CT_FEATURE_ALLOC, 0);
         ct_alloc_disabled_by_env = 1;
     }
     if (getenv("CT_EARLY_TRACE") != nullptr)
     {
-        ct_early_trace = 1;
+        ct_set_enabled(CT_FEATURE_EARLY_TRACE, 1);
     }
     if (getenv("CT_DISABLE_BOUNDS") != nullptr)
     {
-        ct_disable_bounds = 1;
+        ct_set_enabled(CT_FEATURE_BOUNDS, 0);
     }
     if (getenv("CT_BOUNDS_NO_ABORT") != nullptr)
     {
-        ct_bounds_abort = 0;
+        ct_set_bounds_abort(0);
     }
     if (getenv("CT_SHADOW") != nullptr)
     {
-        ct_shadow_enabled = 1;
+        ct_set_enabled(CT_FEATURE_SHADOW, 1);
     }
     if (getenv("CT_SHADOW_AGGRESSIVE") != nullptr)
     {
-        ct_shadow_enabled = 1;
-        ct_shadow_aggressive = 1;
+        ct_set_enabled(CT_FEATURE_SHADOW, 1);
+        ct_set_enabled(CT_FEATURE_SHADOW_AGGR, 1);
     }
     if (getenv("CT_DISABLE_AUTOFREE") != nullptr)
     {
-        ct_autofree_enabled = 0;
+        ct_set_enabled(CT_FEATURE_AUTOFREE, 0);
     }
     if (getenv("CT_DISABLE_ALLOC_TRACE") != nullptr)
     {
-        ct_alloc_trace_enabled = 0;
+        ct_set_enabled(CT_FEATURE_ALLOC_TRACE, 0);
     }
 }
 
@@ -118,40 +118,40 @@ CT_NOINSTR void ct_init_env_once(void)
     ct_apply_compiled_config();
     if (getenv("CT_DISABLE_TRACE") != nullptr)
     {
-        ct_disable_trace = 1;
+        ct_set_enabled(CT_FEATURE_TRACE, 0);
     }
     if (getenv("CT_DISABLE_ALLOC") != nullptr)
     {
-        ct_disable_alloc = 1;
+        ct_set_enabled(CT_FEATURE_ALLOC, 0);
         ct_alloc_disabled_by_env = 1;
     }
     if (getenv("CT_EARLY_TRACE") != nullptr)
     {
-        ct_early_trace = 1;
+        ct_set_enabled(CT_FEATURE_EARLY_TRACE, 1);
     }
     if (getenv("CT_DISABLE_BOUNDS") != nullptr)
     {
-        ct_disable_bounds = 1;
+        ct_set_enabled(CT_FEATURE_BOUNDS, 0);
     }
     if (getenv("CT_BOUNDS_NO_ABORT") != nullptr)
     {
-        ct_bounds_abort = 0;
+        ct_set_bounds_abort(0);
     }
     if (getenv("CT_SHADOW") != nullptr)
     {
-        ct_shadow_enabled = 1;
+        ct_set_enabled(CT_FEATURE_SHADOW, 1);
     }
     if (getenv("CT_SHADOW_AGGRESSIVE") != nullptr)
     {
-        ct_shadow_enabled = 1;
-        ct_shadow_aggressive = 1;
+        ct_set_enabled(CT_FEATURE_SHADOW, 1);
+        ct_set_enabled(CT_FEATURE_SHADOW_AGGR, 1);
     }
     if (getenv("CT_DISABLE_AUTOFREE") != nullptr)
     {
-        ct_autofree_enabled = 0;
+        ct_set_enabled(CT_FEATURE_AUTOFREE, 0);
     }
     if (getenv("CT_DISABLE_ALLOC_TRACE") != nullptr)
     {
-        ct_alloc_trace_enabled = 0;
+        ct_set_enabled(CT_FEATURE_ALLOC_TRACE, 0);
     }
 }

@@ -930,7 +930,7 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
     switch (item.kind)
     {
     case CT_ALLOC_KIND_NEW:
-        if (ct_shadow_enabled)
+        if (ct_is_enabled(CT_FEATURE_SHADOW))
         {
             ct_shadow_poison_range(item.ptr, item.size);
         }
@@ -940,7 +940,7 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
         ::operator delete(item.ptr);
         break;
     case CT_ALLOC_KIND_NEW_ARRAY:
-        if (ct_shadow_enabled)
+        if (ct_is_enabled(CT_FEATURE_SHADOW))
         {
             ct_shadow_poison_range(item.ptr, item.size);
         }
@@ -950,7 +950,7 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
         ::operator delete[](item.ptr);
         break;
     case CT_ALLOC_KIND_MMAP:
-        if (ct_shadow_enabled)
+        if (ct_is_enabled(CT_FEATURE_SHADOW))
         {
             ct_shadow_poison_range(item.ptr, item.size);
         }
@@ -968,7 +968,7 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
             static_cast<char*>(item.ptr) + static_cast<ptrdiff_t>(item.size) == current)
         {
             (void)sbrk(-static_cast<intptr_t>(item.size));
-            if (ct_shadow_enabled)
+            if (ct_is_enabled(CT_FEATURE_SHADOW))
             {
                 ct_shadow_poison_range(item.ptr, item.size);
             }
@@ -984,7 +984,7 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
 #pragma clang diagnostic pop
     case CT_ALLOC_KIND_MALLOC:
     default:
-        if (ct_shadow_enabled)
+        if (ct_is_enabled(CT_FEATURE_SHADOW))
         {
             ct_shadow_poison_range(item.ptr, item.size);
         }
@@ -1000,8 +1000,8 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
 {
     ct_init_env_once();
     ct_autofree_scan_init_once();
-    if (!ct_autofree_scan_enabled.load(std::memory_order_acquire) || !ct_autofree_enabled ||
-        ct_disable_alloc)
+    if (!ct_autofree_scan_enabled.load(std::memory_order_acquire) ||
+        !ct_is_enabled(CT_FEATURE_AUTOFREE) || !ct_is_enabled(CT_FEATURE_ALLOC))
     {
         return;
     }
@@ -1587,7 +1587,7 @@ CT_NODISCARD CT_NOINSTR static size_t ct_malloc_usable_size(void* ptr, size_t fa
 
 CT_NOINSTR static void ct_shadow_track_alloc(void* ptr, size_t req_size, size_t real_size)
 {
-    if (!ct_shadow_enabled || !ptr)
+    if (!ct_is_enabled(CT_FEATURE_SHADOW) || !ptr)
         return;
 
     ct_shadow_unpoison_range(ptr, req_size);
@@ -1637,7 +1637,7 @@ CT_NOINSTR static void ct_log_realloc_details(const char* label, const char* sta
 CT_NODISCARD CT_NOINSTR static void* ct_malloc_impl(size_t size, const char* site, int unreachable)
 {
     ct_init_env_once();
-    if (ct_disable_alloc)
+    if (!ct_is_enabled(CT_FEATURE_ALLOC))
         return malloc(size);
 
     void* ptr = malloc(size);
@@ -1659,19 +1659,19 @@ CT_NODISCARD CT_NOINSTR static void* ct_malloc_impl(size_t size, const char* sit
 
     if (unreachable)
     {
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log_alloc_details("tracing-malloc-unreachable", "unreachable", size, real_size, ptr,
                                  site, CTColor::Yellow, CTLevel::Warn);
         }
-        if (ptr && ct_autofree_enabled)
+        if (ptr && ct_is_enabled(CT_FEATURE_AUTOFREE))
         {
             __ct_autofree(ptr);
         }
     }
     if (!unreachable)
     {
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log_alloc_details("tracing-malloc", "reachable", size, real_size, ptr, site,
                                  CTColor::Yellow, CTLevel::Info);
@@ -1685,7 +1685,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_calloc_impl(size_t count, size_t size, c
                                                     int unreachable)
 {
     ct_init_env_once();
-    if (ct_disable_alloc)
+    if (!ct_is_enabled(CT_FEATURE_ALLOC))
         return calloc(count, size);
 
     size_t req_size = 0;
@@ -1713,19 +1713,19 @@ CT_NODISCARD CT_NOINSTR static void* ct_calloc_impl(size_t count, size_t size, c
 
     if (unreachable)
     {
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log_alloc_details("tracing-calloc-unreachable", "unreachable", req_size, real_size,
                                  ptr, site, CTColor::Yellow, CTLevel::Warn);
         }
-        if (ptr && ct_autofree_enabled)
+        if (ptr && ct_is_enabled(CT_FEATURE_AUTOFREE))
         {
             __ct_autofree(ptr);
         }
     }
     else
     {
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log_alloc_details("tracing-calloc", "reachable", req_size, real_size, ptr, site,
                                  CTColor::Yellow, CTLevel::Info);
@@ -1739,7 +1739,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_new_impl(size_t size, const char* site, 
                                                  int is_array)
 {
     ct_init_env_once();
-    if (ct_disable_alloc)
+    if (!ct_is_enabled(CT_FEATURE_ALLOC))
         return is_array ? ::operator new[](size) : ::operator new(size);
 
     void* ptr = is_array ? ::operator new[](size) : ::operator new(size);
@@ -1766,19 +1766,19 @@ CT_NODISCARD CT_NOINSTR static void* ct_new_impl(size_t size, const char* site, 
 
     if (unreachable)
     {
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log_alloc_details(label_unreachable, "unreachable", size, real_size, ptr, site,
                                  CTColor::Yellow, CTLevel::Warn);
         }
-        if (ptr && ct_autofree_enabled)
+        if (ptr && ct_is_enabled(CT_FEATURE_AUTOFREE))
         {
             __ct_autofree(ptr);
         }
     }
     else
     {
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log_alloc_details(label, "reachable", size, real_size, ptr, site, CTColor::Yellow,
                                  CTLevel::Info);
@@ -1792,7 +1792,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_new_nothrow_impl(size_t size, const char
                                                          int unreachable, int is_array)
 {
     ct_init_env_once();
-    if (ct_disable_alloc)
+    if (!ct_is_enabled(CT_FEATURE_ALLOC))
         return is_array ? ::operator new[](size, std::nothrow) : ::operator new(size, std::nothrow);
     void* ptr =
         is_array ? ::operator new[](size, std::nothrow) : ::operator new(size, std::nothrow);
@@ -1822,19 +1822,19 @@ CT_NODISCARD CT_NOINSTR static void* ct_new_nothrow_impl(size_t size, const char
 
     if (unreachable)
     {
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log_alloc_details(label_unreachable, "unreachable", size, real_size, ptr, site,
                                  CTColor::Yellow, CTLevel::Warn);
         }
-        if (ptr && ct_autofree_enabled)
+        if (ptr && ct_is_enabled(CT_FEATURE_AUTOFREE))
         {
             __ct_autofree(ptr);
         }
     }
     else
     {
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log_alloc_details(label, "reachable", size, real_size, ptr, site, CTColor::Yellow,
                                  CTLevel::Info);
@@ -1847,7 +1847,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_new_nothrow_impl(size_t size, const char
 CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, const char* site)
 {
     ct_init_env_once();
-    if (ct_disable_alloc)
+    if (!ct_is_enabled(CT_FEATURE_ALLOC))
         return realloc(ptr, size);
 
     size_t old_size = 0;
@@ -1863,7 +1863,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, con
     void* new_ptr = realloc(ptr, size);
     if (!new_ptr && size > 0)
     {
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log_realloc_details("tracing-realloc", "failed", old_req_size, old_size, ptr, size,
                                    0, nullptr, site, CTColor::Yellow);
@@ -1895,7 +1895,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, con
     }
     ct_lock_release();
 
-    if (ct_shadow_enabled)
+    if (ct_is_enabled(CT_FEATURE_SHADOW))
     {
         if (ptr && new_ptr != ptr && had_entry && old_size)
         {
@@ -1911,7 +1911,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, con
         }
     }
 
-    if (ct_alloc_trace_enabled)
+    if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
     {
         const char* status = "updated";
         if (size == 0 && ptr)
@@ -1941,7 +1941,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, con
 CT_NOINSTR static void ct_delete_impl(void* ptr, int is_array)
 {
     ct_init_env_once();
-    if (ct_disable_alloc)
+    if (!ct_is_enabled(CT_FEATURE_ALLOC))
     {
         if (is_array)
         {
@@ -2003,12 +2003,12 @@ CT_NOINSTR static void ct_delete_impl(void* ptr, int is_array)
         return;
     }
 
-    if (ct_shadow_enabled)
+    if (ct_is_enabled(CT_FEATURE_SHADOW))
     {
         ct_shadow_poison_range(ptr, size);
     }
 
-    if (ct_alloc_trace_enabled)
+    if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
     {
         ct_log(CTLevel::Info, "{}{} ptr={:p} size={}{}\n", ct_color(CTColor::Cyan), label, ptr,
                size, ct_color(CTColor::Reset));
@@ -2027,7 +2027,7 @@ CT_NOINSTR static void ct_delete_impl(void* ptr, int is_array)
 CT_NOINSTR static void ct_delete_nothrow_impl(void* ptr, int is_array)
 {
     ct_init_env_once();
-    if (ct_disable_alloc)
+    if (!ct_is_enabled(CT_FEATURE_ALLOC))
     {
         if (is_array)
         {
@@ -2089,12 +2089,12 @@ CT_NOINSTR static void ct_delete_nothrow_impl(void* ptr, int is_array)
         return;
     }
 
-    if (ct_shadow_enabled)
+    if (ct_is_enabled(CT_FEATURE_SHADOW))
     {
         ct_shadow_poison_range(ptr, size);
     }
 
-    if (ct_alloc_trace_enabled)
+    if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
     {
         ct_log(CTLevel::Info, "{}{} ptr={:p} size={}{}\n", ct_color(CTColor::Cyan), label, ptr,
                size, ct_color(CTColor::Reset));
@@ -2113,7 +2113,7 @@ CT_NOINSTR static void ct_delete_nothrow_impl(void* ptr, int is_array)
 CT_NOINSTR static void ct_delete_destroying_impl(void* ptr, int is_array)
 {
     ct_init_env_once();
-    if (ct_disable_alloc)
+    if (!ct_is_enabled(CT_FEATURE_ALLOC))
     {
         if (is_array)
         {
@@ -2175,12 +2175,12 @@ CT_NOINSTR static void ct_delete_destroying_impl(void* ptr, int is_array)
         return;
     }
 
-    if (ct_shadow_enabled)
+    if (ct_is_enabled(CT_FEATURE_SHADOW))
     {
         ct_shadow_poison_range(ptr, size);
     }
 
-    if (ct_alloc_trace_enabled)
+    if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
     {
         ct_log(CTLevel::Info, "{}{} ptr={:p} size={}{}\n", ct_color(CTColor::Cyan), label, ptr,
                size, ct_color(CTColor::Reset));
@@ -2269,7 +2269,7 @@ extern "C"
                                                     const char* site)
     {
         ct_init_env_once();
-        if (ct_disable_alloc)
+        if (!ct_is_enabled(CT_FEATURE_ALLOC))
         {
             return posix_memalign(out, align, size);
         }
@@ -2296,7 +2296,7 @@ extern "C"
 
         ct_shadow_track_alloc(ptr, size, real_size);
 
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log_alloc_details("tracing-posix-memalign", "reachable", size, real_size, ptr, site,
                                  CTColor::Yellow, CTLevel::Info);
@@ -2308,7 +2308,7 @@ extern "C"
     CT_NODISCARD CT_NOINSTR void* __ct_aligned_alloc(size_t align, size_t size, const char* site)
     {
         ct_init_env_once();
-        if (ct_disable_alloc)
+        if (!ct_is_enabled(CT_FEATURE_ALLOC))
         {
             return aligned_alloc(align, size);
         }
@@ -2329,7 +2329,7 @@ extern "C"
 
         ct_shadow_track_alloc(ptr, size, real_size);
 
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log_alloc_details("tracing-aligned-alloc", "reachable", size, real_size, ptr, site,
                                  CTColor::Yellow, CTLevel::Info);
@@ -2362,7 +2362,7 @@ extern "C"
 
         ct_shadow_track_alloc(ptr, len, len);
 
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log_alloc_details("tracing-mmap", "reachable", len, len, ptr, site, CTColor::Yellow,
                                  CTLevel::Info);
@@ -2387,12 +2387,12 @@ extern "C"
         }
         ct_lock_release();
 
-        if (ct_shadow_enabled && found > 0)
+        if (ct_is_enabled(CT_FEATURE_SHADOW) && found > 0)
         {
             ct_shadow_poison_range(addr, size);
         }
 
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log(CTLevel::Info, "{}tracing-munmap ptr={:p} size={}{}\n", ct_color(CTColor::Cyan),
                    addr, len, ct_color(CTColor::Reset));
@@ -2428,11 +2428,11 @@ extern "C"
             }
             ct_lock_release();
 
-            if (ct_shadow_enabled)
+            if (ct_is_enabled(CT_FEATURE_SHADOW))
             {
                 ct_shadow_track_alloc(prev, incr, incr);
             }
-            if (ct_alloc_trace_enabled)
+            if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
             {
                 ct_log_alloc_details("tracing-sbrk", "reachable", incr, incr, prev, site,
                                      CTColor::Yellow, CTLevel::Info);
@@ -2447,7 +2447,7 @@ extern "C"
             ct_lock_acquire();
             (void)ct_table_remove(new_break, &size, &req_size, &alloc_site);
             ct_lock_release();
-            if (ct_shadow_enabled && size)
+            if (ct_is_enabled(CT_FEATURE_SHADOW) && size)
             {
                 ct_shadow_poison_range(new_break, size);
             }
@@ -2470,7 +2470,7 @@ extern "C"
         void* ret = (rc == 0) ? addr : reinterpret_cast<void*>(-1);
 #endif
 #pragma clang diagnostic pop
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
 #if defined(__APPLE__)
             ct_log(CTLevel::Info, "{}tracing-brk addr={:p} rc={:p} site={}{}\n",
@@ -2488,11 +2488,11 @@ extern "C"
     {
         ct_init_env_once();
         ct_autofree_scan_init_once();
-        if (ct_disable_alloc)
+        if (!ct_is_enabled(CT_FEATURE_ALLOC))
         {
             return;
         }
-        if (!ct_autofree_enabled)
+        if (!ct_is_enabled(CT_FEATURE_AUTOFREE))
         {
             return;
         }
@@ -2546,7 +2546,7 @@ extern "C"
             return;
         }
 
-        if (ct_shadow_enabled)
+        if (ct_is_enabled(CT_FEATURE_SHADOW))
         {
             ct_shadow_poison_range(ptr, size);
         }
@@ -2561,7 +2561,7 @@ extern "C"
     {
         ct_init_env_once();
         ct_autofree_scan_init_once();
-        if (ct_disable_alloc || !ct_autofree_enabled)
+        if (!ct_is_enabled(CT_FEATURE_ALLOC) || !ct_is_enabled(CT_FEATURE_AUTOFREE))
         {
             return;
         }
@@ -2610,7 +2610,7 @@ extern "C"
             return;
         }
 
-        if (ct_shadow_enabled)
+        if (ct_is_enabled(CT_FEATURE_SHADOW))
         {
             ct_shadow_poison_range(ptr, size);
         }
@@ -2625,7 +2625,7 @@ extern "C"
     {
         ct_init_env_once();
         ct_autofree_scan_init_once();
-        if (ct_disable_alloc || !ct_autofree_enabled)
+        if (!ct_is_enabled(CT_FEATURE_ALLOC) || !ct_is_enabled(CT_FEATURE_AUTOFREE))
         {
             return;
         }
@@ -2681,7 +2681,7 @@ extern "C"
             static_cast<char*>(ptr) + static_cast<ptrdiff_t>(size) == current)
         {
             (void)sbrk(-static_cast<intptr_t>(size));
-            if (ct_shadow_enabled)
+            if (ct_is_enabled(CT_FEATURE_SHADOW))
             {
                 ct_shadow_poison_range(ptr, size);
             }
@@ -2700,7 +2700,7 @@ extern "C"
     {
         ct_init_env_once();
         ct_autofree_scan_init_once();
-        if (ct_disable_alloc || !ct_autofree_enabled)
+        if (!ct_is_enabled(CT_FEATURE_ALLOC) || !ct_is_enabled(CT_FEATURE_AUTOFREE))
         {
             return;
         }
@@ -2749,7 +2749,7 @@ extern "C"
             return;
         }
 
-        if (ct_shadow_enabled)
+        if (ct_is_enabled(CT_FEATURE_SHADOW))
         {
             ct_shadow_poison_range(ptr, size);
         }
@@ -2764,7 +2764,7 @@ extern "C"
     {
         ct_init_env_once();
         ct_autofree_scan_init_once();
-        if (ct_disable_alloc || !ct_autofree_enabled)
+        if (!ct_is_enabled(CT_FEATURE_ALLOC) || !ct_is_enabled(CT_FEATURE_AUTOFREE))
         {
             return;
         }
@@ -2813,7 +2813,7 @@ extern "C"
             return;
         }
 
-        if (ct_shadow_enabled)
+        if (ct_is_enabled(CT_FEATURE_SHADOW))
         {
             ct_shadow_poison_range(ptr, size);
         }
@@ -2827,7 +2827,7 @@ extern "C"
     CT_NOINSTR void __ct_free(void* ptr)
     {
         ct_init_env_once();
-        if (ct_disable_alloc)
+        if (!ct_is_enabled(CT_FEATURE_ALLOC))
         {
             free(ptr);
             return;
@@ -2867,12 +2867,12 @@ extern "C"
             return;
         }
 
-        if (ct_shadow_enabled)
+        if (ct_is_enabled(CT_FEATURE_SHADOW))
         {
             ct_shadow_poison_range(ptr, size);
         }
 
-        if (ct_alloc_trace_enabled)
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
             ct_log(CTLevel::Info, "{}tracing-free ptr={:p} size={}{}\n", ct_color(CTColor::Cyan),
                    ptr, size, ct_color(CTColor::Reset));
