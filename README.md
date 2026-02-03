@@ -122,7 +122,8 @@ Environment variables (ms can be floating-point; US/NS override MS):
 - CT_AUTOFREE_SCAN_GLOBALS=0/1: scan globals (__DATA segments) (default: 1).
 - CT_AUTOFREE_SCAN_INTERIOR=0/1: treat interior pointers as roots (default: 1).
 - CT_AUTOFREE_SCAN_PTR=0/1: enable per-pointer scan before auto-free (default: 1).
-- CT_DEBUG_AUTOFREE_SCAN=1: log scan activity (timed_out/free_count).
+- CT_DEBUG_AUTOFREE_SCAN=1: log scan activity only when a scan frees or times out.
+- CT_DEBUG_AUTOFREE_SCAN=2: log every scan + per-pointer scans.
 
 Use-cases:
 - Keep CT_AUTOFREE_SCAN_PTR=1 if you want a conservative safety check before any auto-free.
