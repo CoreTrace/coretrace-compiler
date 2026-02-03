@@ -75,7 +75,8 @@ enum
     CT_ENTRY_EMPTY = 0,
     CT_ENTRY_USED = 1,
     CT_ENTRY_TOMB = 2,
-    CT_ENTRY_FREED = 3
+    CT_ENTRY_FREED = 3,
+    CT_ENTRY_AUTOFREED = 4
 };
 
 extern int ct_disable_trace;
@@ -116,7 +117,7 @@ CT_NOINSTR void ct_init_env_once(void);
 CT_NOINSTR void ct_lock_acquire(void);
 CT_NOINSTR void ct_lock_release(void);
 CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t size,
-                                            const char* site);
+                                            const char* site, unsigned char kind);
 CT_NODISCARD CT_NOINSTR int ct_table_remove(void* ptr, size_t* size_out, size_t* req_size_out,
                                             const char** site_out);
 CT_NODISCARD CT_NOINSTR int ct_table_lookup(const void* ptr, size_t* size_out, size_t* req_size_out,
