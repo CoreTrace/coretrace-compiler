@@ -70,14 +70,12 @@ extern "C"
     {
         if (enabled)
         {
-            uint64_t previous =
-                ct_feature_flags.fetch_or(feature, std::memory_order_relaxed);
+            uint64_t previous = ct_feature_flags.fetch_or(feature, std::memory_order_relaxed);
             ct_sync_legacy_flags(previous | feature);
             return;
         }
 
-        uint64_t previous =
-            ct_feature_flags.fetch_and(~feature, std::memory_order_relaxed);
+        uint64_t previous = ct_feature_flags.fetch_and(~feature, std::memory_order_relaxed);
         ct_sync_legacy_flags(previous & ~feature);
     }
 
@@ -109,8 +107,7 @@ extern "C"
         while (current < limit)
         {
             if (ct_early_trace_count_state.compare_exchange_weak(
-                    current, current + 1, std::memory_order_relaxed,
-                    std::memory_order_relaxed))
+                    current, current + 1, std::memory_order_relaxed, std::memory_order_relaxed))
             {
                 ct_early_trace_count = current + 1;
                 return 1;

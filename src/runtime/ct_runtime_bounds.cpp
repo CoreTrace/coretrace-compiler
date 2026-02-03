@@ -71,8 +71,7 @@ extern "C"
 
         ct_lock_acquire();
         found = ct_table_lookup(base, &alloc_size, &req_size, &alloc_site, &state);
-        if (!found && ct_is_enabled(CT_FEATURE_SHADOW) &&
-            ct_is_enabled(CT_FEATURE_SHADOW_AGGR))
+        if (!found && ct_is_enabled(CT_FEATURE_SHADOW) && ct_is_enabled(CT_FEATURE_SHADOW_AGGR))
         {
             void* found_base = nullptr;
             found = ct_table_lookup_containing(ptr, &found_base, &alloc_size, &req_size,
