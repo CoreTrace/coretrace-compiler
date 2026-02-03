@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include <unistd.h>
 
-void *global;
-void *global2;
+void* global;
+void* global2;
 
 static void foo(void)
 {
@@ -24,11 +24,12 @@ void c()
     foo();
 }
 
-
 void b()
 {
     c();
     malloc(sizeof(void*));
+    char* p = malloc(100);
+    char* q = p + 16; // pointeur “interior”
 }
 
 void a()
@@ -53,3 +54,11 @@ int main(void)
 //      Si il reste dans la fonction -> pas de free -> check à la fin de la fonction le status reachable global/local -> si local autofree à la fin de la fonction
 //      -> si global = ne rien faire
 
+// CT_AUTOFREE_SCAN_PTR=1 \
+// CT_AUTOFREE_SCAN_GLOBALS=0 \
+// CT_AUTOFREE_SCAN_STACK=1 \
+// CT_AUTOFREE_SCAN_REGS=0 \
+// CT_AUTOFREE_SCAN_PERIOD_NS=10 \
+// CT_AUTOFREE_SCAN_BUDGET_MS=1000 \
+// CT_DEBUG_AUTOFREE_SCAN=1 CT_AUTOFREE_SCAN_INTERIOR=0 \
+// /tmp/ct_test

@@ -188,20 +188,20 @@ namespace compilerlib
         {
             switch (state)
             {
-                case EscapeState::Unreachable:
-                    return 0;
-                case EscapeState::ReachableLocal:
-                    return 1;
-                case EscapeState::ReachableGlobal:
-                    return 2;
-                case EscapeState::EscapedStore:
-                    return 3;
-                case EscapeState::EscapedCall:
-                    return 4;
-                case EscapeState::EscapedReturn:
-                    return 5;
-                case EscapeState::EscapedScan:
-                    return 6;
+            case EscapeState::Unreachable:
+                return 0;
+            case EscapeState::ReachableLocal:
+                return 1;
+            case EscapeState::ReachableGlobal:
+                return 2;
+            case EscapeState::EscapedStore:
+                return 3;
+            case EscapeState::EscapedCall:
+                return 4;
+            case EscapeState::EscapedReturn:
+                return 5;
+            case EscapeState::EscapedScan:
+                return 6;
             }
             return 6;
         }
@@ -210,20 +210,20 @@ namespace compilerlib
         {
             switch (state)
             {
-                case EscapeState::Unreachable:
-                    return "UNREACHABLE";
-                case EscapeState::ReachableLocal:
-                    return "REACHABLE_LOCAL";
-                case EscapeState::ReachableGlobal:
-                    return "REACHABLE_GLOBAL";
-                case EscapeState::EscapedReturn:
-                    return "ESCAPED_RETURN";
-                case EscapeState::EscapedCall:
-                    return "ESCAPED_CALL";
-                case EscapeState::EscapedStore:
-                    return "ESCAPED_STORE";
-                case EscapeState::EscapedScan:
-                    return "ESCAPED_SCAN";
+            case EscapeState::Unreachable:
+                return "UNREACHABLE";
+            case EscapeState::ReachableLocal:
+                return "REACHABLE_LOCAL";
+            case EscapeState::ReachableGlobal:
+                return "REACHABLE_GLOBAL";
+            case EscapeState::EscapedReturn:
+                return "ESCAPED_RETURN";
+            case EscapeState::EscapedCall:
+                return "ESCAPED_CALL";
+            case EscapeState::EscapedStore:
+                return "ESCAPED_STORE";
+            case EscapeState::EscapedScan:
+                return "ESCAPED_SCAN";
             }
             return "UNKNOWN";
         }
@@ -256,9 +256,8 @@ namespace compilerlib
         CT_NODISCARD bool isBrkLikeName(llvm::StringRef name)
         {
             name = normalizeSymbolName(name);
-            return name == "brk" || name == "_brk" || name == "__brk" ||
-                   name.starts_with("brk$") || name.starts_with("_brk$") ||
-                   name.starts_with("__brk$");
+            return name == "brk" || name == "_brk" || name == "__brk" || name.starts_with("brk$") ||
+                   name.starts_with("_brk$") || name.starts_with("__brk$");
         }
         CT_NODISCARD bool isSbrkLikeName(llvm::StringRef name)
         {
@@ -322,12 +321,11 @@ namespace compilerlib
                 name == "_ZdlPvmSt11align_val_t" || name == "__ZdlPvmSt11align_val_t" ||
                 name == "_ZdlPvRKSt9nothrow_t" || name == "__ZdlPvRKSt9nothrow_t" ||
                 name == "_ZdlPvSt11align_val_tRKSt9nothrow_t" ||
-                name == "__ZdlPvSt11align_val_tRKSt9nothrow_t" ||
-                name == "_ZdlPvmRKSt9nothrow_t" || name == "__ZdlPvmRKSt9nothrow_t" ||
+                name == "__ZdlPvSt11align_val_tRKSt9nothrow_t" || name == "_ZdlPvmRKSt9nothrow_t" ||
+                name == "__ZdlPvmRKSt9nothrow_t" ||
                 name == "_ZdlPvmSt11align_val_tRKSt9nothrow_t" ||
                 name == "__ZdlPvmSt11align_val_tRKSt9nothrow_t" ||
-                name == "_ZdlPvSt19destroying_delete_t" ||
-                name == "__ZdlPvSt19destroying_delete_t")
+                name == "_ZdlPvSt19destroying_delete_t" || name == "__ZdlPvSt19destroying_delete_t")
             {
                 isArray = false;
                 if (name.contains("destroying_delete_t"))
@@ -349,12 +347,11 @@ namespace compilerlib
                 name == "_ZdaPvmSt11align_val_t" || name == "__ZdaPvmSt11align_val_t" ||
                 name == "_ZdaPvRKSt9nothrow_t" || name == "__ZdaPvRKSt9nothrow_t" ||
                 name == "_ZdaPvSt11align_val_tRKSt9nothrow_t" ||
-                name == "__ZdaPvSt11align_val_tRKSt9nothrow_t" ||
-                name == "_ZdaPvmRKSt9nothrow_t" || name == "__ZdaPvmRKSt9nothrow_t" ||
+                name == "__ZdaPvSt11align_val_tRKSt9nothrow_t" || name == "_ZdaPvmRKSt9nothrow_t" ||
+                name == "__ZdaPvmRKSt9nothrow_t" ||
                 name == "_ZdaPvmSt11align_val_tRKSt9nothrow_t" ||
                 name == "__ZdaPvmSt11align_val_tRKSt9nothrow_t" ||
-                name == "_ZdaPvSt19destroying_delete_t" ||
-                name == "__ZdaPvSt19destroying_delete_t")
+                name == "_ZdaPvSt19destroying_delete_t" || name == "__ZdaPvSt19destroying_delete_t")
             {
                 isArray = true;
                 if (name.contains("destroying_delete_t"))
@@ -522,7 +519,6 @@ namespace compilerlib
                    name == "__ct_munmap" || name == "__ct_autofree_munmap";
         }
 
-
         CT_NODISCARD bool isLoadFromAlloca(llvm::Value* value, llvm::AllocaInst* alloca)
         {
             auto* load = llvm::dyn_cast<llvm::LoadInst>(value);
@@ -571,7 +567,8 @@ namespace compilerlib
             worklist.push_back(alloca);
             visited.insert(alloca);
 
-            auto finish = [&](EscapeState finalState) {
+            auto finish = [&](EscapeState finalState)
+            {
                 ctx.allocaCache[alloca] = finalState;
                 return finalState;
             };
@@ -609,9 +606,8 @@ namespace compilerlib
                         {
                             continue;
                         }
-                        state =
-                            promoteState(state, EscapeState::EscapedStore, "escape: store", alloca,
-                                         store);
+                        state = promoteState(state, EscapeState::EscapedStore, "escape: store",
+                                             alloca, store);
                         return finish(state);
                     }
                     if (auto* load = llvm::dyn_cast<llvm::LoadInst>(user))
@@ -641,8 +637,8 @@ namespace compilerlib
                                     return finish(state);
                                 }
                                 auto captureKind = llvm::DetermineUseCaptureKind(
-                                    loadUse, [&](llvm::Value*,
-                                                 const llvm::DataLayout&) { return false; });
+                                    loadUse,
+                                    [&](llvm::Value*, const llvm::DataLayout&) { return false; });
                                 if (captureKind != llvm::UseCaptureKind::NO_CAPTURE)
                                 {
                                     state = promoteState(state, EscapeState::EscapedCall,
@@ -678,9 +674,8 @@ namespace compilerlib
                                              alloca, user);
                         return finish(state);
                     }
-                    state =
-                        promoteState(state, EscapeState::EscapedStore, "escape: unknown", alloca,
-                                     user);
+                    state = promoteState(state, EscapeState::EscapedStore, "escape: unknown",
+                                         alloca, user);
                     return finish(state);
                 }
             }
@@ -757,8 +752,8 @@ namespace compilerlib
                             EscapeState ptrState = classifyPointerEscape(cast, ctx);
                             if (ptrState != EscapeState::ReachableLocal)
                             {
-                                state = promoteState(state, ptrState, "escape: inttoptr",
-                                                     value, user);
+                                state =
+                                    promoteState(state, ptrState, "escape: inttoptr", value, user);
                                 ctx.valueCache[value] = state;
                                 ctx.inProgress.erase(value);
                                 return state;
@@ -807,8 +802,7 @@ namespace compilerlib
                     {
                         if (store->getValueOperand() == current)
                         {
-                            llvm::Value* dest =
-                                store->getPointerOperand()->stripPointerCasts();
+                            llvm::Value* dest = store->getPointerOperand()->stripPointerCasts();
                             if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(dest))
                             {
                                 if (isAllocaDead(alloca))
@@ -836,9 +830,8 @@ namespace compilerlib
                     }
                     if (llvm::isa<llvm::CallBase>(user))
                     {
-                        state =
-                            promoteState(state, EscapeState::EscapedCall, "escape: call", value,
-                                         user);
+                        state = promoteState(state, EscapeState::EscapedCall, "escape: call", value,
+                                             user);
                         ctx.valueCache[value] = state;
                         ctx.inProgress.erase(value);
                         return state;
@@ -851,9 +844,8 @@ namespace compilerlib
                         ctx.inProgress.erase(value);
                         return state;
                     }
-                    state =
-                        promoteState(state, EscapeState::EscapedStore, "escape: unknown", value,
-                                     user);
+                    state = promoteState(state, EscapeState::EscapedStore, "escape: unknown", value,
+                                         user);
                     ctx.valueCache[value] = state;
                     ctx.inProgress.erase(value);
                     return state;
@@ -939,16 +931,15 @@ namespace compilerlib
                             if (scalarState != EscapeState::ReachableLocal)
                             {
                                 logAutofreeDebug("escape: ptrtoint", value, user);
-                                state = promoteState(state, scalarState, "escape: ptrtoint",
-                                                     value, user);
+                                state = promoteState(state, scalarState, "escape: ptrtoint", value,
+                                                     user);
                                 ctx.valueCache[value] = state;
                                 ctx.inProgress.erase(value);
                                 return state;
                             }
                             continue;
                         }
-                        if (ce->isCast() ||
-                            ce->getOpcode() == llvm::Instruction::GetElementPtr)
+                        if (ce->isCast() || ce->getOpcode() == llvm::Instruction::GetElementPtr)
                         {
                             if (visited.insert(ce).second)
                                 worklist.push_back(ce);
@@ -961,8 +952,8 @@ namespace compilerlib
                         if (scalarState != EscapeState::ReachableLocal)
                         {
                             logAutofreeDebug("escape: ptrtoint", value, user);
-                            state = promoteState(state, scalarState, "escape: ptrtoint", value,
-                                                 user);
+                            state =
+                                promoteState(state, scalarState, "escape: ptrtoint", value, user);
                             ctx.valueCache[value] = state;
                             ctx.inProgress.erase(value);
                             return state;
@@ -998,8 +989,7 @@ namespace compilerlib
                     {
                         if (store->getValueOperand() == current)
                         {
-                            llvm::Value* dest =
-                                store->getPointerOperand()->stripPointerCasts();
+                            llvm::Value* dest = store->getPointerOperand()->stripPointerCasts();
                             if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(dest))
                             {
                                 EscapeState allocaState = classifyAllocaEscape(alloca, ctx);
@@ -1058,8 +1048,7 @@ namespace compilerlib
                         }
 
                         auto captureKind = llvm::DetermineUseCaptureKind(
-                            use,
-                            [&](llvm::Value*, const llvm::DataLayout&) { return false; });
+                            use, [&](llvm::Value*, const llvm::DataLayout&) { return false; });
                         if (captureKind == llvm::UseCaptureKind::NO_CAPTURE)
                         {
                             continue;
@@ -1203,8 +1192,7 @@ namespace compilerlib
             return enabled;
         }
 
-        void logAutofreeDebug(const char* reason, llvm::Value* value,
-                              llvm::Value* user = nullptr)
+        void logAutofreeDebug(const char* reason, llvm::Value* value, llvm::Value* user = nullptr)
         {
             if (!debugAutofreeEnabled())
             {
@@ -1222,8 +1210,7 @@ namespace compilerlib
             llvm::errs() << "\n";
         }
 
-        void logAutofreeDecision(const char* reason, llvm::Value* value,
-                                 ReturnAllocKind kind)
+        void logAutofreeDecision(const char* reason, llvm::Value* value, ReturnAllocKind kind)
         {
             if (!debugAutofreeEnabled())
             {
@@ -1472,8 +1459,7 @@ namespace compilerlib
             module.getOrInsertFunction("__ct_delete_destroying", freeTy);
         llvm::FunctionCallee ctDeleteArrayDestroying =
             module.getOrInsertFunction("__ct_delete_array_destroying", freeTy);
-        llvm::FunctionCallee ctAutoFree =
-            module.getOrInsertFunction("__ct_autofree", freeTy);
+        llvm::FunctionCallee ctAutoFree = module.getOrInsertFunction("__ct_autofree", freeTy);
         llvm::FunctionCallee ctAutoFreeDelete =
             module.getOrInsertFunction("__ct_autofree_delete", freeTy);
         llvm::FunctionCallee ctAutoFreeDeleteArray =
@@ -1488,9 +1474,8 @@ namespace compilerlib
             module.getOrInsertFunction("__ct_aligned_alloc", alignedAllocTy);
         llvm::FunctionCallee ctMmap = module.getOrInsertFunction(
             "__ct_mmap",
-            llvm::FunctionType::get(voidPtrTy,
-                                    {voidPtrTy, sizeTy, intTy, intTy, intTy, sizeTy, voidPtrTy},
-                                    false));
+            llvm::FunctionType::get(
+                voidPtrTy, {voidPtrTy, sizeTy, intTy, intTy, intTy, sizeTy, voidPtrTy}, false));
         auto* munmapTy = llvm::FunctionType::get(intTy, {voidPtrTy, sizeTy, voidPtrTy}, false);
         llvm::FunctionCallee ctMunmap = module.getOrInsertFunction("__ct_munmap", munmapTy);
         auto* sbrkTy = llvm::FunctionType::get(voidPtrTy, {sizeTy, voidPtrTy}, false);
@@ -1596,11 +1581,11 @@ namespace compilerlib
                         if (isPosixMemalignLike(*callee))
                         {
                             posixMemalignCalls.push_back(call);
-                            if (auto* outAlloca =
-                                    llvm::dyn_cast<llvm::AllocaInst>(
-                                        call->getArgOperand(0)->stripPointerCasts()))
+                            if (auto* outAlloca = llvm::dyn_cast<llvm::AllocaInst>(
+                                    call->getArgOperand(0)->stripPointerCasts()))
                             {
-                                allocSites.push_back({nullptr, outAlloca, ReturnAllocKind::MallocLike});
+                                allocSites.push_back(
+                                    {nullptr, outAlloca, ReturnAllocKind::MallocLike});
                             }
                         }
                         continue;
@@ -1691,8 +1676,8 @@ namespace compilerlib
                                 newCalls.push_back(call);
                         }
                         allocSites.push_back(
-                            {call, nullptr, isArray ? ReturnAllocKind::NewArrayLike
-                                                    : ReturnAllocKind::NewLike});
+                            {call, nullptr,
+                             isArray ? ReturnAllocKind::NewArrayLike : ReturnAllocKind::NewLike});
                         if (isEffectivelyUnused(call, layout))
                             instantAutoFreeValues.insert(call);
                         continue;
@@ -1917,8 +1902,7 @@ namespace compilerlib
             }
 
             llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::FunctionCallee target =
-                unused ? ctMallocUnreachable : ctMalloc;
+            llvm::FunctionCallee target = unused ? ctMallocUnreachable : ctMalloc;
             llvm::CallBase* newCall = replaceCall(call, target, {sizeArg, site});
             if (unused && newCall)
             {
@@ -1957,8 +1941,7 @@ namespace compilerlib
             }
 
             llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::FunctionCallee target =
-                unused ? ctCallocUnreachable : ctCalloc;
+            llvm::FunctionCallee target = unused ? ctCallocUnreachable : ctCalloc;
             llvm::CallBase* newCall = replaceCall(call, target, {countArg, sizeArg, site});
             if (unused && newCall)
             {
@@ -2003,8 +1986,7 @@ namespace compilerlib
             llvm::CallBase* newCall =
                 replaceCall(call, ctPosixMemalign, {outArg, alignArg, sizeArg, site});
 
-            if (auto* outAlloca =
-                    llvm::dyn_cast<llvm::AllocaInst>(outArg->stripPointerCasts()))
+            if (auto* outAlloca = llvm::dyn_cast<llvm::AllocaInst>(outArg->stripPointerCasts()))
             {
                 if (isAllocaDead(outAlloca))
                 {
@@ -2128,8 +2110,8 @@ namespace compilerlib
                 offArg = builder.CreateZExtOrTrunc(offArg, sizeTy);
             }
             llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::CallBase* newCall =
-                replaceCall(call, ctMmap, {addrArg, lenArg, protArg, flagsArg, fdArg, offArg, site});
+            llvm::CallBase* newCall = replaceCall(
+                call, ctMmap, {addrArg, lenArg, protArg, flagsArg, fdArg, offArg, site});
             if (unused && newCall)
             {
                 llvm::Instruction* insertPt = newCall->getNextNode();
@@ -2231,8 +2213,7 @@ namespace compilerlib
                 sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
             }
             llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::FunctionCallee target =
-                unused ? ctNewUnreachable : ctNew;
+            llvm::FunctionCallee target = unused ? ctNewUnreachable : ctNew;
             llvm::CallBase* newCall = replaceCall(call, target, {sizeArg, site});
             if (unused && newCall)
             {
@@ -2265,8 +2246,7 @@ namespace compilerlib
                 sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
             }
             llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::FunctionCallee target =
-                unused ? ctNewArrayUnreachable : ctNewArray;
+            llvm::FunctionCallee target = unused ? ctNewArrayUnreachable : ctNewArray;
             llvm::CallBase* newCall = replaceCall(call, target, {sizeArg, site});
             if (unused && newCall)
             {
@@ -2299,8 +2279,7 @@ namespace compilerlib
                 sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
             }
             llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::FunctionCallee target =
-                unused ? ctNewNothrowUnreachable : ctNewNothrow;
+            llvm::FunctionCallee target = unused ? ctNewNothrowUnreachable : ctNewNothrow;
             llvm::CallBase* newCall = replaceCall(call, target, {sizeArg, site});
             if (unused && newCall)
             {
@@ -2333,8 +2312,7 @@ namespace compilerlib
                 sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
             }
             llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::FunctionCallee target =
-                unused ? ctNewArrayNothrowUnreachable : ctNewArrayNothrow;
+            llvm::FunctionCallee target = unused ? ctNewArrayNothrowUnreachable : ctNewArrayNothrow;
             llvm::CallBase* newCall = replaceCall(call, target, {sizeArg, site});
             if (unused && newCall)
             {
@@ -2433,7 +2411,6 @@ namespace compilerlib
             }
             (void)replaceCall(call, ctDeleteArrayDestroying, {ptrArg});
         }
-
     }
 
 } // namespace compilerlib

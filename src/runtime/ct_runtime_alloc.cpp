@@ -181,8 +181,7 @@ CT_NOINSTR static void ct_autofree_scan_init_once(void)
     const int scan_interior = ct_env_flag("CT_AUTOFREE_SCAN_INTERIOR", 1);
     const int scan_debug = static_cast<int>(ct_env_u64("CT_DEBUG_AUTOFREE_SCAN", 0));
     const int scan_ptr = ct_env_flag("CT_AUTOFREE_SCAN_PTR", 1);
-    const uint64_t interval_ns =
-        ct_env_u64("CT_AUTOFREE_SCAN_INTERVAL_MS", 0) * 1000000ULL;
+    const uint64_t interval_ns = ct_env_u64("CT_AUTOFREE_SCAN_INTERVAL_MS", 0) * 1000000ULL;
 
     const uint64_t period_ns = ct_env_u64("CT_AUTOFREE_SCAN_PERIOD_NS", 0);
     const uint64_t period_us = ct_env_u64("CT_AUTOFREE_SCAN_PERIOD_US", 0);
@@ -270,11 +269,11 @@ CT_NODISCARD CT_NOINSTR static int ct_scan_time_exceeded(uint64_t start_ns)
     {
         return 0;
     }
-    return (ct_time_ns() - start_ns) >=
-        ct_autofree_scan_budget_ns.load(std::memory_order_relaxed);
+    return (ct_time_ns() - start_ns) >= ct_autofree_scan_budget_ns.load(std::memory_order_relaxed);
 }
 
-CT_NODISCARD CT_NOINSTR static int ct_scan_time_exceeded_fast(uint64_t start_ns, size_t* check_counter)
+CT_NODISCARD CT_NOINSTR static int ct_scan_time_exceeded_fast(uint64_t start_ns,
+                                                              size_t* check_counter)
 {
     if (ct_autofree_scan_budget_ns.load(std::memory_order_relaxed) == 0)
     {
@@ -284,7 +283,7 @@ CT_NODISCARD CT_NOINSTR static int ct_scan_time_exceeded_fast(uint64_t start_ns,
     {
         *check_counter = 0;
         return (ct_time_ns() - start_ns) >=
-            ct_autofree_scan_budget_ns.load(std::memory_order_relaxed);
+               ct_autofree_scan_budget_ns.load(std::memory_order_relaxed);
     }
     return 0;
 }
@@ -300,9 +299,8 @@ CT_NODISCARD CT_NOINSTR static struct ct_alloc_entry* ct_table_find_entry(const 
         {
             return nullptr;
         }
-        if (entry->ptr == ptr &&
-            (entry->state == CT_ENTRY_USED || entry->state == CT_ENTRY_FREED ||
-             entry->state == CT_ENTRY_AUTOFREED))
+        if (entry->ptr == ptr && (entry->state == CT_ENTRY_USED || entry->state == CT_ENTRY_FREED ||
+                                  entry->state == CT_ENTRY_AUTOFREED))
         {
             return entry;
         }
@@ -310,8 +308,8 @@ CT_NODISCARD CT_NOINSTR static struct ct_alloc_entry* ct_table_find_entry(const 
     return nullptr;
 }
 
-CT_NODISCARD CT_NOINSTR static struct ct_alloc_entry* ct_table_find_entry_containing(
-    const void* ptr)
+CT_NODISCARD CT_NOINSTR static struct ct_alloc_entry*
+ct_table_find_entry_containing(const void* ptr)
 {
     if (!ptr)
     {
@@ -344,8 +342,7 @@ CT_NOINSTR static void ct_autofree_mark_value(uintptr_t value)
     {
         return;
     }
-    struct ct_alloc_entry* entry =
-        ct_table_find_entry(reinterpret_cast<const void*>(value));
+    struct ct_alloc_entry* entry = ct_table_find_entry(reinterpret_cast<const void*>(value));
     if (entry && entry->state == CT_ENTRY_USED)
     {
         entry->mark = 1;
@@ -582,8 +579,7 @@ CT_NODISCARD CT_NOINSTR static int ct_scan_regs_for_ptr(thread_t thread, uintptr
 #endif
 }
 
-CT_NOINSTR static void ct_scan_regs_for_marks(thread_t thread, uint64_t start_ns,
-                                              int* timed_out)
+CT_NOINSTR static void ct_scan_regs_for_marks(thread_t thread, uint64_t start_ns, int* timed_out)
 {
 #if defined(__aarch64__) || defined(__arm64__)
     arm_thread_state64_t state;
@@ -642,9 +638,8 @@ CT_NOINSTR static void ct_scan_regs_for_marks(thread_t thread, uint64_t start_ns
 #endif
 }
 
-CT_NODISCARD CT_NOINSTR static int ct_scan_thread_stack_for_ptr(thread_t thread,
-                                                                uintptr_t base, size_t size,
-                                                                uint64_t start_ns)
+CT_NODISCARD CT_NOINSTR static int ct_scan_thread_stack_for_ptr(thread_t thread, uintptr_t base,
+                                                                size_t size, uint64_t start_ns)
 {
     pthread_t pthread = pthread_from_mach_thread_np(thread);
     if (!pthread)
@@ -711,8 +706,8 @@ CT_NOINSTR static void ct_scan_thread_stack_for_marks(thread_t thread, uint64_t 
     {
         bottom = guard;
     }
-    ct_scan_range_for_marks(reinterpret_cast<void*>(bottom), reinterpret_cast<void*>(top),
-                            start_ns, timed_out);
+    ct_scan_range_for_marks(reinterpret_cast<void*>(bottom), reinterpret_cast<void*>(top), start_ns,
+                            timed_out);
 }
 
 // Optimized function: scan regs and stack together in one pass
@@ -723,16 +718,15 @@ CT_NOINSTR static void ct_scan_thread_regs_and_stack_marks(thread_t thread, uint
     {
         return;
     }
-    
+
     // Scan regs if enabled
     if (ct_autofree_scan_regs.load(std::memory_order_relaxed))
     {
         ct_scan_regs_for_marks(thread, start_ns, timed_out);
     }
-    
+
     // Then scan stack if enabled and not timed out
-    if (ct_autofree_scan_stack.load(std::memory_order_relaxed) &&
-        (!timed_out || !*timed_out))
+    if (ct_autofree_scan_stack.load(std::memory_order_relaxed) && (!timed_out || !*timed_out))
     {
         ct_scan_thread_stack_for_marks(thread, start_ns, timed_out);
     }
@@ -751,21 +745,18 @@ CT_NODISCARD CT_NOINSTR static int ct_scan_globals_for_ptr(uintptr_t base, size_
             continue;
         }
         intptr_t slide = _dyld_get_image_vmaddr_slide(i);
-        const load_command* cmd =
-            reinterpret_cast<const load_command*>(reinterpret_cast<const char*>(header) +
-                                                  sizeof(mach_header_64));
+        const load_command* cmd = reinterpret_cast<const load_command*>(
+            reinterpret_cast<const char*>(header) + sizeof(mach_header_64));
         for (uint32_t c = 0; c < header->ncmds; ++c)
         {
             if (cmd->cmd == LC_SEGMENT_64)
             {
-                const segment_command_64* seg =
-                    reinterpret_cast<const segment_command_64*>(cmd);
+                const segment_command_64* seg = reinterpret_cast<const segment_command_64*>(cmd);
                 if (std::strncmp(seg->segname, "__DATA", 6) == 0)
                 {
                     uintptr_t seg_start = static_cast<uintptr_t>(seg->vmaddr + slide);
                     uintptr_t seg_end = seg_start + static_cast<uintptr_t>(seg->vmsize);
-                    if (ct_scan_range_for_ptr(base, size,
-                                              reinterpret_cast<void*>(seg_start),
+                    if (ct_scan_range_for_ptr(base, size, reinterpret_cast<void*>(seg_start),
                                               reinterpret_cast<void*>(seg_end), start_ns))
                     {
                         return 1;
@@ -795,15 +786,13 @@ CT_NOINSTR static void ct_scan_globals_for_marks(uint64_t start_ns, int* timed_o
             continue;
         }
         intptr_t slide = _dyld_get_image_vmaddr_slide(i);
-        const load_command* cmd =
-            reinterpret_cast<const load_command*>(reinterpret_cast<const char*>(header) +
-                                                  sizeof(mach_header_64));
+        const load_command* cmd = reinterpret_cast<const load_command*>(
+            reinterpret_cast<const char*>(header) + sizeof(mach_header_64));
         for (uint32_t c = 0; c < header->ncmds; ++c)
         {
             if (cmd->cmd == LC_SEGMENT_64)
             {
-                const segment_command_64* seg =
-                    reinterpret_cast<const segment_command_64*>(cmd);
+                const segment_command_64* seg = reinterpret_cast<const segment_command_64*>(cmd);
                 if (std::strncmp(seg->segname, "__DATA", 6) == 0)
                 {
                     uintptr_t seg_start = static_cast<uintptr_t>(seg->vmaddr + slide);
@@ -1073,7 +1062,7 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
     size_t to_free_count = 0;
     size_t idx = 0;
     struct ct_autofree_free_item* items = nullptr;
-    
+
     if (!timed_out)
     {
         for (size_t i = 0; i < ct_alloc_table_size; ++i)
@@ -1207,13 +1196,9 @@ CT_NODISCARD CT_NOINSTR static int ct_autofree_scan_for_ptr(void*, size_t)
     return 0;
 }
 
-CT_NOINSTR static void ct_autofree_gc_scan(int, const char*)
-{
-}
+CT_NOINSTR static void ct_autofree_gc_scan(int, const char*) {}
 
-CT_NOINSTR static void ct_autofree_scan_start_thread(void)
-{
-}
+CT_NOINSTR static void ct_autofree_scan_start_thread(void) {}
 #endif
 
 CT_NOINSTR __attribute__((constructor)) static void ct_autofree_scan_ctor(void)
@@ -1424,8 +1409,7 @@ CT_NODISCARD CT_NOINSTR int ct_table_remove(void* ptr, size_t* size_out, size_t*
 }
 
 CT_NODISCARD CT_NOINSTR int ct_table_remove_autofree(void* ptr, size_t* size_out,
-                                                     size_t* req_size_out,
-                                                     const char** site_out)
+                                                     size_t* req_size_out, const char** site_out)
 {
     size_t idx = ct_hash_ptr(ptr, ct_alloc_table_mask);
 
@@ -1809,10 +1793,9 @@ CT_NODISCARD CT_NOINSTR static void* ct_new_nothrow_impl(size_t size, const char
 {
     ct_init_env_once();
     if (ct_disable_alloc)
-        return is_array ? ::operator new[](size, std::nothrow)
-                         : ::operator new(size, std::nothrow);
-    void* ptr = is_array ? ::operator new[](size, std::nothrow)
-                         : ::operator new(size, std::nothrow);
+        return is_array ? ::operator new[](size, std::nothrow) : ::operator new(size, std::nothrow);
+    void* ptr =
+        is_array ? ::operator new[](size, std::nothrow) : ::operator new(size, std::nothrow);
     if (!ptr)
         return nullptr;
 
@@ -2411,8 +2394,8 @@ extern "C"
 
         if (ct_alloc_trace_enabled)
         {
-            ct_log(CTLevel::Info, "{}tracing-munmap ptr={:p} size={}{}\n",
-                   ct_color(CTColor::Cyan), addr, len, ct_color(CTColor::Reset));
+            ct_log(CTLevel::Info, "{}tracing-munmap ptr={:p} size={}{}\n", ct_color(CTColor::Cyan),
+                   addr, len, ct_color(CTColor::Reset));
         }
 
         return munmap(addr, len);
@@ -2421,11 +2404,11 @@ extern "C"
     CT_NODISCARD CT_NOINSTR void* __ct_sbrk(size_t incr, const char* site)
     {
         ct_init_env_once();
-        #pragma clang diagnostic push
-        #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
         void* prev = sbrk(static_cast<intptr_t>(incr));
-        #pragma clang diagnostic pop
+#pragma clang diagnostic pop
         if (prev == (void*)-1 || incr == 0)
         {
             return prev;
@@ -2491,8 +2474,7 @@ extern "C"
         {
 #if defined(__APPLE__)
             ct_log(CTLevel::Info, "{}tracing-brk addr={:p} rc={:p} site={}{}\n",
-                   ct_color(CTColor::Cyan), addr, rc, ct_site_name(site),
-                   ct_color(CTColor::Reset));
+                   ct_color(CTColor::Cyan), addr, rc, ct_site_name(site), ct_color(CTColor::Reset));
 #else
             ct_log(CTLevel::Info, "{}tracing-brk addr={:p} rc={} ret={:p} site={}{}\n",
                    ct_color(CTColor::Cyan), addr, rc, ret, ct_site_name(site),
@@ -2623,8 +2605,8 @@ extern "C"
         if (found <= 0)
         {
             ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} ({}){}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr,
-                   found == 0 ? "unknown" : "already freed", ct_color(CTColor::Reset));
+                   ct_color(CTColor::BgBrightYellow), ptr, found == 0 ? "unknown" : "already freed",
+                   ct_color(CTColor::Reset));
             return;
         }
 
@@ -2687,8 +2669,8 @@ extern "C"
         if (found <= 0)
         {
             ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} ({}){}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr,
-                   found == 0 ? "unknown" : "already freed", ct_color(CTColor::Reset));
+                   ct_color(CTColor::BgBrightYellow), ptr, found == 0 ? "unknown" : "already freed",
+                   ct_color(CTColor::Reset));
             return;
         }
 #pragma clang diagnostic push
@@ -2696,7 +2678,7 @@ extern "C"
 
         void* current = sbrk(0);
         if (current != (void*)-1 &&
-        static_cast<char*>(ptr) + static_cast<ptrdiff_t>(size) == current)
+            static_cast<char*>(ptr) + static_cast<ptrdiff_t>(size) == current)
         {
             (void)sbrk(-static_cast<intptr_t>(size));
             if (ct_shadow_enabled)
@@ -2704,9 +2686,9 @@ extern "C"
                 ct_shadow_poison_range(ptr, size);
             }
             ct_log(CTLevel::Warn, "{}auto-free ptr={:p} size={} site={}{}\n",
-                ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
-                ct_color(CTColor::Reset));
-                return;
+                   ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
+                   ct_color(CTColor::Reset));
+            return;
 #pragma clang diagnostic pop
         }
 
@@ -2762,8 +2744,8 @@ extern "C"
         if (found <= 0)
         {
             ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} ({}){}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr,
-                   found == 0 ? "unknown" : "already freed", ct_color(CTColor::Reset));
+                   ct_color(CTColor::BgBrightYellow), ptr, found == 0 ? "unknown" : "already freed",
+                   ct_color(CTColor::Reset));
             return;
         }
 
@@ -2826,8 +2808,8 @@ extern "C"
         if (found <= 0)
         {
             ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} ({}){}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr,
-                   found == 0 ? "unknown" : "already freed", ct_color(CTColor::Reset));
+                   ct_color(CTColor::BgBrightYellow), ptr, found == 0 ? "unknown" : "already freed",
+                   ct_color(CTColor::Reset));
             return;
         }
 
