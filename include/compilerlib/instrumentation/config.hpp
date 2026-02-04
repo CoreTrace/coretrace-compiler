@@ -23,7 +23,7 @@ namespace compilerlib
         bool vtable_enabled = false;
         bool vcall_trace_enabled = false;
         bool vtable_diag_enabled = false;
-        bool autofree_enabled = true;
+        bool autofree_enabled = false;
         bool alloc_trace_enabled = true;
         bool bounds_without_alloc = false;
     };

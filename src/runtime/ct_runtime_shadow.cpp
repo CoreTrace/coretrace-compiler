@@ -207,7 +207,7 @@ CT_NOINSTR static void ct_shadow_set_byte_locked(uintptr_t shadow_index, unsigne
 
 CT_NOINSTR void ct_shadow_poison_range(const void* addr, size_t size)
 {
-    if (!ct_shadow_enabled || !addr || size == 0)
+    if (!ct_is_enabled(CT_FEATURE_SHADOW) || !addr || size == 0)
     {
         return;
     }
@@ -232,7 +232,7 @@ CT_NOINSTR void ct_shadow_poison_range(const void* addr, size_t size)
 
 CT_NOINSTR void ct_shadow_unpoison_range(const void* addr, size_t size)
 {
-    if (!ct_shadow_enabled || !addr || size == 0)
+    if (!ct_is_enabled(CT_FEATURE_SHADOW) || !addr || size == 0)
     {
         return;
     }

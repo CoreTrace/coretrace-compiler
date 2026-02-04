@@ -16,14 +16,13 @@ extern "C"
 
         ct_current_site = func;
         ct_init_env_once();
-        if (ct_disable_trace)
+        if (!ct_is_enabled(CT_FEATURE_TRACE))
         {
             return;
         }
 
-        if (ct_early_trace && ct_early_trace_count < ct_early_trace_limit)
+        if (ct_early_trace_should_log())
         {
-            ++ct_early_trace_count;
             ct_write_prefix(CTLevel::Info);
             ct_write_str(ct_color(CTColor::Dim));
             ct_write_cstr("ct: enter ");
@@ -64,7 +63,7 @@ extern "C"
 
         ct_current_site = func;
         ct_init_env_once();
-        if (ct_disable_trace)
+        if (!ct_is_enabled(CT_FEATURE_TRACE))
         {
             return;
         }

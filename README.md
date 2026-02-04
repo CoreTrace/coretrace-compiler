@@ -76,6 +76,65 @@ Alloc instrumentation rewrites malloc/free/calloc/realloc and basic C++ operator
 (scalar/array). Sized/aligned new/delete overloads are not handled yet.
 Vtable tooling (module vtable) requires C++ and an Itanium ABI (macOS/Linux).
 
+#### Auto-free GC scan (conservative)
+
+The runtime can run a conservative root scan (stack/regs/globals) to decide whether an
+allocation is still reachable. This is optional and controlled by env vars.
+
+Typical usage:
+```zsh
+CT_AUTOFREE_SCAN=1 CT_AUTOFREE_SCAN_START=1 \
+CT_AUTOFREE_SCAN_PTR=0 \
+CT_AUTOFREE_SCAN_GLOBALS=0 \
+CT_AUTOFREE_SCAN_PERIOD_MS=200 \
+CT_AUTOFREE_SCAN_BUDGET_MS=100 \
+CT_DEBUG_AUTOFREE_SCAN=1 \
+./app
+```
+
+Without GC scan (auto-free only from compile-time analysis):
+```zsh
+./app
+```
+
+With GC scan (conservative root scan):
+```zsh
+CT_AUTOFREE_SCAN=1 CT_AUTOFREE_SCAN_START=1 \
+CT_AUTOFREE_SCAN_PTR=1 \
+CT_AUTOFREE_SCAN_GLOBALS=1 \
+CT_AUTOFREE_SCAN_PERIOD_MS=200 \
+CT_AUTOFREE_SCAN_BUDGET_MS=100 \
+CT_DEBUG_AUTOFREE_SCAN=1 \
+./app
+```
+
+Environment variables (ms can be floating-point; US/NS override MS):
+- CT_AUTOFREE_SCAN=1: enable conservative scanning.
+- CT_AUTOFREE_SCAN_START=1: run a scan at startup and launch a periodic scan thread.
+- CT_AUTOFREE_SCAN_PERIOD_MS=N: period between scans when START=1 (default: 1000ms).
+- CT_AUTOFREE_SCAN_PERIOD_US=N: period between scans in microseconds.
+- CT_AUTOFREE_SCAN_PERIOD_NS=N: period between scans in nanoseconds.
+- CT_AUTOFREE_SCAN_BUDGET_MS=N: time budget per scan; if exceeded, no frees are performed.
+- CT_AUTOFREE_SCAN_BUDGET_US=N: time budget per scan in microseconds.
+- CT_AUTOFREE_SCAN_BUDGET_NS=N: time budget per scan in nanoseconds.
+- CT_AUTOFREE_SCAN_STACK=0/1: scan thread stacks (default: 1).
+- CT_AUTOFREE_SCAN_REGS=0/1: scan registers (default: 1).
+- CT_AUTOFREE_SCAN_GLOBALS=0/1: scan globals (__DATA segments) (default: 1).
+- CT_AUTOFREE_SCAN_INTERIOR=0/1: treat interior pointers as roots (default: 1).
+- CT_AUTOFREE_SCAN_PTR=0/1: enable per-pointer scan before auto-free (default: 1).
+- CT_DEBUG_AUTOFREE_SCAN=1: log scan activity only when a scan frees or times out.
+- CT_DEBUG_AUTOFREE_SCAN=2: log every scan + per-pointer scans.
+
+Use-cases:
+- Keep CT_AUTOFREE_SCAN_PTR=1 if you want a conservative safety check before any auto-free.
+- Set CT_AUTOFREE_SCAN_PTR=0 if you want immediate auto-free for "unreachable" sites and
+  only rely on periodic scans.
+- Disable GLOBALS (CT_AUTOFREE_SCAN_GLOBALS=0) to reduce scan cost when you see timeouts.
+
+Notes:
+- This is conservative: stale values on stack/regs/globals can keep a pointer "reachable".
+- If a scan times out (budget exceeded), nothing is freed to avoid false positives.
+
 Vtable diagnostics (--ct-vtable-diag):
 - Logs an init line with alloc-tracking state: enabled/disabled and the reason if disabled.
 - Warns when vptr/vtable data is invalid: null this pointer, missing vptr, or missing typeinfo.

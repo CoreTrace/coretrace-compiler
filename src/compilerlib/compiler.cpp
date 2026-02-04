@@ -900,6 +900,7 @@ namespace compilerlib
     CT_NODISCARD CompileResult compile(const std::vector<std::string>& input_args, OutputMode mode,
                                        bool instrument)
     {
+        std::cout << "COMPILING ..." << std::endl;
         CompileContext ctx(input_args, mode, instrument);
         ArgBuilder argBuilder(ctx);
         std::string error;
