@@ -1,52 +1,34 @@
 #include "compilerlib/compiler.h"
-#include <llvm/Support/raw_ostream.h>
 #include <iostream>
+
+#include "cli/args.h"
+#include "cli/help.h"
 
 int main(int argc, char* argv[])
 {
-    // std::vector<std::string> args(argv + 1, argv + argc);
-    // // auto [ok, err] = compilerlib::compile(args);
-    // compilerlib::CompileResult result = compilerlib::compile(args);
-    // bool ok = result.success;
-    // std::string err = result.diagnostics;
-    // llvm::errs() << err;
-
-    std::vector<std::string> args;
-    args.reserve(argc - 1);
-
-    compilerlib::OutputMode mode = compilerlib::OutputMode::ToFile;
-    bool instrument = false;
-
-    for (int i = 1; i < argc; ++i)
+    auto parsed = cli::parseArgs(argc, argv);
+    if (parsed.outcome == cli::ParseOutcome::Help)
     {
-        std::string arg = argv[i];
-        if (arg == "--in-mem" || arg == "--in-memory")
-        {
-            mode = compilerlib::OutputMode::ToMemory;
-        }
-        else if (arg == "--instrument")
-        {
-            instrument = true;
-        }
-        else
-        {
-            args.push_back(std::move(arg));
-        }
+        cli::printHelp(argv[0]);
+        return 0;
+    }
+    if (parsed.outcome == cli::ParseOutcome::Error)
+    {
+        std::cerr << parsed.error;
+        return 1;
     }
 
-    auto res = compilerlib::compile(args, mode, instrument);
-
+    auto res = compilerlib::compile(parsed.compiler_args, parsed.mode, parsed.instrument);
     if (!res.success)
     {
         std::cerr << res.diagnostics;
         return 1;
     }
 
-    if (mode == compilerlib::OutputMode::ToMemory && !res.llvmIR.empty())
+    if (parsed.mode == compilerlib::OutputMode::ToMemory && !res.llvmIR.empty())
     {
         std::cout << res.llvmIR << std::endl;
     }
 
-    // return ok ? 0 : 1;
     return 0;
 }
