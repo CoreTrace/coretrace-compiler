@@ -88,6 +88,52 @@ def is_zero_sha(value: str) -> bool:
     return re.fullmatch(r"0+", value or "") is not None
 
 
+def get_upstream_ref() -> Optional[str]:
+    try:
+        upstream = run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    except subprocess.CalledProcessError:
+        return None
+    return upstream or None
+
+
+def find_base_ref() -> Optional[str]:
+    explicit = os.environ.get("BASE_BRANCH")
+    candidates: List[str] = []
+    if explicit:
+        candidates.extend([explicit, f"origin/{explicit}"])
+
+    upstream = get_upstream_ref()
+    if upstream:
+        candidates.append(upstream)
+
+    candidates.extend(["origin/main", "origin/master", "main", "master"])
+
+    seen = set()
+    for ref in candidates:
+        if ref in seen:
+            continue
+        seen.add(ref)
+        try:
+            run_git(["rev-parse", "--verify", ref])
+            return ref
+        except subprocess.CalledProcessError:
+            continue
+    return None
+
+
+def compute_branch_range() -> str:
+    base_ref = find_base_ref()
+    if not base_ref:
+        return "HEAD"
+    try:
+        base_sha = run_git(["merge-base", "HEAD", base_ref])
+    except subprocess.CalledProcessError:
+        return "HEAD"
+    if not base_sha:
+        return "HEAD"
+    return f"{base_sha}..HEAD"
+
+
 def iter_commits(range_spec: Optional[str]) -> Iterable[Commit]:
     args = ["log", "--format=%H%x1f%s%x1f%b%x1e"]
     if range_spec:
@@ -135,6 +181,8 @@ def validate_commits(commits: Iterable[Commit]) -> List[InvalidCommit]:
 
 def main() -> int:
     check_range = get_event_range()
+    if not check_range:
+        check_range = compute_branch_range()
     commits = list(iter_commits(check_range))
     invalid = validate_commits(commits)
     if invalid:
