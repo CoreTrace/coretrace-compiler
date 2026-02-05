@@ -209,7 +209,8 @@ else()
   )
 endif()
 
-add_executable(cc src/cli/main.cc)
+add_executable(cc src/cli/main.cc src/cli/help.cc src/cli/args.cc)
+target_include_directories(cc PRIVATE src)
 
 # Propagate CLANG_RESOURCE_DIR as a compile definition to all relevant targets
 foreach(tgt compilerlib_static compilerlib_shared cc)
