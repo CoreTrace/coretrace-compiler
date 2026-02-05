@@ -90,7 +90,7 @@ jobs:
         python3 test/examples/test_extern_project.py
 
     - name: Docker tests (multi-arch, Linux)
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && github.event_name == 'push' && github.ref == 'refs/heads/main'
       run: |
         docker buildx build --platform linux/amd64 -f test/docker/Dockerfile . --progress=plain --output=type=cacheonly
         docker buildx build --platform linux/arm64 -f test/docker/Dockerfile . --progress=plain --output=type=cacheonly
