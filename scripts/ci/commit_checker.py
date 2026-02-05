@@ -79,13 +79,21 @@ def get_event_range() -> Optional[str]:
         if before and head and not is_zero_sha(before):
             return f"{before}..{head}"
         if head:
-            return head
+            return None
 
     return None
 
 
 def is_zero_sha(value: str) -> bool:
     return re.fullmatch(r"0+", value or "") is not None
+
+
+def range_for_ref(ref: str) -> str:
+    try:
+        run_git(["rev-parse", f"{ref}^"])
+    except subprocess.CalledProcessError:
+        return ref
+    return f"{ref}^..{ref}"
 
 
 def get_upstream_ref() -> Optional[str]:
@@ -124,13 +132,13 @@ def find_base_ref() -> Optional[str]:
 def compute_branch_range() -> str:
     base_ref = find_base_ref()
     if not base_ref:
-        return "HEAD"
+        return range_for_ref("HEAD")
     try:
         base_sha = run_git(["merge-base", "HEAD", base_ref])
     except subprocess.CalledProcessError:
-        return "HEAD"
+        return range_for_ref("HEAD")
     if not base_sha:
-        return "HEAD"
+        return range_for_ref("HEAD")
     return f"{base_sha}..HEAD"
 
 
@@ -183,6 +191,7 @@ def main() -> int:
     check_range = get_event_range()
     if not check_range:
         check_range = compute_branch_range()
+    print(f"Commit check range: {check_range}")
     commits = list(iter_commits(check_range))
     invalid = validate_commits(commits)
     if invalid:
