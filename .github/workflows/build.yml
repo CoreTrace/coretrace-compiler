@@ -34,6 +34,11 @@ jobs:
         echo "LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm" >> $GITHUB_ENV
         echo "Clang_DIR=/usr/lib/llvm-20/lib/cmake/clang" >> $GITHUB_ENV
 
+    - name: Compute next version (SemVer)
+      id: semver
+      run: |
+        python3 scripts/ci/semver_check.py
+
     - name: Set up QEMU (Linux)
       if: runner.os == 'Linux'
       uses: docker/setup-qemu-action@v3
