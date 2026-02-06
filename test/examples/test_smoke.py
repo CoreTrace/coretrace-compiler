@@ -237,11 +237,11 @@ def main() -> int:
             name="compile_instrument_emit_bc",
             sources=[Path("hello.c")],
             out=None,
-            extra_args=["--instrument", "-emit-llvm", "-o=hello_instr.bc"],
+            extra_args=["--instrument", "-c", "-emit-llvm", "-o=hello_instr.bc"],
         ),
         assertions=[
             assert_exit_code(0),
-            assert_argv_contains(["--instrument", "-emit-llvm"]),
+            assert_argv_contains(["--instrument", "-c", "-emit-llvm"]),
             assert_output_exists_at("hello_instr.bc"),
             assert_output_nonempty_at("hello_instr.bc"),
         ],
