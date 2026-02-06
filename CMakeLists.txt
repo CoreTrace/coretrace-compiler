@@ -33,6 +33,7 @@ endif()
 
 set(LIB_SOURCES
   src/compilerlib/compiler.cpp
+  src/compilerlib/emit/llvm_output.cpp
   src/compilerlib/toolchain.cpp
   src/compilerlib/instrumentation/alloc.cpp
   src/compilerlib/instrumentation/bounds.cpp
