@@ -214,6 +214,39 @@ def main() -> int:
         ],
     )
 
+    tc_instrument_emit_llvm = TestCase(
+        name="compile_instrument_emit_llvm",
+        plan=CompilePlan(
+            name="compile_instrument_emit_llvm",
+            sources=[Path("hello.c")],
+            out=None,
+            extra_args=["--instrument", "-S", "-emit-llvm", "-o=hello_instr.ll"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_argv_contains(["--instrument", "-S", "-emit-llvm"]),
+            assert_output_exists_at("hello_instr.ll"),
+            assert_output_kind_at("hello_instr.ll", ArtifactKind.LLVM_IR_TEXT),
+            assert_output_nonempty_at("hello_instr.ll"),
+        ],
+    )
+
+    tc_instrument_emit_bc = TestCase(
+        name="compile_instrument_emit_bc",
+        plan=CompilePlan(
+            name="compile_instrument_emit_bc",
+            sources=[Path("hello.c")],
+            out=None,
+            extra_args=["--instrument", "-c", "-emit-llvm", "-o=hello_instr.bc"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_argv_contains(["--instrument", "-c", "-emit-llvm"]),
+            assert_output_exists_at("hello_instr.bc"),
+            assert_output_nonempty_at("hello_instr.bc"),
+        ],
+    )
+
     tc_readme_emit_llvm = TestCase(
         name="readme_emit_llvm",
         plan=CompilePlan(
@@ -355,7 +388,13 @@ def main() -> int:
 
     platform = detect_platform()
     common_cases = [tc_o_eq, tc_d_space, tc_d_compact, tc_cpp, tc_x_cxx]
-    instrument_cases = [tc_instrument_c, tc_instrument_cpp, tc_instrument_x_cxx]
+    instrument_cases = [
+        tc_instrument_c,
+        tc_instrument_cpp,
+        tc_instrument_x_cxx,
+        tc_instrument_emit_llvm,
+        tc_instrument_emit_bc,
+    ]
     readme_cases = [
         tc_readme_emit_llvm,
         tc_readme_asm,

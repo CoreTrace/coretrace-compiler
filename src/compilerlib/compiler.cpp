@@ -7,6 +7,7 @@
 #include "compilerlib/instrumentation/config.hpp"
 #include "compilerlib/instrumentation/trace.hpp"
 #include "compilerlib/instrumentation/vtable.hpp"
+#include "emit/llvm_output.hpp"
 
 #include <clang/Frontend/FrontendActions.h>
 #include <clang/Driver/Compilation.h>
@@ -22,7 +23,6 @@
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/MC/TargetRegistry.h>
-#include <llvm/Support/CodeGen.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/Program.h>
 #include <llvm/Support/TargetSelect.h>
@@ -102,23 +102,6 @@ namespace compilerlib
                 }
             }
         };
-
-        llvm::CodeGenOptLevel toCodeGenOptLevel(unsigned level)
-        {
-            switch (level)
-            {
-            case 0:
-                return llvm::CodeGenOptLevel::None;
-            case 1:
-                return llvm::CodeGenOptLevel::Less;
-            case 2:
-                return llvm::CodeGenOptLevel::Default;
-            case 3:
-                return llvm::CodeGenOptLevel::Aggressive;
-            default:
-                return llvm::CodeGenOptLevel::Default;
-            }
-        }
 
         const char* findArgValue(const llvm::opt::ArgStringList& args, llvm::StringRef opt)
         {
@@ -421,70 +404,6 @@ namespace compilerlib
             return plan;
         }
 
-        CT_NODISCARD bool emitObjectFile(llvm::Module& module, const clang::CompilerInstance& ci,
-                                         llvm::StringRef outputPath, std::string& error)
-        {
-            std::string targetTriple = module.getTargetTriple();
-
-            if (targetTriple.empty())
-                targetTriple = llvm::sys::getDefaultTargetTriple();
-            module.setTargetTriple(targetTriple);
-
-            std::string targetError;
-            const llvm::Target* target =
-                llvm::TargetRegistry::lookupTarget(targetTriple, targetError);
-            if (!target)
-            {
-                error = targetError;
-                return false;
-            }
-
-            const auto& targetOpts = ci.getTargetOpts();
-            std::string features;
-            for (const auto& feature : targetOpts.FeaturesAsWritten)
-            {
-                if (!features.empty())
-                    features += ",";
-                features += feature;
-            }
-
-            llvm::TargetOptions options;
-            auto codegenLevel = toCodeGenOptLevel(ci.getCodeGenOpts().OptimizationLevel);
-            // For position-independent code (needed for instrumented code and PIE executables),
-            // explicitly set the relocation model to PIC
-            llvm::Reloc::Model relocModel = llvm::Reloc::PIC_;
-            std::unique_ptr<llvm::TargetMachine> targetMachine(
-                target->createTargetMachine(targetTriple, targetOpts.CPU, features, options,
-                                            relocModel, std::nullopt, codegenLevel));
-            if (!targetMachine)
-            {
-                error = "failed to create target machine";
-                return false;
-            }
-
-            module.setDataLayout(targetMachine->createDataLayout());
-
-            std::error_code ec;
-            llvm::raw_fd_ostream dest(outputPath, ec, llvm::sys::fs::OF_None);
-            if (ec)
-            {
-                error = ec.message();
-                return false;
-            }
-
-            llvm::legacy::PassManager pass;
-            if (targetMachine->addPassesToEmitFile(pass, dest, nullptr,
-                                                   llvm::CodeGenFileType::ObjectFile))
-            {
-                error = "target does not support object emission";
-                return false;
-            }
-
-            pass.run(module);
-            dest.flush();
-            return true;
-        }
-
         class Cc1Runner
         {
           public:
@@ -504,9 +423,15 @@ namespace compilerlib
                     return false;
                 }
 
-                if (ci->getFrontendOpts().ProgramAction != clang::frontend::EmitObj)
+                auto actionKind = ci->getFrontendOpts().ProgramAction;
+                switch (actionKind)
                 {
-                    error = "instrumentation only supports object/binary output";
+                case clang::frontend::EmitObj:
+                case clang::frontend::EmitLLVM:
+                case clang::frontend::EmitBC:
+                    break;
+                default:
+                    error = "instrumentation only supports object or LLVM IR/bitcode output";
                     return false;
                 }
 
@@ -544,15 +469,28 @@ namespace compilerlib
                 }
                 emitRuntimeConfigGlobals(*module, ctx_.runtimeConfig);
 
-                const char* outputObj = findArgValue(ccArgs, "-o");
-                if (!outputObj)
+                const char* outputPath = findArgValue(ccArgs, "-o");
+                if (!outputPath)
                 {
-                    error = "unable to determine output object file";
+                    error = "unable to determine output file";
                     return false;
                 }
-
-                if (!emitObjectFile(*module, *ci, outputObj, error))
+                switch (actionKind)
                 {
+                case clang::frontend::EmitObj:
+                    if (!emit::emitObjectFile(*module, *ci, outputPath, error))
+                        return false;
+                    break;
+                case clang::frontend::EmitLLVM:
+                    if (!emit::emitLLVMIRFile(*module, outputPath, error))
+                        return false;
+                    break;
+                case clang::frontend::EmitBC:
+                    if (!emit::emitBitcodeFile(*module, outputPath, error))
+                        return false;
+                    break;
+                default:
+                    error = "instrumentation only supports object or LLVM IR/bitcode output";
                     return false;
                 }
 
