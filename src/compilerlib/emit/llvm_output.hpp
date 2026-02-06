@@ -23,5 +23,5 @@ namespace compilerlib::emit
     CT_NODISCARD bool emitLLVMIRFile(llvm::Module& module, llvm::StringRef outputPath,
                                      std::string& error);
     CT_NODISCARD bool emitBitcodeFile(llvm::Module& module, llvm::StringRef outputPath,
-                                     std::string& error);
+                                      std::string& error);
 } // namespace compilerlib::emit

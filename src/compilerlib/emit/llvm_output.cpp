@@ -76,9 +76,9 @@ namespace compilerlib::emit
             return features;
         }
 
-        std::unique_ptr<llvm::TargetMachine>
-        createTargetMachine(llvm::Module& module, const clang::CompilerInstance& ci,
-                            std::string& error)
+        std::unique_ptr<llvm::TargetMachine> createTargetMachine(llvm::Module& module,
+                                                                 const clang::CompilerInstance& ci,
+                                                                 std::string& error)
         {
             std::string targetTriple = module.getTargetTriple();
 
@@ -100,10 +100,9 @@ namespace compilerlib::emit
             // For position-independent code (needed for instrumented code and PIE executables),
             // explicitly set the relocation model to PIC.
             llvm::Reloc::Model relocModel = llvm::Reloc::PIC_;
-            std::unique_ptr<llvm::TargetMachine> targetMachine(
-                target->createTargetMachine(targetTriple, ci.getTargetOpts().CPU,
-                                            buildTargetFeatures(ci), options, relocModel,
-                                            std::nullopt, codegenLevel));
+            std::unique_ptr<llvm::TargetMachine> targetMachine(target->createTargetMachine(
+                targetTriple, ci.getTargetOpts().CPU, buildTargetFeatures(ci), options, relocModel,
+                std::nullopt, codegenLevel));
             if (!targetMachine)
             {
                 error = "failed to create target machine";
@@ -118,38 +117,43 @@ namespace compilerlib::emit
     bool emitObjectFile(llvm::Module& module, const clang::CompilerInstance& ci,
                         llvm::StringRef outputPath, std::string& error)
     {
-        std::unique_ptr<llvm::TargetMachine> targetMachine =
-            createTargetMachine(module, ci, error);
+        std::unique_ptr<llvm::TargetMachine> targetMachine = createTargetMachine(module, ci, error);
         if (!targetMachine)
             return false;
 
-        return writeOutputFile(outputPath, error, [&](llvm::raw_fd_ostream& dest) -> bool {
-            llvm::legacy::PassManager pass;
-            if (targetMachine->addPassesToEmitFile(pass, dest, nullptr,
-                                                   llvm::CodeGenFileType::ObjectFile))
-            {
-                error = "target does not support object emission";
-                return false;
-            }
+        return writeOutputFile(outputPath, error,
+                               [&](llvm::raw_fd_ostream& dest) -> bool
+                               {
+                                   llvm::legacy::PassManager pass;
+                                   if (targetMachine->addPassesToEmitFile(
+                                           pass, dest, nullptr, llvm::CodeGenFileType::ObjectFile))
+                                   {
+                                       error = "target does not support object emission";
+                                       return false;
+                                   }
 
-            pass.run(module);
-            return true;
-        });
+                                   pass.run(module);
+                                   return true;
+                               });
     }
 
     bool emitLLVMIRFile(llvm::Module& module, llvm::StringRef outputPath, std::string& error)
     {
-        return writeOutputFile(outputPath, error, [&](llvm::raw_fd_ostream& dest) -> bool {
-            module.print(dest, nullptr);
-            return !dest.has_error();
-        });
+        return writeOutputFile(outputPath, error,
+                               [&](llvm::raw_fd_ostream& dest) -> bool
+                               {
+                                   module.print(dest, nullptr);
+                                   return !dest.has_error();
+                               });
     }
 
     bool emitBitcodeFile(llvm::Module& module, llvm::StringRef outputPath, std::string& error)
     {
-        return writeOutputFile(outputPath, error, [&](llvm::raw_fd_ostream& dest) -> bool {
-            llvm::WriteBitcodeToFile(module, dest);
-            return !dest.has_error();
-        });
+        return writeOutputFile(outputPath, error,
+                               [&](llvm::raw_fd_ostream& dest) -> bool
+                               {
+                                   llvm::WriteBitcodeToFile(module, dest);
+                                   return !dest.has_error();
+                               });
     }
 } // namespace compilerlib::emit
