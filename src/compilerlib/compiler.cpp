@@ -348,6 +348,27 @@ namespace compilerlib
                            args.end());
             }
 
+            static void removeXclangArg(std::vector<std::string>& args, llvm::StringRef opt)
+            {
+                std::vector<std::string> out;
+                out.reserve(args.size());
+                for (size_t i = 0; i < args.size(); ++i)
+                {
+                    const auto& arg = args[i];
+                    if (arg == "-Xclang" && i + 1 < args.size() && args[i + 1] == opt)
+                    {
+                        ++i;
+                        continue;
+                    }
+                    if (arg == opt)
+                    {
+                        continue;
+                    }
+                    out.push_back(arg);
+                }
+                args.swap(out);
+            }
+
             CT_NODISCARD bool linkRequested(void) const
             {
                 return !(hasArg(ctx_.filtered_args, "-c") || hasArg(ctx_.filtered_args, "-S") ||
@@ -377,7 +398,7 @@ namespace compilerlib
                 ctx_.dc.os << "warning: ct: -disable-O0-optnone ignored because --ct-optnone is "
                               "enabled\n";
                 ctx_.dc.os.flush();
-                removeArg(ctx_.filtered_args, "-disable-O0-optnone");
+                removeXclangArg(ctx_.filtered_args, "-disable-O0-optnone");
             }
 
             CompileContext& ctx_;
