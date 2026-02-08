@@ -20,8 +20,8 @@ namespace compilerlib::frontend
         using BaseAction::BaseAction;
 
       protected:
-        std::unique_ptr<clang::ASTConsumer>
-        CreateASTConsumer(clang::CompilerInstance& CI, llvm::StringRef InFile) override
+        std::unique_ptr<clang::ASTConsumer> CreateASTConsumer(clang::CompilerInstance& CI,
+                                                              llvm::StringRef InFile) override
         {
             auto codegen = BaseAction::CreateASTConsumer(CI, InFile);
             if (!codegen)

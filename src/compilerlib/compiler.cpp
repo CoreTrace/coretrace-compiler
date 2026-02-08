@@ -535,9 +535,8 @@ namespace compilerlib
 
                 if (ctx_.runtimeConfig.optnone_enabled)
                 {
-                    return runCodegenWithModule<
-                        frontend::OptNoneAction<clang::EmitLLVMOnlyAction>>(*ci, handleModule,
-                                                                           error);
+                    return runCodegenWithModule<frontend::OptNoneAction<clang::EmitLLVMOnlyAction>>(
+                        *ci, handleModule, error);
                 }
                 return runCodegenWithModule<clang::EmitLLVMOnlyAction>(*ci, handleModule, error);
             }
@@ -641,8 +640,8 @@ namespace compilerlib
                             result.success = false;
                             if (includeDriverDiags)
                             {
-                                result.diagnostics =
-                                    mergeDiagnostics(ctx_.driver_diagnostics, std::move(actionError));
+                                result.diagnostics = mergeDiagnostics(ctx_.driver_diagnostics,
+                                                                      std::move(actionError));
                             }
                             else
                             {
