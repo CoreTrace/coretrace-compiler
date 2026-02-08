@@ -2,6 +2,7 @@
 #include "compilerlib/attributes.hpp"
 #include "compilerlib/toolchain.hpp"
 
+#include "compilerlib/frontend/optnone_action.hpp"
 #include "compilerlib/instrumentation/alloc.hpp"
 #include "compilerlib/instrumentation/bounds.hpp"
 #include "compilerlib/instrumentation/config.hpp"
@@ -32,6 +33,7 @@
 #include <llvm/TargetParser/Host.h>
 #include <llvm-c/Target.h>
 
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -226,6 +228,8 @@ namespace compilerlib
                                   "use --ct-alloc or disable bounds\n";
                     ctx_.dc.os.flush();
                 }
+                warnOptnoneConflict();
+                stripToMemoryArgs();
                 DriverConfig driverCfg;
                 if (!resolveDriverConfig(ctx_.filtered_args, driverCfg, error))
                 {
@@ -337,11 +341,64 @@ namespace compilerlib
                 args.swap(out);
             }
 
+            static void removeArg(std::vector<std::string>& args, llvm::StringRef opt)
+            {
+                args.erase(std::remove_if(args.begin(), args.end(),
+                                          [&](const std::string& arg) { return arg == opt; }),
+                           args.end());
+            }
+
+            static void removeXclangArg(std::vector<std::string>& args, llvm::StringRef opt)
+            {
+                std::vector<std::string> out;
+                out.reserve(args.size());
+                for (size_t i = 0; i < args.size(); ++i)
+                {
+                    const auto& arg = args[i];
+                    if (arg == "-Xclang" && i + 1 < args.size() && args[i + 1] == opt)
+                    {
+                        ++i;
+                        continue;
+                    }
+                    if (arg == opt)
+                    {
+                        continue;
+                    }
+                    out.push_back(arg);
+                }
+                args.swap(out);
+            }
+
             CT_NODISCARD bool linkRequested(void) const
             {
                 return !(hasArg(ctx_.filtered_args, "-c") || hasArg(ctx_.filtered_args, "-S") ||
                          hasArg(ctx_.filtered_args, "-E") ||
                          hasArg(ctx_.filtered_args, "-emit-llvm"));
+            }
+
+            void stripToMemoryArgs(void)
+            {
+                if (ctx_.mode != OutputMode::ToMemory)
+                {
+                    return;
+                }
+                removeArg(ctx_.filtered_args, "-c");
+            }
+
+            void warnOptnoneConflict(void)
+            {
+                if (!ctx_.runtimeConfig.optnone_enabled)
+                {
+                    return;
+                }
+                if (!hasArg(ctx_.filtered_args, "-disable-O0-optnone"))
+                {
+                    return;
+                }
+                ctx_.dc.os << "warning: ct: -disable-O0-optnone ignored because --ct-optnone is "
+                              "enabled\n";
+                ctx_.dc.os.flush();
+                removeXclangArg(ctx_.filtered_args, "-disable-O0-optnone");
             }
 
             CompileContext& ctx_;
@@ -435,66 +492,53 @@ namespace compilerlib
                     return false;
                 }
 
-                clang::EmitLLVMOnlyAction action;
-                resetDiagnostics();
-                if (!ci->ExecuteAction(action))
+                auto handleModule = [&](std::unique_ptr<llvm::Module> module) -> bool
                 {
-                    error = std::move(ctx_.dc.message);
-                    return false;
-                }
+                    if (ctx_.runtimeConfig.trace_enabled)
+                    {
+                        instrumentModule(*module);
+                    }
+                    if (ctx_.runtimeConfig.alloc_enabled)
+                    {
+                        wrapAllocCalls(*module);
+                    }
+                    if (ctx_.runtimeConfig.bounds_enabled)
+                    {
+                        instrumentMemoryAccesses(*module);
+                    }
+                    if (ctx_.runtimeConfig.vtable_enabled || ctx_.runtimeConfig.vcall_trace_enabled)
+                    {
+                        instrumentVirtualCalls(*module, ctx_.runtimeConfig.vcall_trace_enabled,
+                                               ctx_.runtimeConfig.vtable_enabled);
+                    }
+                    emitRuntimeConfigGlobals(*module, ctx_.runtimeConfig);
 
-                std::unique_ptr<llvm::Module> module = action.takeModule();
-                if (!module)
-                {
-                    error = "failed to generate LLVM module";
-                    return false;
-                }
-
-                if (ctx_.runtimeConfig.trace_enabled)
-                {
-                    instrumentModule(*module);
-                }
-                if (ctx_.runtimeConfig.alloc_enabled)
-                {
-                    wrapAllocCalls(*module);
-                }
-                if (ctx_.runtimeConfig.bounds_enabled)
-                {
-                    instrumentMemoryAccesses(*module);
-                }
-                if (ctx_.runtimeConfig.vtable_enabled || ctx_.runtimeConfig.vcall_trace_enabled)
-                {
-                    instrumentVirtualCalls(*module, ctx_.runtimeConfig.vcall_trace_enabled,
-                                           ctx_.runtimeConfig.vtable_enabled);
-                }
-                emitRuntimeConfigGlobals(*module, ctx_.runtimeConfig);
-
-                const char* outputPath = findArgValue(ccArgs, "-o");
-                if (!outputPath)
-                {
-                    error = "unable to determine output file";
-                    return false;
-                }
-                switch (actionKind)
-                {
-                case clang::frontend::EmitObj:
-                    if (!emit::emitObjectFile(*module, *ci, outputPath, error))
+                    const char* outputPath = findArgValue(ccArgs, "-o");
+                    if (!outputPath)
+                    {
+                        error = "unable to determine output file";
                         return false;
-                    break;
-                case clang::frontend::EmitLLVM:
-                    if (!emit::emitLLVMIRFile(*module, outputPath, error))
+                    }
+                    switch (actionKind)
+                    {
+                    case clang::frontend::EmitObj:
+                        return emit::emitObjectFile(*module, *ci, outputPath, error);
+                    case clang::frontend::EmitLLVM:
+                        return emit::emitLLVMIRFile(*module, outputPath, error);
+                    case clang::frontend::EmitBC:
+                        return emit::emitBitcodeFile(*module, outputPath, error);
+                    default:
+                        error = "instrumentation only supports object or LLVM IR/bitcode output";
                         return false;
-                    break;
-                case clang::frontend::EmitBC:
-                    if (!emit::emitBitcodeFile(*module, outputPath, error))
-                        return false;
-                    break;
-                default:
-                    error = "instrumentation only supports object or LLVM IR/bitcode output";
-                    return false;
-                }
+                    }
+                };
 
-                return true;
+                if (ctx_.runtimeConfig.optnone_enabled)
+                {
+                    return runCodegenWithModule<frontend::OptNoneAction<clang::EmitLLVMOnlyAction>>(
+                        *ci, handleModule, error);
+                }
+                return runCodegenWithModule<clang::EmitLLVMOnlyAction>(*ci, handleModule, error);
             }
 
             CompileResult runSingle(const clang::driver::Command& job,
@@ -528,28 +572,19 @@ namespace compilerlib
                 {
                 case clang::frontend::EmitObj:
                 {
-                    clang::EmitObjAction action;
-
-                    resetDiagnostics();
-                    if (!ci->ExecuteAction(action))
+                    if (!runFrontendAction<clang::EmitObjAction>(*ci))
                         return fail("compilation failed");
                     break;
                 }
                 case clang::frontend::EmitAssembly:
                 {
-                    clang::EmitAssemblyAction action;
-
-                    resetDiagnostics();
-                    if (!ci->ExecuteAction(action))
+                    if (!runFrontendAction<clang::EmitAssemblyAction>(*ci))
                         return fail("compilation failed");
                     break;
                 }
                 case clang::frontend::EmitBC:
                 {
-                    clang::EmitBCAction action;
-
-                    resetDiagnostics();
-                    if (!ci->ExecuteAction(action))
+                    if (!runFrontendAction<clang::EmitBCAction>(*ci))
                         return fail("compilation failed");
                     break;
                 }
@@ -557,33 +592,13 @@ namespace compilerlib
                 {
                     if (ctx_.mode == OutputMode::ToFile)
                     {
-                        clang::EmitLLVMAction action;
-
-                        resetDiagnostics();
-                        if (!ci->ExecuteAction(action))
+                        if (!runFrontendAction<clang::EmitLLVMAction>(*ci))
                             return fail("compilation failed");
                     }
                     if (ctx_.mode == OutputMode::ToMemory)
                     {
-                        clang::EmitLLVMOnlyAction action;
-
-                        resetDiagnostics();
-                        if (!ci->ExecuteAction(action))
-                        {
-                            result.success = false;
-                            if (includeDriverDiags)
-                            {
-                                result.diagnostics = mergeDiagnostics(ctx_.driver_diagnostics,
-                                                                      std::move(ctx_.dc.message));
-                            }
-                            else
-                            {
-                                result.diagnostics = std::move(ctx_.dc.message);
-                            }
-                            return result;
-                        }
-                        std::unique_ptr<llvm::Module> module = action.takeModule();
-                        if (module)
+                        std::string actionError;
+                        auto handleModule = [&](std::unique_ptr<llvm::Module> module) -> bool
                         {
                             if (ctx_.instrument)
                             {
@@ -605,34 +620,53 @@ namespace compilerlib
                             module->print(rso, nullptr);
                             rso.flush();
                             result.llvmIR = std::move(llvmIR);
+                            return true;
+                        };
+
+                        bool ok = false;
+                        if (ctx_.runtimeConfig.optnone_enabled)
+                        {
+                            ok = runCodegenWithModule<
+                                frontend::OptNoneAction<clang::EmitLLVMOnlyAction>>(
+                                *ci, handleModule, actionError);
+                        }
+                        else
+                        {
+                            ok = runCodegenWithModule<clang::EmitLLVMOnlyAction>(*ci, handleModule,
+                                                                                 actionError);
+                        }
+                        if (!ok)
+                        {
+                            result.success = false;
+                            if (includeDriverDiags)
+                            {
+                                result.diagnostics = mergeDiagnostics(ctx_.driver_diagnostics,
+                                                                      std::move(actionError));
+                            }
+                            else
+                            {
+                                result.diagnostics = std::move(actionError);
+                            }
+                            return result;
                         }
                     }
                     break;
                 }
                 case clang::frontend::PrintPreprocessedInput:
                 {
-                    clang::PrintPreprocessedAction action;
-
-                    resetDiagnostics();
-                    if (!ci->ExecuteAction(action))
+                    if (!runFrontendAction<clang::PrintPreprocessedAction>(*ci))
                         return fail("preprocessing failed");
                     break;
                 }
                 case clang::frontend::RunPreprocessorOnly:
                 {
-                    clang::PreprocessOnlyAction action;
-
-                    resetDiagnostics();
-                    if (!ci->ExecuteAction(action))
+                    if (!runFrontendAction<clang::PreprocessOnlyAction>(*ci))
                         return fail("preprocessing failed");
                     break;
                 }
                 case clang::frontend::ParseSyntaxOnly:
                 {
-                    clang::SyntaxOnlyAction action;
-
-                    resetDiagnostics();
-                    if (!ci->ExecuteAction(action))
+                    if (!runFrontendAction<clang::SyntaxOnlyAction>(*ci))
                         return fail("parsing failed");
                     break;
                 }
@@ -673,6 +707,40 @@ namespace compilerlib
             {
                 ctx_.dc.message.clear();
                 ctx_.dc.os.flush();
+            }
+
+            template <typename Action, typename Handler>
+            CT_NODISCARD bool runCodegenWithModule(clang::CompilerInstance& ci, Handler&& handler,
+                                                   std::string& error)
+            {
+                Action action;
+                resetDiagnostics();
+                if (!ci.ExecuteAction(action))
+                {
+                    error = std::move(ctx_.dc.message);
+                    return false;
+                }
+                std::unique_ptr<llvm::Module> module = action.takeModule();
+                if (!module)
+                {
+                    error = "failed to generate LLVM module";
+                    return false;
+                }
+                return handler(std::move(module));
+            }
+
+            template <typename Action>
+            CT_NODISCARD bool runFrontendAction(clang::CompilerInstance& ci)
+            {
+                if (ctx_.runtimeConfig.optnone_enabled)
+                {
+                    frontend::OptNoneAction<Action> action;
+                    resetDiagnostics();
+                    return ci.ExecuteAction(action);
+                }
+                Action action;
+                resetDiagnostics();
+                return ci.ExecuteAction(action);
             }
 
             CT_NODISCARD std::unique_ptr<clang::CompilerInstance>
@@ -861,7 +929,7 @@ namespace compilerlib
             return {
                 false, ctx.dc.message.empty() ? "no jobs to run" : std::move(ctx.dc.message), {}};
 
-        if (!instrument && mode == OutputMode::ToFile)
+        if (!instrument && mode == OutputMode::ToFile && !ctx.runtimeConfig.optnone_enabled)
             return runNonInstrumentedCompilation(ctx, driver, *comp);
 
         JobPlan plan = buildJobPlan(*comp);

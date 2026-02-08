@@ -19,9 +19,16 @@ int main(int argc, char* argv[])
     }
 
     auto res = compilerlib::compile(parsed.compiler_args, parsed.mode, parsed.instrument);
-    if (!res.success)
+    if (!res.diagnostics.empty())
     {
         std::cerr << res.diagnostics;
+        if (res.diagnostics.back() != '\n')
+        {
+            std::cerr << '\n';
+        }
+    }
+    if (!res.success)
+    {
         return 1;
     }
 

@@ -6,6 +6,7 @@ from ctestfw.plan import CompilePlan
 from ctestfw.framework.testcase import TestCase
 from ctestfw.framework.suite import TestSuite
 from ctestfw.framework.reporter import ConsoleReporter
+from ctestfw.assertions.core import Assertion, require
 from ctestfw.assertions.compiler import (
     assert_exit_code,
     assert_argv_contains,
@@ -31,6 +32,22 @@ def copy_fixtures(ws: Path, files: list[Path]) -> None:
         src = f
         dst = ws / f.name
         shutil.copy2(src, dst)
+
+def assert_file_contains(path: str, text: str) -> Assertion:
+    def _check(res) -> None:
+        p = Path(path)
+        if not p.is_absolute():
+            p = res.run.cwd / p
+        require(p.exists(), f"output does not exist: {p}")
+        data = p.read_text(encoding="utf-8", errors="ignore")
+        require(text in data, f"file does not contain '{text}': {p}")
+    return Assertion(name=f"file_contains_{Path(path).name}", check=_check)
+
+def assert_stderr_contains(text: str) -> Assertion:
+    def _check(res) -> None:
+        require(text in (res.run.stderr or ""),
+                f"stderr does not contain '{text}'\nstderr:\n{res.run.stderr}")
+    return Assertion(name=f"stderr_contains_{text}", check=_check)
 
 def main() -> int:
     cc_bin = (ROOT / "build" / "cc").resolve()
@@ -386,6 +403,51 @@ def main() -> int:
         ],
     )
 
+    tc_optnone_emit_llvm = TestCase(
+        name="compile_optnone_emit_llvm",
+        plan=CompilePlan(
+            name="compile_optnone_emit_llvm",
+            sources=[Path("hello.c")],
+            out=None,
+            extra_args=["--ct-optnone", "-O1", "-S", "-emit-llvm", "-o=hello_optnone.ll"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_argv_contains(["--ct-optnone", "-O1", "-S", "-emit-llvm"]),
+            assert_output_exists_at("hello_optnone.ll"),
+            assert_output_kind_at("hello_optnone.ll", ArtifactKind.LLVM_IR_TEXT),
+            assert_output_nonempty_at("hello_optnone.ll"),
+            assert_file_contains("hello_optnone.ll", "optnone"),
+        ],
+    )
+
+    tc_optnone_disable_o0 = TestCase(
+        name="compile_optnone_disable_o0",
+        plan=CompilePlan(
+            name="compile_optnone_disable_o0",
+            sources=[Path("hello.c")],
+            out=None,
+            extra_args=[
+                "--ct-optnone",
+                "-O0",
+                "-Xclang",
+                "-disable-O0-optnone",
+                "-S",
+                "-emit-llvm",
+                "-o",
+                "-",
+            ],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_argv_contains(["--ct-optnone", "-O0", "-Xclang", "-disable-O0-optnone"]),
+            assert_stdout_contains("optnone"),
+            assert_stderr_contains(
+                "warning: ct: -disable-O0-optnone ignored because --ct-optnone is enabled"
+            ),
+        ],
+    )
+
     platform = detect_platform()
     common_cases = [tc_o_eq, tc_d_space, tc_d_compact, tc_cpp, tc_x_cxx]
     instrument_cases = [
@@ -405,6 +467,8 @@ def main() -> int:
         tc_readme_shadow_aggr,
         tc_readme_vtable,
         tc_readme_inmem,
+        tc_optnone_emit_llvm,
+        tc_optnone_disable_o0,
     ]
     if platform.os == OS.MACOS:
         cases = [tc_macho, *common_cases, *instrument_cases, *readme_cases]
