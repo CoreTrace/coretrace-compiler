@@ -103,6 +103,16 @@ namespace compilerlib
                 config.shadow_enabled = true;
                 continue;
             }
+            if (arg == "--ct-optnone")
+            {
+                config.optnone_enabled = true;
+                continue;
+            }
+            if (arg == "--ct-no-optnone")
+            {
+                config.optnone_enabled = false;
+                continue;
+            }
             if (arg == "--ct-shadow-aggressive")
             {
                 config.shadow_enabled = true;

@@ -26,6 +26,7 @@ namespace compilerlib
         bool autofree_enabled = false;
         bool alloc_trace_enabled = true;
         bool bounds_without_alloc = false;
+        bool optnone_enabled = false;
     };
 
     void extractRuntimeConfig(const std::vector<std::string>& input,
