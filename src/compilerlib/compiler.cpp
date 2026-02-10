@@ -295,6 +295,9 @@ namespace compilerlib
                     ctx_.clang_args.push_back("-x");
                     ctx_.clang_args.push_back("none");
                     ctx_.clang_args.push_back(CT_RUNTIME_LIB_PATH);
+#ifdef CT_RUNTIME_LOGGER_LIB_PATH
+                    ctx_.clang_args.push_back(CT_RUNTIME_LOGGER_LIB_PATH);
+#endif
 #ifdef __APPLE__
                     ctx_.clang_args.push_back("-lc++");
 #else
