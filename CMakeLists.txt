@@ -44,6 +44,14 @@ set(LIB_SOURCES
   src/compilerlib/instrumentation/vtable.cpp
 )
 
+# ── coretrace-logger (external logging library) ──
+include(FetchContent)
+FetchContent_Declare(coretrace-logger
+  GIT_REPOSITORY https://github.com/CoreTrace/coretrace-log.git
+  GIT_TAG        main
+)
+FetchContent_MakeAvailable(coretrace-logger)
+
 add_library(ct_instrument_runtime STATIC
   src/runtime/ct_instrument_runtime.cpp
   src/runtime/ct_runtime_alloc.cpp
@@ -56,6 +64,7 @@ add_library(ct_instrument_runtime STATIC
   src/runtime/ct_runtime_trace.cpp
   src/runtime/ct_runtime_vtable.cpp
 )
+target_link_libraries(ct_instrument_runtime PRIVATE coretrace_logger)
 set_target_properties(ct_instrument_runtime PROPERTIES OUTPUT_NAME "ct_instrument_runtime")
 if(ENABLE_DEBUG_ASAN)
   target_compile_options(ct_instrument_runtime PRIVATE -fno-sanitize=address)
@@ -128,6 +137,7 @@ add_library(cc::compilerlib_static ALIAS compilerlib_static)
 target_compile_definitions(compilerlib_static
   PRIVATE
     CT_RUNTIME_LIB_PATH="$<TARGET_FILE:ct_instrument_runtime>"
+    CT_RUNTIME_LOGGER_LIB_PATH="$<TARGET_FILE:coretrace_logger>"
 )
 add_dependencies(compilerlib_static ct_instrument_runtime)
 
@@ -182,6 +192,7 @@ add_library(cc::compilerlib_shared ALIAS compilerlib_shared)
 target_compile_definitions(compilerlib_shared
   PRIVATE
     CT_RUNTIME_LIB_PATH="$<TARGET_FILE:ct_instrument_runtime>"
+    CT_RUNTIME_LOGGER_LIB_PATH="$<TARGET_FILE:coretrace_logger>"
 )
 add_dependencies(compilerlib_shared ct_instrument_runtime)
 

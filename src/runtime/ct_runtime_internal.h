@@ -3,6 +3,8 @@
 
 #include "compilerlib/attributes.hpp"
 
+#include <coretrace/logger.hpp>
+
 #include <cstddef>
 #include <cstdint>
 #include <errno.h>
@@ -13,62 +15,16 @@
 
 #define CT_NOINSTR __attribute__((no_instrument_function))
 
-enum class CTColor
-{
-    Reset,
+// #############################################
+//  Compatibility aliases: CTColor -> coretrace::Color
+// #############################################
 
-    Dim,
-    Bold,
-    Underline,
-    Italic,
-    Blink,
-    Reverse,
-    Hidden,
-    Strike,
+using CTColor = coretrace::Color;
+using CTLevel = coretrace::Level;
 
-    Black,
-    Red,
-    Green,
-    Yellow,
-    Blue,
-    Magenta,
-    Cyan,
-    White,
-
-    Gray,
-    BrightRed,
-    BrightGreen,
-    BrightYellow,
-    BrightBlue,
-    BrightMagenta,
-    BrightCyan,
-    BrightWhite,
-
-    BgBlack,
-    BgRed,
-    BgGreen,
-    BgYellow,
-    BgBlue,
-    BgMagenta,
-    BgCyan,
-    BgWhite,
-
-    BgGray,
-    BgBrightRed,
-    BgBrightGreen,
-    BgBrightYellow,
-    BgBrightBlue,
-    BgBrightMagenta,
-    BgBrightCyan,
-    BgBrightWhite,
-};
-
-enum class CTLevel
-{
-    Info = 0,
-    Warn = 1,
-    Error = 2
-};
+// #############################################
+//  Entry states (runtime-specific, not in logger)
+// #############################################
 
 enum
 {
@@ -78,6 +34,10 @@ enum
     CT_ENTRY_FREED = 3,
     CT_ENTRY_AUTOFREED = 4
 };
+
+// #############################################
+//  Runtime globals
+// #############################################
 
 extern int ct_disable_trace;
 extern int ct_disable_alloc;
@@ -118,23 +78,13 @@ extern "C"
     CT_NODISCARD CT_NOINSTR int ct_early_trace_should_log(void);
 }
 
+// #############################################
+//  Runtime-specific functions (NOT in coretrace-logger)
+// #############################################
+
 CT_NODISCARD CT_NOINSTR size_t ct_strlen(const char* str);
 CT_NODISCARD CT_NOINSTR int ct_streq(const char* lhs, const char* rhs);
-CT_NODISCARD CT_NOINSTR std::string_view ct_color(CTColor color);
-CT_NODISCARD CT_NOINSTR std::string_view ct_level_label(CTLevel level);
-CT_NODISCARD CT_NOINSTR std::string_view ct_level_color(CTLevel level);
-CT_NODISCARD CT_NOINSTR int ct_pid(void);
-CT_NODISCARD CT_NOINSTR unsigned long long ct_thread_id(void);
 CT_NODISCARD CT_NOINSTR const char* ct_site_name(const char* site);
-CT_NODISCARD CT_NOINSTR int ct_log_is_enabled(void);
-CT_NOINSTR void ct_enable_logging(void);
-CT_NOINSTR void ct_disable_logging(void);
-CT_NOINSTR void ct_write_prefix(CTLevel level);
-CT_NOINSTR void ct_write_raw(const char* data, size_t size);
-CT_NOINSTR void ct_write_str(std::string_view str);
-CT_NOINSTR void ct_write_cstr(const char* str);
-CT_NOINSTR void ct_write_dec(size_t value);
-CT_NOINSTR void ct_write_hex(uintptr_t value);
 CT_NOINSTR void ct_maybe_install_backtrace(void);
 CT_NOINSTR void ct_init_env_once(void);
 CT_NOINSTR void ct_lock_acquire(void);
@@ -161,10 +111,94 @@ CT_NOINSTR void ct_report_bounds_error(const void* base, const void* ptr, size_t
                                        size_t alloc_size, const char* alloc_site,
                                        unsigned char state);
 
+// #############################################
+//  Compatibility wrappers: delegate to coretrace::*
+//  These allow existing runtime code to keep using
+//  the ct_* API without any changes.
+// #############################################
+
+CT_NODISCARD CT_NOINSTR inline std::string_view ct_color(CTColor color)
+{
+    return coretrace::color(color);
+}
+
+CT_NODISCARD CT_NOINSTR inline std::string_view ct_level_label(CTLevel level)
+{
+    return coretrace::level_label(level);
+}
+
+CT_NODISCARD CT_NOINSTR inline std::string_view ct_level_color(CTLevel level)
+{
+    return coretrace::level_color(level);
+}
+
+CT_NODISCARD CT_NOINSTR inline int ct_pid(void)
+{
+    return coretrace::pid();
+}
+
+CT_NODISCARD CT_NOINSTR inline unsigned long long ct_thread_id(void)
+{
+    return coretrace::thread_id();
+}
+
+CT_NODISCARD CT_NOINSTR inline int ct_log_is_enabled(void)
+{
+    return coretrace::log_is_enabled() ? 1 : 0;
+}
+
+CT_NOINSTR inline void ct_enable_logging(void)
+{
+    coretrace::enable_logging();
+}
+
+CT_NOINSTR inline void ct_disable_logging(void)
+{
+    coretrace::disable_logging();
+}
+
+CT_NOINSTR inline void ct_write_raw(const char* data, size_t size)
+{
+    coretrace::write_raw(data, size);
+}
+
+CT_NOINSTR inline void ct_write_str(std::string_view str)
+{
+    coretrace::write_str(str);
+}
+
+CT_NOINSTR inline void ct_write_cstr(const char* str)
+{
+    if (!str)
+        return;
+    coretrace::write_str(std::string_view(str));
+}
+
+CT_NOINSTR inline void ct_write_dec(size_t value)
+{
+    coretrace::write_dec(value);
+}
+
+CT_NOINSTR inline void ct_write_hex(uintptr_t value)
+{
+    coretrace::write_hex(value);
+}
+
+CT_NOINSTR inline void ct_write_prefix(CTLevel level)
+{
+    coretrace::write_prefix(level);
+}
+
+// #############################################
+//  ct_log: compatibility wrapper
+//  Delegates to coretrace::write_log_line for
+//  mutex-protected atomic output.
+// #############################################
+
 template <typename... Args>
 CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... args)
 {
-    if (!ct_log_is_enabled())
+    if (!coretrace::log_is_enabled())
     {
         return;
     }
@@ -176,34 +210,12 @@ CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... arg
             return;
         }
 
-        std::string prefix;
-        prefix.reserve(64);
-        prefix.append(ct_color(CTColor::Dim));
-        prefix.append("|");
-        prefix.append(std::to_string(ct_pid()));
-        prefix.append("|");
-        prefix.append(ct_color(CTColor::Reset));
-        prefix.push_back(' ');
-
-        prefix.append(ct_color(CTColor::Gray));
-        prefix.append(ct_color(CTColor::Italic));
-        prefix.append("==ct== ");
-        prefix.append(ct_color(CTColor::Reset));
-
-        prefix.append(ct_level_color(level));
-        prefix.push_back('[');
-        prefix.append(ct_level_label(level));
-        prefix.push_back(']');
-        prefix.append(ct_color(CTColor::Reset));
-        prefix.push_back(' ');
-
-        ct_write_raw(prefix.data(), prefix.size());
-        ct_write_raw(msg.data(), msg.size());
+        coretrace::write_log_line(level, {}, msg, std::source_location::current());
     }
     catch (...)
     {
         static const char fallback[] = "ct: log format error\n";
-        ct_write_raw(fallback, ct_strlen(fallback));
+        coretrace::write_raw(fallback, sizeof(fallback) - 1);
     }
 }
 
