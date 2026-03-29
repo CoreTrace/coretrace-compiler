@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #ifndef CORETRACE_CLI_ARGS_H
 #define CORETRACE_CLI_ARGS_H
 

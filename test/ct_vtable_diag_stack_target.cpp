@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #include <cstdio>
 
 extern "C" void __ct_vcall_trace(void* this_ptr, void* target, const char* site,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #include <cstdio>
 
 extern "C" void __ct_vtable_dump(void* this_ptr, const char* site, const char* static_type);

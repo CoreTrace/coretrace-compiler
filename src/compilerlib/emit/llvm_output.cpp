@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #include "llvm_output.hpp"
 
 #include <clang/Frontend/CompilerInstance.h>

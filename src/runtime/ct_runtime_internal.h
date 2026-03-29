@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #ifndef CT_RUNTIME_INTERNAL_H
 #define CT_RUNTIME_INTERNAL_H
 

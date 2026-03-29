@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // test/ct_vtable_uaf.cpp
 #include <cstdio>
 struct Base
