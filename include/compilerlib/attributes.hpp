@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #ifndef COMPILERLIB_ATTRIBUTES_HPP
 #define COMPILERLIB_ATTRIBUTES_HPP
 

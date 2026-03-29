@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 cmake .. -DCMAKE_BUILD_TYPE=Release \
          -DLLVM_DIR=$(brew --prefix llvm@20)/lib/cmake/llvm \
          -DClang_DIR=$(brew --prefix llvm@20)/lib/cmake/clang \

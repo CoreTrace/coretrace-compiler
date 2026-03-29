@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #include "compilerlib/frontend/optnone_action.hpp"
 
 #include <clang/AST/Attr.h>
