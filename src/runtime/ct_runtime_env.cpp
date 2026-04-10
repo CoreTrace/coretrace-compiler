@@ -67,6 +67,10 @@ CT_NOINSTR __attribute__((constructor)) static void ct_runtime_init(void)
 {
     ct_maybe_install_backtrace();
     ct_apply_compiled_config();
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)  // MSVC warning: 'getenv': This function or variable may be unsafe
+#endif
     if (getenv("CT_DISABLE_TRACE") != nullptr)
     {
         ct_set_enabled(CT_FEATURE_TRACE, 0);
@@ -105,6 +109,9 @@ CT_NOINSTR __attribute__((constructor)) static void ct_runtime_init(void)
     {
         ct_set_enabled(CT_FEATURE_ALLOC_TRACE, 0);
     }
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 }
 
 CT_NOINSTR void ct_init_env_once(void)
@@ -117,6 +124,10 @@ CT_NOINSTR void ct_init_env_once(void)
     }
 
     ct_apply_compiled_config();
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)  // MSVC warning: 'getenv': This function or variable may be unsafe
+#endif
     if (getenv("CT_DISABLE_TRACE") != nullptr)
     {
         ct_set_enabled(CT_FEATURE_TRACE, 0);
@@ -155,4 +166,7 @@ CT_NOINSTR void ct_init_env_once(void)
     {
         ct_set_enabled(CT_FEATURE_ALLOC_TRACE, 0);
     }
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 }

@@ -8,24 +8,73 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <errno.h>
+#include <cerrno>
 #include <format>
+#include <source_location>
 #include <string>
 #include <string_view>
-#include <unistd.h>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <process.h>
+#endif
+
+#if defined(_MSC_VER)
+#define CT_NOINSTR
+
+#ifndef __ATOMIC_ACQUIRE
+#define __ATOMIC_ACQUIRE 2
+#endif
+#ifndef __ATOMIC_RELEASE
+#define __ATOMIC_RELEASE 3
+#endif
+#ifndef __ATOMIC_ACQ_REL
+#define __ATOMIC_ACQ_REL 4
+#endif
+
+inline int ct_msvc_atomic_exchange(volatile int* object, int desired)
+{
+    return static_cast<int>(
+        InterlockedExchange(reinterpret_cast<volatile long*>(object), static_cast<long>(desired)));
+}
+
+inline void ct_msvc_atomic_store(volatile int* object, int desired)
+{
+    (void)InterlockedExchange(reinterpret_cast<volatile long*>(object),
+                              static_cast<long>(desired));
+}
+
+inline bool ct_msvc_atomic_compare_exchange(volatile int* object, int* expected, int desired)
+{
+    const long prior =
+        InterlockedCompareExchange(reinterpret_cast<volatile long*>(object),
+                                   static_cast<long>(desired), static_cast<long>(*expected));
+    if (prior == static_cast<long>(*expected))
+    {
+        return true;
+    }
+
+    *expected = static_cast<int>(prior);
+    return false;
+}
+
+#define __atomic_exchange_n(object, desired, order)                                           \
+    ct_msvc_atomic_exchange(reinterpret_cast<volatile int*>(object), static_cast<int>(desired))
+#define __atomic_store_n(object, desired, order)                                               \
+    ct_msvc_atomic_store(reinterpret_cast<volatile int*>(object), static_cast<int>(desired))
+#define __atomic_compare_exchange_n(object, expected, desired, weak, success_order,            \
+                                    failure_order)                                             \
+    ct_msvc_atomic_compare_exchange(reinterpret_cast<volatile int*>(object),                   \
+                                    reinterpret_cast<int*>(expected), static_cast<int>(desired))
+#else
 #define CT_NOINSTR __attribute__((no_instrument_function))
-
-// #############################################
-//  Compatibility aliases: CTColor -> coretrace::Color
-// #############################################
+#endif
 
 using CTColor = coretrace::Color;
 using CTLevel = coretrace::Level;
-
-// #############################################
-//  Entry states (runtime-specific, not in logger)
-// #############################################
 
 enum
 {
@@ -35,10 +84,6 @@ enum
     CT_ENTRY_FREED = 3,
     CT_ENTRY_AUTOFREED = 4
 };
-
-// #############################################
-//  Runtime globals
-// #############################################
 
 extern int ct_disable_trace;
 extern int ct_disable_alloc;
@@ -56,7 +101,6 @@ extern size_t ct_early_trace_count;
 extern size_t ct_early_trace_limit;
 extern thread_local const char* ct_current_site;
 
-// Feature flags (C API friendly).
 #define CT_FEATURE_TRACE (1ull << 0)
 #define CT_FEATURE_ALLOC (1ull << 1)
 #define CT_FEATURE_BOUNDS (1ull << 2)
@@ -78,10 +122,6 @@ extern "C"
 
     CT_NODISCARD CT_NOINSTR int ct_early_trace_should_log(void);
 }
-
-// #############################################
-//  Runtime-specific functions (NOT in coretrace-logger)
-// #############################################
 
 CT_NODISCARD CT_NOINSTR size_t ct_strlen(const char* str);
 CT_NODISCARD CT_NOINSTR int ct_streq(const char* lhs, const char* rhs);
@@ -111,12 +151,6 @@ CT_NOINSTR void ct_report_bounds_error(const void* base, const void* ptr, size_t
                                        const char* site, int is_write, size_t req_size,
                                        size_t alloc_size, const char* alloc_site,
                                        unsigned char state);
-
-// #############################################
-//  Compatibility wrappers: delegate to coretrace::*
-//  These allow existing runtime code to keep using
-//  the ct_* API without any changes.
-// #############################################
 
 CT_NODISCARD CT_NOINSTR inline std::string_view ct_color(CTColor color)
 {
@@ -171,7 +205,9 @@ CT_NOINSTR inline void ct_write_str(std::string_view str)
 CT_NOINSTR inline void ct_write_cstr(const char* str)
 {
     if (!str)
+    {
         return;
+    }
     coretrace::write_str(std::string_view(str));
 }
 
@@ -190,12 +226,6 @@ CT_NOINSTR inline void ct_write_prefix(CTLevel level)
     coretrace::write_prefix(level);
 }
 
-// #############################################
-//  ct_log: compatibility wrapper
-//  Delegates to coretrace::write_log_line for
-//  mutex-protected atomic output.
-// #############################################
-
 template <typename... Args>
 CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... args)
 {
@@ -203,6 +233,7 @@ CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... arg
     {
         return;
     }
+
     try
     {
         std::string msg = std::vformat(fmt, std::make_format_args(args...));
@@ -215,7 +246,7 @@ CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... arg
     }
     catch (...)
     {
-        static const char fallback[] = "ct: log format error\n";
+        static constexpr char fallback[] = "ct: log format error\n";
         coretrace::write_raw(fallback, sizeof(fallback) - 1);
     }
 }
