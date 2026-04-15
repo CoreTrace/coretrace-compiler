@@ -79,7 +79,8 @@ namespace
         }
         if (alloc_size > live_size)
         {
-            ct_shadow_poison_range(static_cast<unsigned char*>(ptr) + live_size, alloc_size - live_size);
+            ct_shadow_poison_range(static_cast<unsigned char*>(ptr) + live_size,
+                                   alloc_size - live_size);
         }
     }
 
@@ -256,7 +257,8 @@ namespace
         ct_lock_acquire();
         if (old_ptr && old_ptr != new_ptr)
         {
-            (void)ct_table_remove_with_state(old_ptr, CT_ENTRY_FREED, nullptr, nullptr, nullptr, nullptr);
+            (void)ct_table_remove_with_state(old_ptr, CT_ENTRY_FREED, nullptr, nullptr, nullptr,
+                                             nullptr);
         }
 
         auto& entry = ct_alloc_table[new_ptr];
@@ -315,8 +317,8 @@ namespace
             ::operator delete[](ptr);
             return;
         }
-        if (kind == CT_ALLOC_KIND_NEW || kind == CT_ALLOC_KIND_NEW_ARRAY || kind == CT_ALLOC_KIND_ALIGNED ||
-            kind == CT_ALLOC_KIND_MMAP)
+        if (kind == CT_ALLOC_KIND_NEW || kind == CT_ALLOC_KIND_NEW_ARRAY ||
+            kind == CT_ALLOC_KIND_ALIGNED || kind == CT_ALLOC_KIND_MMAP)
         {
             ct_release_memory(ptr, kind);
             return;
@@ -683,7 +685,8 @@ extern "C"
             return reinterpret_cast<void*>(-1);
         }
 
-        void* ptr = VirtualAlloc(addr, len, MEM_COMMIT | MEM_RESERVE, ct_translate_page_protection(prot));
+        void* ptr =
+            VirtualAlloc(addr, len, MEM_COMMIT | MEM_RESERVE, ct_translate_page_protection(prot));
         if (!ptr)
         {
             errno = ENOMEM;

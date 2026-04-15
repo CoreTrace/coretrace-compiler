@@ -21,12 +21,14 @@ namespace
 
     CT_NOINSTR void ct_ensure_symbols(void)
     {
-        std::call_once(ct_symbols_once, []
-        {
-            HANDLE process = GetCurrentProcess();
-            SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
-            (void)SymInitialize(process, nullptr, TRUE);
-        });
+        std::call_once(ct_symbols_once,
+                       []
+                       {
+                           HANDLE process = GetCurrentProcess();
+                           SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES |
+                                         SYMOPT_UNDNAME);
+                           (void)SymInitialize(process, nullptr, TRUE);
+                       });
     }
 
     CT_NOINSTR void ct_write_stack_frame(HANDLE process, void* frame)

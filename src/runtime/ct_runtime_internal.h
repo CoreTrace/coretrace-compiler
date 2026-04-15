@@ -45,8 +45,7 @@ inline int ct_msvc_atomic_exchange(volatile int* object, int desired)
 
 inline void ct_msvc_atomic_store(volatile int* object, int desired)
 {
-    (void)InterlockedExchange(reinterpret_cast<volatile long*>(object),
-                              static_cast<long>(desired));
+    (void)InterlockedExchange(reinterpret_cast<volatile long*>(object), static_cast<long>(desired));
 }
 
 inline bool ct_msvc_atomic_compare_exchange(volatile int* object, int* expected, int desired)
@@ -63,13 +62,12 @@ inline bool ct_msvc_atomic_compare_exchange(volatile int* object, int* expected,
     return false;
 }
 
-#define __atomic_exchange_n(object, desired, order)                                           \
+#define __atomic_exchange_n(object, desired, order)                                                \
     ct_msvc_atomic_exchange(reinterpret_cast<volatile int*>(object), static_cast<int>(desired))
-#define __atomic_store_n(object, desired, order)                                               \
+#define __atomic_store_n(object, desired, order)                                                   \
     ct_msvc_atomic_store(reinterpret_cast<volatile int*>(object), static_cast<int>(desired))
-#define __atomic_compare_exchange_n(object, expected, desired, weak, success_order,            \
-                                    failure_order)                                             \
-    ct_msvc_atomic_compare_exchange(reinterpret_cast<volatile int*>(object),                   \
+#define __atomic_compare_exchange_n(object, expected, desired, weak, success_order, failure_order) \
+    ct_msvc_atomic_compare_exchange(reinterpret_cast<volatile int*>(object),                       \
                                     reinterpret_cast<int*>(expected), static_cast<int>(desired))
 #else
 #define CT_NOINSTR __attribute__((no_instrument_function))

@@ -82,12 +82,14 @@ namespace
 
     CT_NOINSTR void ct_ensure_symbols(void)
     {
-        std::call_once(ct_symbols_once, []
-        {
-            HANDLE process = GetCurrentProcess();
-            SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
-            (void)SymInitialize(process, nullptr, TRUE);
-        });
+        std::call_once(ct_symbols_once,
+                       []
+                       {
+                           HANDLE process = GetCurrentProcess();
+                           SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES |
+                                         SYMOPT_UNDNAME);
+                           (void)SymInitialize(process, nullptr, TRUE);
+                       });
     }
 
     CT_NODISCARD CT_NOINSTR std::string ct_basename(std::string_view path)
@@ -155,8 +157,8 @@ namespace
         symbol->MaxNameLen = MAX_SYM_NAME;
 
         DWORD64 displacement = 0;
-        if (SymFromAddr(GetCurrentProcess(), reinterpret_cast<DWORD64>(addr), &displacement, symbol) ==
-            FALSE)
+        if (SymFromAddr(GetCurrentProcess(), reinterpret_cast<DWORD64>(addr), &displacement,
+                        symbol) == FALSE)
         {
             return false;
         }
@@ -313,7 +315,8 @@ namespace
         return reinterpret_cast<const CtRttiTypeDescriptor*>(type_addr);
     }
 
-    CT_NODISCARD CT_NOINSTR std::string ct_format_type_name(const CtRttiTypeDescriptor* type_descriptor)
+    CT_NODISCARD CT_NOINSTR std::string
+    ct_format_type_name(const CtRttiTypeDescriptor* type_descriptor)
     {
         if (!type_descriptor || !ct_is_readable(type_descriptor, sizeof(CtRttiTypeDescriptor)))
         {

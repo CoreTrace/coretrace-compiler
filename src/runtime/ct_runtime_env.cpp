@@ -69,7 +69,7 @@ CT_NOINSTR __attribute__((constructor)) static void ct_runtime_init(void)
     ct_apply_compiled_config();
 #ifdef _MSC_VER
 #pragma warning(push)
-#pragma warning(disable : 4996)  // MSVC warning: 'getenv': This function or variable may be unsafe
+#pragma warning(disable : 4996) // MSVC warning: 'getenv': This function or variable may be unsafe
 #endif
     if (getenv("CT_DISABLE_TRACE") != nullptr)
     {
@@ -126,7 +126,7 @@ CT_NOINSTR void ct_init_env_once(void)
     ct_apply_compiled_config();
 #ifdef _MSC_VER
 #pragma warning(push)
-#pragma warning(disable : 4996)  // MSVC warning: 'getenv': This function or variable may be unsafe
+#pragma warning(disable : 4996) // MSVC warning: 'getenv': This function or variable may be unsafe
 #endif
     if (getenv("CT_DISABLE_TRACE") != nullptr)
     {

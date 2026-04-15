@@ -5,9 +5,11 @@
 #include <cstdlib>
 
 #if defined(_M_IX86)
-#define CT_ALTNAME(symbol, fallback) __pragma(comment(linker, "/alternatename:_" #symbol "=_" #fallback))
+#define CT_ALTNAME(symbol, fallback)                                                               \
+    __pragma(comment(linker, "/alternatename:_" #symbol "=_" #fallback))
 #else
-#define CT_ALTNAME(symbol, fallback) __pragma(comment(linker, "/alternatename:" #symbol "=" #fallback))
+#define CT_ALTNAME(symbol, fallback)                                                               \
+    __pragma(comment(linker, "/alternatename:" #symbol "=" #fallback))
 #endif
 
 extern "C"
