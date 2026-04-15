@@ -961,6 +961,7 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
         (void)munmap(item.ptr, item.size);
         break;
     case CT_ALLOC_KIND_SBRK:
+#if defined(__linux__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     {
@@ -983,6 +984,11 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
         break;
     }
 #pragma clang diagnostic pop
+#else
+        ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} (sbrk not supported){}\n",
+               ct_color(CTColor::BgBrightYellow), item.ptr, ct_color(CTColor::Reset));
+        break;
+#endif
     case CT_ALLOC_KIND_MALLOC:
     default:
         if (ct_is_enabled(CT_FEATURE_SHADOW))
@@ -2404,6 +2410,7 @@ extern "C"
 
     CT_NODISCARD CT_NOINSTR void* __ct_sbrk(size_t incr, const char* site)
     {
+#if defined(__linux__)
         ct_init_env_once();
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -2455,34 +2462,35 @@ extern "C"
         }
 
         return prev;
+#else
+        (void)incr;
+        (void)site;
+        return reinterpret_cast<void*>(-1);
+#endif
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_brk(void* addr, const char* site)
     {
+#if defined(__linux__)
         ct_init_env_once();
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#if defined(__APPLE__)
-        void* rc = brk(addr);
-        void* ret = rc;
-#else
         int rc = brk(addr);
         void* ret = (rc == 0) ? addr : reinterpret_cast<void*>(-1);
-#endif
 #pragma clang diagnostic pop
         if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
-#if defined(__APPLE__)
-            ct_log(CTLevel::Info, "{}tracing-brk addr={:p} rc={:p} site={}{}\n",
-                   ct_color(CTColor::Cyan), addr, rc, ct_site_name(site), ct_color(CTColor::Reset));
-#else
             ct_log(CTLevel::Info, "{}tracing-brk addr={:p} rc={} ret={:p} site={}{}\n",
                    ct_color(CTColor::Cyan), addr, rc, ret, ct_site_name(site),
                    ct_color(CTColor::Reset));
-#endif
         }
         return ret;
+#else
+        (void)addr;
+        (void)site;
+        return reinterpret_cast<void*>(-1);
+#endif
     }
 
     CT_NOINSTR void __ct_autofree(void* ptr)
@@ -2674,6 +2682,7 @@ extern "C"
                    ct_color(CTColor::Reset));
             return;
         }
+#if defined(__linux__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
@@ -2695,6 +2704,10 @@ extern "C"
 
         ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} (sbrk not top){}\n",
                ct_color(CTColor::BgBrightYellow), ptr, ct_color(CTColor::Reset));
+#else
+        ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} (sbrk not supported){}\n",
+               ct_color(CTColor::BgBrightYellow), ptr, ct_color(CTColor::Reset));
+#endif
     }
 
     CT_NOINSTR void __ct_autofree_delete(void* ptr)

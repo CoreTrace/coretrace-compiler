@@ -20,6 +20,8 @@
 #endif
 #include <windows.h>
 #include <process.h>
+#else
+#include <unistd.h>
 #endif
 
 #if defined(_MSC_VER)

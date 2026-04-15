@@ -136,31 +136,89 @@ jobs:
         path: deps/coretrace-log
         fetch-depth: 1
 
-    - name: Install LLVM 20.1.0 to fixed location
+    - name: Install LLVM 20.1.0 archive with 7-Zip
       shell: pwsh
       run: |
         $ErrorActionPreference = "Stop"
+
         $llvmVersion = "20.1.0"
-        $installerUrl = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$llvmVersion/LLVM-$llvmVersion-win64.exe"
-        $installerPath = "$env:RUNNER_TEMP\LLVM-$llvmVersion-win64.exe"
+        $archiveName = "clang+llvm-$llvmVersion-x86_64-pc-windows-msvc.tar.xz"
+        $archiveUrl = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$llvmVersion/$archiveName"
+        $archivePath = Join-Path $env:RUNNER_TEMP $archiveName
+        $extractRoot = Join-Path $env:RUNNER_TEMP "llvm-extract"
         $installRoot = "C:\Program Files\LLVM-$llvmVersion"
-        $llvmCmakeDir = "$installRoot\lib\cmake\llvm"
-        $clangCmakeDir = "$installRoot\lib\cmake\clang"
+        $sevenZip = "${env:ProgramFiles}\7-Zip\7z.exe"
+        $tarPath = Join-Path $env:RUNNER_TEMP "clang+llvm-$llvmVersion-x86_64-pc-windows-msvc.tar"
 
-        Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
-        Start-Process -FilePath $installerPath -ArgumentList @("/S", "/D=$installRoot") -Wait -NoNewWindow
-
-        if (-not (Test-Path "$installRoot\bin\clang-cl.exe")) {
-          throw "clang-cl.exe not found after LLVM install: $installRoot\bin\clang-cl.exe"
-        }
-        if (-not (Test-Path $llvmCmakeDir)) {
-          throw "LLVM CMake package dir not found: $llvmCmakeDir"
-        }
-        if (-not (Test-Path $clangCmakeDir)) {
-          throw "Clang CMake package dir not found: $clangCmakeDir"
+        if (-not (Test-Path $sevenZip)) {
+          throw "7z.exe not found at $sevenZip"
         }
 
-        $clangVersion = & "$installRoot\bin\clang-cl.exe" --version
+        Write-Host "Downloading LLVM archive from $archiveUrl"
+        Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath
+        Write-Host "Download finished"
+        Get-Item $archivePath | Select-Object FullName, Length | Format-Table -AutoSize
+
+        if (Test-Path $extractRoot) {
+          Remove-Item -Recurse -Force $extractRoot
+        }
+        New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+
+        if (Test-Path $tarPath) {
+          Remove-Item -Force $tarPath
+        }
+
+        Write-Host "Extracting .xz to .tar with 7-Zip"
+        & $sevenZip x $archivePath "-o$env:RUNNER_TEMP" -y
+        if ($LASTEXITCODE -ne 0) {
+          throw "7-Zip failed while extracting .xz archive"
+        }
+
+        if (-not (Test-Path $tarPath)) {
+          throw "Expected tar file not found after xz extraction: $tarPath"
+        }
+
+        Write-Host "Extracting .tar to $extractRoot"
+        & $sevenZip x $tarPath "-o$extractRoot" -y
+        if ($LASTEXITCODE -ne 0) {
+          throw "7-Zip failed while extracting .tar archive"
+        }
+
+        Write-Host "Listing extracted directories"
+        Get-ChildItem $extractRoot -Directory | Select-Object Name, FullName | Format-Table -AutoSize
+
+        $extractedDir = Get-ChildItem $extractRoot -Directory | Select-Object -First 1
+        if (-not $extractedDir) {
+          throw "Failed to find extracted LLVM directory under $extractRoot"
+        }
+
+        if (Test-Path $installRoot) {
+          Remove-Item -Recurse -Force $installRoot
+        }
+        Move-Item -Path $extractedDir.FullName -Destination $installRoot
+
+        $clangClPath = Join-Path $installRoot "bin\clang-cl.exe"
+        $llvmCmakeDir = Join-Path $installRoot "lib\cmake\llvm"
+        $clangCmakeDir = Join-Path $installRoot "lib\cmake\clang"
+        $llvmConfigPath = Join-Path $llvmCmakeDir "LLVMConfig.cmake"
+        $clangConfigPath = Join-Path $clangCmakeDir "ClangConfig.cmake"
+
+        Write-Host "Checking extracted LLVM files"
+        Write-Host "clang-cl path: $clangClPath"
+        Write-Host "LLVMConfig path: $llvmConfigPath"
+        Write-Host "ClangConfig path: $clangConfigPath"
+
+        if (-not (Test-Path $clangClPath)) {
+          throw "clang-cl.exe not found after LLVM archive extraction: $clangClPath"
+        }
+        if (-not (Test-Path $llvmConfigPath)) {
+          throw "LLVMConfig.cmake not found after LLVM archive extraction: $llvmConfigPath"
+        }
+        if (-not (Test-Path $clangConfigPath)) {
+          throw "ClangConfig.cmake not found after LLVM archive extraction: $clangConfigPath"
+        }
+
+        $clangVersion = (& $clangClPath --version) -join " "
         if ($clangVersion -notmatch "clang version 20\.1\.0") {
           throw "Unexpected clang-cl version. Got: $clangVersion"
         }
