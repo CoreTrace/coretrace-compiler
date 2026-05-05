@@ -32,6 +32,7 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Host.h>
+#include <llvm/TargetParser/Triple.h>
 #include <llvm-c/Target.h>
 
 #include <algorithm>
@@ -148,6 +149,64 @@ namespace compilerlib
             return false;
         }
 
+        CT_NODISCARD llvm::Triple effectiveTargetTriple(const std::vector<std::string>& args)
+        {
+            std::string target = kTargetTriple.str();
+            for (size_t i = 0; i < args.size(); ++i)
+            {
+                llvm::StringRef arg = args[i];
+                if ((arg == "-target" || arg == "--target") && i + 1 < args.size())
+                {
+                    target = args[i + 1];
+                    ++i;
+                    continue;
+                }
+                if (arg.starts_with("--target="))
+                {
+                    target = arg.substr(std::strlen("--target=")).str();
+                    continue;
+                }
+                if (arg.starts_with("-target="))
+                {
+                    target = arg.substr(std::strlen("-target=")).str();
+                    continue;
+                }
+            }
+
+            return llvm::Triple(llvm::Triple::normalize(target));
+        }
+
+        CT_NODISCARD bool needsDlfcn(const RuntimeConfig& runtimeConfig)
+        {
+            return runtimeConfig.vtable_enabled || runtimeConfig.vcall_trace_enabled ||
+                   runtimeConfig.vtable_diag_enabled;
+        }
+
+        void appendRuntimeLinkOptions(std::vector<const char*>& clangArgs,
+                                      const llvm::Triple& targetTriple,
+                                      const RuntimeConfig& runtimeConfig)
+        {
+            if (targetTriple.isOSDarwin())
+            {
+                clangArgs.push_back("-lc++");
+                return;
+            }
+            if (targetTriple.isOSLinux())
+            {
+                clangArgs.push_back("-lstdc++");
+                if (needsDlfcn(runtimeConfig))
+                {
+                    clangArgs.push_back("-ldl");
+                }
+                return;
+            }
+            if (targetTriple.isWindowsGNUEnvironment())
+            {
+                clangArgs.push_back("-lstdc++");
+                clangArgs.push_back("-ldbghelp");
+            }
+        }
+
         void appendDiagnostics(std::string& out, const std::string& extra)
         {
             if (extra.empty())
@@ -239,6 +298,7 @@ namespace compilerlib
                 ctx_.clang_path = driverCfg.clang_path;
                 ctx_.clang_resource_dir = driverCfg.resource_dir;
                 ctx_.clang_sysroot = driverCfg.sysroot;
+                const llvm::Triple targetTriple = effectiveTargetTriple(ctx_.filtered_args);
 
                 ctx_.clang_args.clear();
                 ctx_.clang_args.push_back(ctx_.clang_path.c_str());
@@ -272,7 +332,7 @@ namespace compilerlib
                     ctx_.clang_args.push_back("-fno-builtin-free");
                     // Ensure position-independent code for Linux targets
                     // to avoid relocation errors with PIE-enabled distributions
-                    if (kTargetTriple.contains("linux"))
+                    if (targetTriple.isOSLinux())
                     {
                         if (!hasArg(ctx_.filtered_args, "-fPIE") &&
                             !hasArg(ctx_.filtered_args, "-fPIC"))
@@ -286,7 +346,7 @@ namespace compilerlib
                 {
 #ifdef CT_RUNTIME_LIB_PATH
                     // Ensure position-independent executable linking on Linux
-                    if (kTargetTriple.contains("linux"))
+                    if (targetTriple.isOSLinux())
                     {
                         if (!hasArg(ctx_.filtered_args, "-pie"))
                         {
@@ -299,19 +359,7 @@ namespace compilerlib
 #ifdef CT_RUNTIME_LOGGER_LIB_PATH
                     ctx_.clang_args.push_back(CT_RUNTIME_LOGGER_LIB_PATH);
 #endif
-#ifdef __APPLE__
-                    ctx_.clang_args.push_back("-lc++");
-#else
-                    ctx_.clang_args.push_back("-lstdc++");
-#if defined(__linux__)
-                    if (ctx_.runtimeConfig.vtable_enabled ||
-                        ctx_.runtimeConfig.vcall_trace_enabled ||
-                        ctx_.runtimeConfig.vtable_diag_enabled)
-                    {
-                        ctx_.clang_args.push_back("-ldl");
-                    }
-#endif
-#endif
+                    appendRuntimeLinkOptions(ctx_.clang_args, targetTriple, ctx_.runtimeConfig);
 #else
                     error = "instrumentation runtime path not configured";
                     return false;
