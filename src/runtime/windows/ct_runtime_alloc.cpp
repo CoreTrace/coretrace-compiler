@@ -27,6 +27,17 @@ namespace
         CT_ALLOC_KIND_ALIGNED = 5
     };
 
+    enum class CtReleaseApi : unsigned char
+    {
+        Free,
+        Delete,
+        DeleteArray,
+        DeleteNothrow,
+        DeleteArrayNothrow,
+        DeleteDestroying,
+        DeleteArrayDestroying
+    };
+
     struct CtAllocEntry
     {
         size_t size = 0;
@@ -110,6 +121,91 @@ namespace
         ct_log(CTLevel::Warn, "ct: {} skipped ptr={:p} ({})\n", action, ptr, reason);
     }
 
+    CT_NODISCARD CT_NOINSTR const char* ct_release_api_name(CtReleaseApi api)
+    {
+        switch (api)
+        {
+        case CtReleaseApi::Free:
+            return "free";
+        case CtReleaseApi::Delete:
+            return "delete";
+        case CtReleaseApi::DeleteArray:
+            return "delete[]";
+        case CtReleaseApi::DeleteNothrow:
+            return "delete-nothrow";
+        case CtReleaseApi::DeleteArrayNothrow:
+            return "delete[]-nothrow";
+        case CtReleaseApi::DeleteDestroying:
+            return "destroying-delete";
+        case CtReleaseApi::DeleteArrayDestroying:
+            return "destroying-delete[]";
+        }
+        return "release";
+    }
+
+    CT_NODISCARD CT_NOINSTR const char* ct_expected_kind_label(CtReleaseApi api)
+    {
+        switch (api)
+        {
+        case CtReleaseApi::Free:
+            return "malloc/aligned";
+        case CtReleaseApi::Delete:
+        case CtReleaseApi::DeleteNothrow:
+        case CtReleaseApi::DeleteDestroying:
+            return "new";
+        case CtReleaseApi::DeleteArray:
+        case CtReleaseApi::DeleteArrayNothrow:
+        case CtReleaseApi::DeleteArrayDestroying:
+            return "new[]";
+        }
+        return "unknown";
+    }
+
+    CT_NODISCARD CT_NOINSTR unsigned char ct_default_kind_for_release_api(CtReleaseApi api)
+    {
+        switch (api)
+        {
+        case CtReleaseApi::Free:
+            return CT_ALLOC_KIND_MALLOC;
+        case CtReleaseApi::DeleteArray:
+        case CtReleaseApi::DeleteArrayNothrow:
+        case CtReleaseApi::DeleteArrayDestroying:
+            return CT_ALLOC_KIND_NEW_ARRAY;
+        case CtReleaseApi::Delete:
+        case CtReleaseApi::DeleteNothrow:
+        case CtReleaseApi::DeleteDestroying:
+            return CT_ALLOC_KIND_NEW;
+        }
+        return CT_ALLOC_KIND_MALLOC;
+    }
+
+    CT_NODISCARD CT_NOINSTR bool ct_release_api_matches_kind(CtReleaseApi api, unsigned char kind)
+    {
+        switch (api)
+        {
+        case CtReleaseApi::Free:
+            return kind == CT_ALLOC_KIND_MALLOC || kind == CT_ALLOC_KIND_ALIGNED;
+        case CtReleaseApi::Delete:
+        case CtReleaseApi::DeleteNothrow:
+        case CtReleaseApi::DeleteDestroying:
+            return kind == CT_ALLOC_KIND_NEW;
+        case CtReleaseApi::DeleteArray:
+        case CtReleaseApi::DeleteArrayNothrow:
+        case CtReleaseApi::DeleteArrayDestroying:
+            return kind == CT_ALLOC_KIND_NEW_ARRAY;
+        }
+        return false;
+    }
+
+    CT_NOINSTR void ct_log_deallocator_mismatch(const char* action, void* ptr,
+                                                unsigned char recorded_kind, const char* expected,
+                                                const char* site)
+    {
+        ct_log(CTLevel::Warn,
+               "ct: deallocator mismatch action={} ptr={:p} expected={} recorded={} site={}\n",
+               action, ptr, expected, ct_kind_name(recorded_kind), ct_site_name(site));
+    }
+
     CT_NODISCARD CT_NOINSTR int ct_table_remove_with_state(void* ptr, unsigned char new_state,
                                                            size_t* size_out, size_t* req_size_out,
                                                            const char** site_out,
@@ -153,7 +249,7 @@ namespace
         return 1;
     }
 
-    CT_NOINSTR void ct_release_memory(void* ptr, unsigned char kind)
+    CT_NOINSTR void ct_release_autofree_memory(void* ptr, unsigned char kind)
     {
         if (!ptr)
         {
@@ -180,21 +276,94 @@ namespace
         }
     }
 
-    CT_NOINSTR void ct_release_unknown_delete(void* ptr, bool is_array)
+    CT_NOINSTR void ct_release_by_called_api(void* ptr, CtReleaseApi api,
+                                             unsigned char recorded_kind)
     {
         if (!ptr)
         {
             return;
         }
 
-        if (is_array)
+        switch (api)
         {
-            ::operator delete[](ptr);
-        }
-        else
-        {
+        case CtReleaseApi::Free:
+            if (recorded_kind == CT_ALLOC_KIND_ALIGNED)
+            {
+                _aligned_free(ptr);
+                return;
+            }
+            std::free(ptr);
+            return;
+        case CtReleaseApi::Delete:
             ::operator delete(ptr);
+            return;
+        case CtReleaseApi::DeleteArray:
+            ::operator delete[](ptr);
+            return;
+        case CtReleaseApi::DeleteNothrow:
+            ::operator delete(ptr, std::nothrow);
+            return;
+        case CtReleaseApi::DeleteArrayNothrow:
+            ::operator delete[](ptr, std::nothrow);
+            return;
+        case CtReleaseApi::DeleteDestroying:
+            ::operator delete(ptr);
+            return;
+        case CtReleaseApi::DeleteArrayDestroying:
+            ::operator delete[](ptr);
+            return;
         }
+    }
+
+    CT_NODISCARD CT_NOINSTR int ct_remove_for_release(void* ptr, unsigned char new_state,
+                                                      size_t* size_out, const char** site_out,
+                                                      unsigned char* kind_out);
+
+    CT_NOINSTR void ct_release_tracked_pointer(void* ptr, CtReleaseApi api)
+    {
+        ct_init_env_once();
+
+        const char* action = ct_release_api_name(api);
+        unsigned char kind = ct_default_kind_for_release_api(api);
+        if (!ct_is_enabled(CT_FEATURE_ALLOC))
+        {
+            ct_release_by_called_api(ptr, api, kind);
+            return;
+        }
+
+        if (!ptr)
+        {
+            ct_log_skip_event(action, ptr, "null");
+            ct_release_by_called_api(ptr, api, kind);
+            return;
+        }
+
+        size_t size = 0;
+        const char* site = nullptr;
+
+        ct_lock_acquire();
+        const int found = ct_remove_for_release(ptr, CT_ENTRY_FREED, &size, &site, &kind);
+        ct_lock_release();
+
+        if (found == -1)
+        {
+            ct_log_skip_event(action, ptr, "already freed");
+            return;
+        }
+        if (found == 0)
+        {
+            ct_log_skip_event(action, ptr, "unknown");
+            ct_release_by_called_api(ptr, api, kind);
+            return;
+        }
+
+        ct_track_shadow_free(ptr, size);
+        ct_log_alloc_event(action, ptr, size, site, kind);
+        if (!ct_release_api_matches_kind(api, kind))
+        {
+            ct_log_deallocator_mismatch(action, ptr, kind, ct_expected_kind_label(api), site);
+        }
+        ct_release_by_called_api(ptr, api, kind);
     }
 
     CT_NODISCARD CT_NOINSTR DWORD ct_translate_page_protection(int prot)
@@ -281,7 +450,7 @@ namespace
         return ct_table_remove_with_state(ptr, new_state, size_out, &req_size, site_out, kind_out);
     }
 
-    CT_NOINSTR void ct_autofree_impl(void* ptr, bool is_array)
+    CT_NOINSTR void ct_autofree_impl(void* ptr)
     {
         ct_init_env_once();
         if (!ct_is_enabled(CT_FEATURE_ALLOC) || !ct_is_enabled(CT_FEATURE_AUTOFREE))
@@ -312,19 +481,7 @@ namespace
         ct_log(CTLevel::Warn, "ct: auto-free ptr={:p} size={} site={}\n", ptr, size,
                ct_site_name(site));
 
-        if (kind == CT_ALLOC_KIND_NEW_ARRAY || (kind == CT_ALLOC_KIND_NEW && is_array))
-        {
-            ::operator delete[](ptr);
-            return;
-        }
-        if (kind == CT_ALLOC_KIND_NEW || kind == CT_ALLOC_KIND_NEW_ARRAY ||
-            kind == CT_ALLOC_KIND_ALIGNED || kind == CT_ALLOC_KIND_MMAP)
-        {
-            ct_release_memory(ptr, kind);
-            return;
-        }
-
-        std::free(ptr);
+        ct_release_autofree_memory(ptr, kind);
     }
 
     struct CtLeakReporter
@@ -750,155 +907,61 @@ extern "C"
 
     CT_NOINSTR void __ct_autofree(void* ptr)
     {
-        ct_autofree_impl(ptr, false);
+        ct_autofree_impl(ptr);
     }
 
     CT_NOINSTR void __ct_autofree_munmap(void* ptr)
     {
-        ct_autofree_impl(ptr, false);
+        ct_autofree_impl(ptr);
     }
 
     CT_NOINSTR void __ct_autofree_sbrk(void* ptr)
     {
-        ct_autofree_impl(ptr, false);
+        ct_autofree_impl(ptr);
     }
 
     CT_NOINSTR void __ct_autofree_delete(void* ptr)
     {
-        ct_autofree_impl(ptr, false);
+        ct_autofree_impl(ptr);
     }
 
     CT_NOINSTR void __ct_autofree_delete_array(void* ptr)
     {
-        ct_autofree_impl(ptr, true);
+        ct_autofree_impl(ptr);
     }
 
     CT_NOINSTR void __ct_free(void* ptr)
     {
-        ct_init_env_once();
-        if (!ct_is_enabled(CT_FEATURE_ALLOC))
-        {
-            std::free(ptr);
-            return;
-        }
-
-        if (!ptr)
-        {
-            ct_log_skip_event("free", ptr, "null");
-            std::free(ptr);
-            return;
-        }
-
-        size_t size = 0;
-        const char* site = nullptr;
-        unsigned char kind = CT_ALLOC_KIND_MALLOC;
-
-        ct_lock_acquire();
-        const int found = ct_remove_for_release(ptr, CT_ENTRY_FREED, &size, &site, &kind);
-        ct_lock_release();
-
-        if (found == -1)
-        {
-            ct_log_skip_event("free", ptr, "already freed");
-            return;
-        }
-        if (found == 0)
-        {
-            ct_log_skip_event("free", ptr, "unknown");
-            std::free(ptr);
-            return;
-        }
-
-        ct_track_shadow_free(ptr, size);
-        ct_log_alloc_event("free", ptr, size, site, kind);
-        ct_release_memory(ptr, kind);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::Free);
     }
 
     CT_NOINSTR void __ct_delete(void* ptr)
     {
-        ct_init_env_once();
-        if (!ct_is_enabled(CT_FEATURE_ALLOC))
-        {
-            ::operator delete(ptr);
-            return;
-        }
-
-        size_t size = 0;
-        const char* site = nullptr;
-        unsigned char kind = CT_ALLOC_KIND_NEW;
-
-        ct_lock_acquire();
-        const int found = ct_remove_for_release(ptr, CT_ENTRY_FREED, &size, &site, &kind);
-        ct_lock_release();
-
-        if (found == -1)
-        {
-            ct_log_skip_event("delete", ptr, "already freed");
-            return;
-        }
-        if (found == 0)
-        {
-            ct_log_skip_event("delete", ptr, "unknown");
-            ct_release_unknown_delete(ptr, false);
-            return;
-        }
-
-        ct_track_shadow_free(ptr, size);
-        ct_log_alloc_event("delete", ptr, size, site, kind);
-        ct_release_memory(ptr, kind);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::Delete);
     }
 
     CT_NOINSTR void __ct_delete_array(void* ptr)
     {
-        ct_init_env_once();
-        if (!ct_is_enabled(CT_FEATURE_ALLOC))
-        {
-            ::operator delete[](ptr);
-            return;
-        }
-
-        size_t size = 0;
-        const char* site = nullptr;
-        unsigned char kind = CT_ALLOC_KIND_NEW_ARRAY;
-
-        ct_lock_acquire();
-        const int found = ct_remove_for_release(ptr, CT_ENTRY_FREED, &size, &site, &kind);
-        ct_lock_release();
-
-        if (found == -1)
-        {
-            ct_log_skip_event("delete[]", ptr, "already freed");
-            return;
-        }
-        if (found == 0)
-        {
-            ct_log_skip_event("delete[]", ptr, "unknown");
-            ct_release_unknown_delete(ptr, true);
-            return;
-        }
-
-        ct_track_shadow_free(ptr, size);
-        ct_log_alloc_event("delete[]", ptr, size, site, kind);
-        ct_release_memory(ptr, kind);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArray);
     }
 
     CT_NOINSTR void __ct_delete_nothrow(void* ptr)
     {
-        __ct_delete(ptr);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteNothrow);
     }
 
     CT_NOINSTR void __ct_delete_array_nothrow(void* ptr)
     {
-        __ct_delete_array(ptr);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayNothrow);
     }
 
     CT_NOINSTR void __ct_delete_destroying(void* ptr)
     {
-        __ct_delete(ptr);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteDestroying);
     }
 
     CT_NOINSTR void __ct_delete_array_destroying(void* ptr)
     {
-        __ct_delete_array(ptr);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayDestroying);
     }
 }
