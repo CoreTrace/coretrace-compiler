@@ -13,6 +13,15 @@ mkdir -p build && cd build
 ./build.sh
 ```
 
+Windows (native, produces `cc.exe` under `dist/windows/bin`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 `
+  -LLVMDir "C:\LLVM\lib\cmake\llvm" `
+  -LoggerSourceDir "C:\Users\shookapic\Documents\coretrace-log" `
+  -Configuration Release
+```
+
 macOS:
 
 ```zsh

@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import os
 from pathlib import Path
 import shutil
 
@@ -50,12 +51,73 @@ def assert_stderr_contains(text: str) -> Assertion:
                 f"stderr does not contain '{text}'\nstderr:\n{res.run.stderr}")
     return Assertion(name=f"stderr_contains_{text}", check=_check)
 
+def _read_artifact_bytes(res, path: str) -> bytes:
+    artifact = Path(path)
+    if not artifact.is_absolute():
+        artifact = res.run.cwd / artifact
+    require(artifact.exists(), f"output does not exist: {artifact}")
+    return artifact.read_bytes()
+
+def _is_windows_native_artifact(data: bytes) -> bool:
+    if data.startswith(b"MZ"):
+        return True
+    if len(data) < 2:
+        return False
+    return data[:2] in {b"\x64\x86", b"\x4c\x01", b"\x64\xaa"}
+
+def assert_windows_native_artifact_at(path: str) -> Assertion:
+    def _check(res) -> None:
+        data = _read_artifact_bytes(res, path)
+        require(
+            _is_windows_native_artifact(data),
+            f"expected PE/COFF artifact at {path}, got unrecognized header",
+        )
+    return Assertion(name=f"windows_native_artifact_{Path(path).name}", check=_check)
+
+def native_artifact_assert_at(path: str, platform_os: OS) -> Assertion:
+    if platform_os == OS.WINDOWS:
+        return assert_windows_native_artifact_at(path)
+    return assert_native_binary_kind_at(path)
+
+def resolve_compiler_binary() -> Path | None:
+    candidates: list[Path] = []
+
+    env_override = os.environ.get("CORETRACE_COMPILER_TEST_CC")
+    if env_override:
+        candidates.append(Path(env_override))
+
+    candidates.extend([
+        ROOT / "dist" / "windows" / "bin" / "cc.exe",
+        ROOT / "build" / "cc",
+        ROOT / "build" / "Release" / "cc.exe",
+        ROOT / "build-win" / "cc.exe",
+        ROOT / "build-win" / "Release" / "cc.exe",
+    ])
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+
+    return None
+
 def main() -> int:
-    cc_bin = (ROOT / "build" / "cc").resolve()
-    runner = CompilerRunner(RunnerConfig(executable=cc_bin))
-    if not cc_bin.exists():
-        print(f"cc binary not found: {cc_bin}")
+    platform = detect_platform()
+    cc_bin = resolve_compiler_binary()
+    if cc_bin is None:
+        print("cc binary not found. Tried:")
+        for candidate in [
+            os.environ.get("CORETRACE_COMPILER_TEST_CC", ""),
+            str(ROOT / "dist" / "windows" / "bin" / "cc.exe"),
+            str(ROOT / "build" / "cc"),
+            str(ROOT / "build" / "Release" / "cc.exe"),
+            str(ROOT / "build-win" / "cc.exe"),
+            str(ROOT / "build-win" / "Release" / "cc.exe"),
+        ]:
+            if candidate:
+                print(f"  - {candidate}")
         return 1
+
+    runner = CompilerRunner(RunnerConfig(executable=cc_bin))
 
     # Fixtures (ex: hello.c)
     src = FIXTURES / "hello.c"
@@ -65,12 +127,15 @@ def main() -> int:
     vtable_src = FIXTURES / "vtable.cpp"
 
     def base_out_assertions(out_name: str):
-        return [
+        assertions = [
             assert_exit_code(0),
             assert_argv_contains(["-o"]),          # check args passed
             assert_output_name(out_name),          # check binary name respected
             assert_output_exists(),
         ]
+        if platform.os == OS.WINDOWS:
+            assertions.append(assert_windows_native_artifact_at(out_name))
+        return assertions
 
     tc_macho = TestCase(
         name="compile_macho_hello",
@@ -107,7 +172,7 @@ def main() -> int:
             extra_args=[],
         ),
         assertions=base_out_assertions("hello.out") + [
-            assert_native_binary_kind(),
+            assert_windows_native_artifact_at("hello.out") if platform.os == OS.WINDOWS else assert_native_binary_kind(),
         ],
     )
 
@@ -120,7 +185,7 @@ def main() -> int:
             extra_args=[],
         ),
         assertions=base_out_assertions("hello_cpp.out") + [
-            assert_native_binary_kind(),
+            assert_windows_native_artifact_at("hello_cpp.out") if platform.os == OS.WINDOWS else assert_native_binary_kind(),
         ],
     )
 
@@ -136,7 +201,7 @@ def main() -> int:
             assert_exit_code(0),
             assert_argv_contains(["-o=main"]),
             assert_output_exists_at("main"),
-            assert_native_binary_kind_at("main"),
+            native_artifact_assert_at("main", platform.os),
         ],
     )
 
@@ -152,7 +217,7 @@ def main() -> int:
             assert_exit_code(0),
             assert_argv_contains(["-D", "DEBUG"]),
             assert_output_exists_at("debug_space"),
-            assert_native_binary_kind_at("debug_space"),
+            native_artifact_assert_at("debug_space", platform.os),
         ],
     )
 
@@ -168,7 +233,7 @@ def main() -> int:
             assert_exit_code(0),
             assert_argv_contains(["-DDEBUG"]),
             assert_output_exists_at("debug_compact"),
-            assert_native_binary_kind_at("debug_compact"),
+            native_artifact_assert_at("debug_compact", platform.os),
         ],
     )
 
@@ -184,7 +249,7 @@ def main() -> int:
             assert_exit_code(0),
             assert_argv_contains(["-x=c++"]),
             assert_output_exists_at("hello_xcxx.out"),
-            assert_native_binary_kind_at("hello_xcxx.out"),
+            native_artifact_assert_at("hello_xcxx.out", platform.os),
         ],
     )
 
@@ -198,7 +263,7 @@ def main() -> int:
         ),
         assertions=base_out_assertions("hello_instr_c.out") + [
             assert_argv_contains(["--instrument"]),
-            assert_native_binary_kind(),
+            assert_windows_native_artifact_at("hello_instr_c.out") if platform.os == OS.WINDOWS else assert_native_binary_kind(),
         ],
     )
 
@@ -212,7 +277,7 @@ def main() -> int:
         ),
         assertions=base_out_assertions("hello_instr_cpp.out") + [
             assert_argv_contains(["--instrument"]),
-            assert_native_binary_kind(),
+            assert_windows_native_artifact_at("hello_instr_cpp.out") if platform.os == OS.WINDOWS else assert_native_binary_kind(),
         ],
     )
 
@@ -228,7 +293,7 @@ def main() -> int:
             assert_exit_code(0),
             assert_argv_contains(["--instrument", "-x=c++"]),
             assert_output_exists_at("hello_instr_xcxx.out"),
-            assert_native_binary_kind_at("hello_instr_xcxx.out"),
+            native_artifact_assert_at("hello_instr_xcxx.out", platform.os),
         ],
     )
 
@@ -306,7 +371,7 @@ def main() -> int:
         assertions=[
             assert_exit_code(0),
             assert_argv_contains(["-c"]),
-            assert_native_binary_kind_at("hello.o"),
+            native_artifact_assert_at("hello.o", platform.os),
         ],
     )
 
@@ -321,7 +386,7 @@ def main() -> int:
         assertions=[
             assert_exit_code(0),
             assert_argv_contains(["-c", "-O2"]),
-            assert_native_binary_kind_at("hello.o"),
+            native_artifact_assert_at("hello.o", platform.os),
         ],
     )
 
@@ -337,7 +402,7 @@ def main() -> int:
             assert_exit_code(0),
             assert_argv_contains(["--instrument", "-o", "app"]),
             assert_output_exists_at("app"),
-            assert_native_binary_kind_at("app"),
+            native_artifact_assert_at("app", platform.os),
         ],
     )
 
@@ -353,7 +418,7 @@ def main() -> int:
             assert_exit_code(0),
             assert_argv_contains(["--instrument", "--ct-shadow"]),
             assert_output_exists_at("app_shadow"),
-            assert_native_binary_kind_at("app_shadow"),
+            native_artifact_assert_at("app_shadow", platform.os),
         ],
     )
 
@@ -369,7 +434,7 @@ def main() -> int:
             assert_exit_code(0),
             assert_argv_contains(["--instrument", "--ct-shadow-aggressive", "--ct-bounds-no-abort"]),
             assert_output_exists_at("app_shadow_aggr"),
-            assert_native_binary_kind_at("app_shadow_aggr"),
+            native_artifact_assert_at("app_shadow_aggr", platform.os),
         ],
     )
 
@@ -385,7 +450,7 @@ def main() -> int:
             assert_exit_code(0),
             assert_argv_contains(["--instrument", "--ct-modules=vtable", "--ct-vcall-trace"]),
             assert_output_exists_at("app_vtable"),
-            assert_native_binary_kind_at("app_vtable"),
+            native_artifact_assert_at("app_vtable", platform.os),
         ],
     )
 
@@ -449,7 +514,6 @@ def main() -> int:
         ],
     )
 
-    platform = detect_platform()
     common_cases = [tc_o_eq, tc_d_space, tc_d_compact, tc_cpp, tc_x_cxx]
     instrument_cases = [
         tc_instrument_c,
@@ -476,7 +540,18 @@ def main() -> int:
     elif platform.os == OS.LINUX:
         cases = [tc_elf, *common_cases, *instrument_cases, *readme_cases]
     else:
-        cases = [tc_native, *common_cases]
+        windows_readme_cases = [
+            tc_readme_emit_llvm,
+            tc_readme_c_obj,
+            tc_readme_c_obj_o2,
+            tc_readme_instrument,
+            tc_readme_shadow,
+            tc_readme_shadow_aggr,
+            tc_readme_inmem,
+            tc_optnone_emit_llvm,
+            tc_optnone_disable_o0,
+        ]
+        cases = [tc_native, *common_cases, *instrument_cases, *windows_readme_cases]
 
     suite = TestSuite(name="compiler_smoke", cases=cases)
 

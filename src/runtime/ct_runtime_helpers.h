@@ -2,9 +2,35 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <dbghelp.h>
+
+inline bool ct_demangle(const char* name, std::string& out)
+{
+    if (!name || name[0] == '\0')
+    {
+        return false;
+    }
+
+    char buffer[1024];
+    if (UnDecorateSymbolName(name, buffer, static_cast<DWORD>(sizeof(buffer)), UNDNAME_COMPLETE) ==
+        0)
+    {
+        return false;
+    }
+
+    out.assign(buffer);
+    return true;
+}
+#else
 #include <cstdlib>
 #include <cxxabi.h>
-#include <string>
 
 __attribute__((no_instrument_function)) inline bool ct_demangle(const char* name, std::string& out)
 {
@@ -32,3 +58,4 @@ __attribute__((no_instrument_function)) inline bool ct_demangle(const char* name
     }
     return false;
 }
+#endif
