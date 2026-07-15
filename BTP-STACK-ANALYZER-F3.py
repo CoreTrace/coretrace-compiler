@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Smoke test for CoreTrace compiler instrumentation flags.
 
 This script compiles and runs a tiny C program with the CoreTrace compiler
