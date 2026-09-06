@@ -14,6 +14,7 @@
 #include <clang/Frontend/FrontendActions.h>
 #include <clang/Driver/Compilation.h>
 #include <clang/Driver/Driver.h>
+#include <mutex>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/FrontendOptions.h>
 #include <clang/CodeGen/CodeGenAction.h>
@@ -741,18 +742,21 @@ namespace compilerlib
             }
 
           private:
+            // Target registration mutates LLVM's global registry; two threads compiling
+            // their first module concurrently used to race the plain-bool guard here and
+            // corrupt the registry (workers then spun or hung). call_once serialises it.
             static void initTargetsOnce(void)
             {
-                static bool initialized = false;
-                if (initialized)
-                    return;
-                initialized = true;
-
-                LLVMInitializeAllTargetInfos();
-                LLVMInitializeAllTargets();
-                LLVMInitializeAllTargetMCs();
-                LLVMInitializeAllAsmParsers();
-                LLVMInitializeAllAsmPrinters();
+                static std::once_flag initialized;
+                std::call_once(initialized,
+                               []
+                               {
+                                   LLVMInitializeAllTargetInfos();
+                                   LLVMInitializeAllTargets();
+                                   LLVMInitializeAllTargetMCs();
+                                   LLVMInitializeAllAsmParsers();
+                                   LLVMInitializeAllAsmPrinters();
+                               });
             }
 
             void resetDiagnostics(void)
