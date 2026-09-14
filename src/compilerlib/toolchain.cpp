@@ -439,6 +439,9 @@ namespace compilerlib
         {
             llvm::SmallString<256> libDir(exeDir);
             llvm::sys::path::append(libDir, "..", "lib");
+            // getMainExecutable is not canonical on every platform; keep the link
+            // line free of "bin/../lib".
+            llvm::sys::path::remove_dots(libDir, /*remove_dot_dot=*/true);
             if (runtimeArchivesInDir(libDir, out))
                 return true;
             if (runtimeArchivesInDir(exeDir, out))
