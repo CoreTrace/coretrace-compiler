@@ -45,6 +45,19 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
   && cmake --build build -j"$(nproc)"
 ```
 
+## Tests
+
+After building into `build/`:
+
+```zsh
+python3 test/examples/test_smoke.py        # compiler smoke tests (needs coretrace-testkit)
+bash test/run_autofree_tests.sh            # auto-free fixtures under test/
+bash test/run_runtime_tests.sh             # alloc, new/delete, shadow and vtable fixtures
+```
+
+Both shell runners accept an output directory as first argument and `CC_BIN` to point at
+another compiler binary. CI runs all of them on Linux and macOS.
+
 ## Code Style (clang-format)
 
 - Target version: `clang-format` 17 (CI uses this).

@@ -99,7 +99,6 @@ include_directories(
   include
 )
 
-option(BUILD_TESTS "Build test executables" OFF)
 option(ENABLE_DEBUG_ASAN "Enable debug symbols and AddressSanitizer" OFF)
 
 if(ENABLE_DEBUG_ASAN)
@@ -148,9 +147,12 @@ set(CORETRACE_LOGGER_BUILD_EXAMPLES OFF CACHE BOOL "Disable logger examples" FOR
 set(CORETRACE_LOGGER_BUILD_TESTS OFF CACHE BOOL "Disable logger tests" FORCE)
 
 include(FetchContent)
+# Pinned to an immutable commit so a push to coretrace-log cannot change this build.
+# Keep CORETRACE_LOG_REF in .github/workflows/build.yml on the same commit.
+set(CORETRACE_LOGGER_GIT_TAG "624688ad5e5d00a1d04fd72909d43fe6d948575b" CACHE STRING "coretrace-log commit or tag to build against")
 FetchContent_Declare(coretrace_logger
   GIT_REPOSITORY https://github.com/CoreTrace/coretrace-log.git
-  GIT_TAG        main
+  GIT_TAG        ${CORETRACE_LOGGER_GIT_TAG}
   EXCLUDE_FROM_ALL
 )
 
@@ -348,28 +350,6 @@ install(TARGETS compilerlib_static compilerlib_shared cc
 install(DIRECTORY include/ DESTINATION include)
 
 set(USE_SHARED_LIB OFF CACHE BOOL "Link with shared compilerlib")
-
-if(BUILD_TESTS)
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_compiler.cpp")
-    add_executable(test_compiler test/test_compiler.cpp)
-    coretrace_force_msvc_runtime(test_compiler)
-    coretrace_disable_rtti(test_compiler)
-
-    if(USE_SHARED_LIB)
-      target_link_libraries(test_compiler PRIVATE compilerlib_shared)
-      set_target_properties(test_compiler PROPERTIES
-        BUILD_RPATH "@loader_path/../lib"
-        INSTALL_RPATH "@loader_path/../lib"
-      )
-    else()
-      target_link_libraries(test_compiler PRIVATE compilerlib_static)
-    endif()
-
-    target_include_directories(test_compiler PRIVATE include)
-  else()
-    message(STATUS "Test file test/test_compiler.cpp not found, skipping test build")
-  endif()
-endif()
 
 if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
   add_custom_target(format

@@ -38,7 +38,9 @@ RUN rm -rf build \
        -DUSE_SHARED_LIB=OFF \
     && cmake --build build -j"$(nproc)"
 
-RUN bash test/scripts/linux_compile.sh
+RUN bash test/scripts/linux_compile.sh \
+    && bash test/run_autofree_tests.sh /tmp/ct_autofree_tests \
+    && bash test/run_runtime_tests.sh /tmp/ct_runtime_tests
 
 RUN python3 -m venv .venv \
     && . .venv/bin/activate \

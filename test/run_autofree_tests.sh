@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CC_BIN="${ROOT_DIR}/build/cc"
+CC_BIN="${CC_BIN:-${ROOT_DIR}/build/cc}"
 OUT_DIR="${1:-/tmp/ct_autofree_tests}"
 
 if command -v rg >/dev/null 2>&1; then

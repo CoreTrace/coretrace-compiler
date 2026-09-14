@@ -8,6 +8,10 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+env:
+  # Keep on the same commit as CORETRACE_LOGGER_GIT_TAG in CMakeLists.txt.
+  CORETRACE_LOG_REF: 624688ad5e5d00a1d04fd72909d43fe6d948575b
+
 jobs:
   build:
     name: Build on ${{ matrix.os }}
@@ -94,6 +98,13 @@ jobs:
         python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git
         python test/examples/test_smoke.py
         python3 test/examples/test_extern_project.py
+        python3 test/examples/test_help_smoke.py
+
+    - name: Run runtime fixture suites (Linux/macOS)
+      if: runner.os == 'Linux' || runner.os == 'macOS'
+      run: |
+        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
+        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
 
     - name: Docker tests (multi-arch, Linux)
       if: runner.os == 'Linux' && github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -127,12 +138,12 @@ jobs:
         path: deps/coretrace-log
         fetch-depth: 1
 
-    - name: Checkout coretrace-log main fallback
+    - name: Checkout coretrace-log pinned fallback
       if: steps.checkout_logger_ref.outcome == 'failure'
       uses: actions/checkout@v4
       with:
         repository: CoreTrace/coretrace-log
-        ref: main
+        ref: ${{ env.CORETRACE_LOG_REF }}
         path: deps/coretrace-log
         fetch-depth: 1
 
