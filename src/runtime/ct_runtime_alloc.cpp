@@ -892,6 +892,7 @@ CT_NODISCARD CT_NOINSTR static int ct_autofree_scan_for_ptr(void* ptr, size_t si
     }
     vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads),
                   thread_count * sizeof(thread_t));
+    mach_port_deallocate(mach_task_self(), self_thread);
 
     const int debug_level = ct_autofree_scan_debug.load(std::memory_order_relaxed);
     if (debug_level > 1 || (debug_level == 1 && found))
@@ -1003,6 +1004,29 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
     }
 }
 
+// Claims ct_autofree_scan_in_progress for the lifetime of a GC scan and releases it on
+// every exit path, so an early return can never leave the flag set and starve later scans.
+struct ct_autofree_scan_guard
+{
+    int owned;
+
+    CT_NOINSTR ct_autofree_scan_guard()
+        : owned(!ct_autofree_scan_in_progress.exchange(1, std::memory_order_acq_rel))
+    {
+    }
+
+    CT_NOINSTR ~ct_autofree_scan_guard()
+    {
+        if (owned)
+        {
+            ct_autofree_scan_in_progress.store(0, std::memory_order_release);
+        }
+    }
+
+    ct_autofree_scan_guard(const ct_autofree_scan_guard&) = delete;
+    ct_autofree_scan_guard& operator=(const ct_autofree_scan_guard&) = delete;
+};
+
 CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
 {
     ct_init_env_once();
@@ -1012,7 +1036,8 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
     {
         return;
     }
-    if (ct_autofree_scan_in_progress.exchange(1, std::memory_order_acq_rel))
+    ct_autofree_scan_guard scan_guard;
+    if (!scan_guard.owned)
     {
         return;
     }
@@ -1026,7 +1051,6 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
     mach_msg_type_number_t thread_count = 0;
     if (task_threads(mach_task_self(), &threads, &thread_count) != KERN_SUCCESS)
     {
-        ct_autofree_scan_in_progress.store(0, std::memory_order_release);
         return;
     }
 
@@ -1142,8 +1166,7 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
     }
     vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads),
                   thread_count * sizeof(thread_t));
-
-    ct_autofree_scan_in_progress.store(0, std::memory_order_release);
+    mach_port_deallocate(mach_task_self(), self_thread);
 }
 
 CT_NOINSTR static void ct_autofree_scan_sleep(uint64_t ns)
@@ -2936,8 +2959,15 @@ extern "C"
 
 CT_NOINSTR __attribute__((destructor)) static void ct_report_leaks(void)
 {
+    // The detached GC thread may still mutate the table; hold the spinlock for the whole
+    // report. The ct_write_* primitives write raw bytes and never re-enter the allocator,
+    // so they are safe to call under ct_alloc_lock.
+    ct_lock_acquire();
     if (ct_alloc_count == 0)
+    {
+        ct_lock_release();
         return;
+    }
 
     ct_disable_logging();
 
@@ -2973,4 +3003,5 @@ CT_NOINSTR __attribute__((destructor)) static void ct_report_leaks(void)
             break;
         }
     }
+    ct_lock_release();
 }

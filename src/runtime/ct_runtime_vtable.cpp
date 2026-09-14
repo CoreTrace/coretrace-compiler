@@ -214,15 +214,9 @@ namespace
 #endif
     }
 
-    CT_NODISCARD CT_NOINSTR const std::string& ct_executable_path(void)
+    CT_NODISCARD CT_NOINSTR std::string ct_read_executable_path(void)
     {
-        static std::string cached;
-        static int initialized = 0;
-        if (initialized)
-        {
-            return cached;
-        }
-        initialized = 1;
+        std::string path;
 #if defined(__APPLE__)
         uint32_t size = 0;
         (void)_NSGetExecutablePath(nullptr, &size);
@@ -232,7 +226,7 @@ namespace
             if (_NSGetExecutablePath(buffer.data(), &size) == 0)
             {
                 buffer.resize(ct_strlen(buffer.c_str()));
-                cached = buffer;
+                path = buffer;
             }
         }
 #elif defined(__linux__)
@@ -241,9 +235,15 @@ namespace
         if (len > 0)
         {
             buf[len] = '\0';
-            cached.assign(buf);
+            path.assign(buf);
         }
 #endif
+        return path;
+    }
+
+    CT_NODISCARD CT_NOINSTR const std::string& ct_executable_path(void)
+    {
+        static const std::string cached = ct_read_executable_path();
         return cached;
     }
 
@@ -777,9 +777,11 @@ extern "C"
             if (ct_is_enabled(CT_FEATURE_ALLOC))
             {
                 unsigned char state = 0;
-                if (ct_table_lookup_containing(this_ptr, nullptr, nullptr, nullptr, nullptr,
-                                               &state) &&
-                    state == CT_ENTRY_FREED)
+                ct_lock_acquire();
+                const int found = ct_table_lookup_containing(this_ptr, nullptr, nullptr, nullptr,
+                                                             nullptr, &state);
+                ct_lock_release();
+                if (found && state == CT_ENTRY_FREED)
                 {
                     warnings.push_back("vptr on freed object");
                 }
@@ -882,9 +884,11 @@ extern "C"
             if (ct_is_enabled(CT_FEATURE_ALLOC))
             {
                 unsigned char state = 0;
-                if (ct_table_lookup_containing(this_ptr, nullptr, nullptr, nullptr, nullptr,
-                                               &state) &&
-                    state == CT_ENTRY_FREED)
+                ct_lock_acquire();
+                const int found = ct_table_lookup_containing(this_ptr, nullptr, nullptr, nullptr,
+                                                             nullptr, &state);
+                ct_lock_release();
+                if (found && state == CT_ENTRY_FREED)
                 {
                     warnings.push_back("vptr on freed object");
                 }
