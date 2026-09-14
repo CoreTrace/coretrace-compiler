@@ -145,6 +145,7 @@ def main() -> int:
     overflow_src = FIXTURES / "overflow.c"
     broken_src = FIXTURES / "broken.c"
     undefined_ref_src = FIXTURES / "undefined_ref.c"
+    alloc_site_src = FIXTURES / "alloc_site.c"
 
     def base_out_assertions(out_name: str):
         assertions = [
@@ -314,6 +315,40 @@ def main() -> int:
             assert_argv_contains(["--instrument", "-x=c++"]),
             assert_output_exists_at("hello_instr_xcxx.out"),
             native_artifact_assert_at("hello_instr_xcxx.out", platform.os),
+        ],
+    )
+
+    tc_instrument_o_eq_trailing = TestCase(
+        name="compile_instrument_o_equals_trailing",
+        plan=CompilePlan(
+            name="compile_instrument_o_equals_trailing",
+            sources=[],
+            out=None,
+            extra_args=["--instrument", "-c", "hello.c", "-o=hello_instr_trail.o"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_argv_contains(["--instrument", "-c", "-o=hello_instr_trail.o"]),
+            assert_output_exists_at("hello_instr_trail.o"),
+            native_artifact_assert_at("hello_instr_trail.o", platform.os),
+        ],
+    )
+
+    # -g0 must not be mistaken for a debug request: instrumentation still needs
+    # line tables to name allocation sites (malloc is on line 5 of the fixture).
+    tc_instrument_g0_inmem = TestCase(
+        name="compile_instrument_g0_inmem",
+        plan=CompilePlan(
+            name="compile_instrument_g0_inmem",
+            sources=[Path("alloc_site.c")],
+            out=None,
+            extra_args=["--instrument", "-g0", "--in-mem", "-S", "-emit-llvm"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_argv_contains(["--instrument", "-g0", "--in-mem", "-S", "-emit-llvm"]),
+            assert_stdout_contains("__ct_malloc"),
+            assert_stdout_contains("alloc_site.c:5:"),
         ],
     )
 
@@ -618,6 +653,8 @@ def main() -> int:
         tc_instrument_c,
         tc_instrument_cpp,
         tc_instrument_x_cxx,
+        tc_instrument_o_eq_trailing,
+        tc_instrument_g0_inmem,
         tc_instrument_emit_llvm,
         tc_instrument_emit_bc,
     ]
@@ -667,7 +704,8 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix=f"{case.name}_", dir=str(WORK)) as d:
             ws = Path(d)
             copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src,
-                               leak_src, overflow_src, broken_src, undefined_ref_src])
+                               leak_src, overflow_src, broken_src, undefined_ref_src,
+                               alloc_site_src])
             reports.append(case.run(runner, ws))
 
     rep = type("Tmp", (), {"name": suite.name, "reports": reports})()

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(consumer_example CXX)
+project(consumer_example C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,5 +21,10 @@ FetchContent_MakeAvailable(cc)
 add_executable(cc1 src/main.cpp)
 
 target_link_libraries(cc1 PRIVATE cc::compilerlib_static)
+
+# C consumer of the C entry point (compile_c).
+add_executable(cc1_c src/main_c.c)
+
+target_link_libraries(cc1_c PRIVATE cc::compilerlib_static)
 # OR
 # target_link_libraries(cc1 PRIVATE compilerlib_static)

@@ -30,7 +30,7 @@ namespace cli
             << "  -h, --help               Show this help and exit.\n"
             << "  --instrument             Enable CoreTrace instrumentation (required for "
                "--ct-*).\n"
-            << "  --in-mem, --in-memory     Print LLVM IR to stdout (use with -emit-llvm).\n"
+            << "  --in-mem, --in-memory     Print LLVM IR to stdout (use with -S -emit-llvm).\n"
             << "\n"
             << "Instrumentation toggles:\n"
             << "  --ct-modules=<list>       Comma-separated list: trace,alloc,bounds,vtable,all.\n"
