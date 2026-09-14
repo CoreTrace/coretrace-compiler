@@ -9,6 +9,7 @@
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/FileSystem.h>
+#include <llvm/Support/FileUtilities.h>
 #include <llvm/Support/Path.h>
 #include <llvm/Support/Program.h>
 #include <llvm/Support/MemoryBuffer.h>
@@ -335,20 +336,20 @@ namespace compilerlib
             return {};
         }
 
-        CT_NODISCARD std::string detectMacSysroot()
+        CT_NODISCARD std::string queryMacSysroot()
         {
 #ifdef __APPLE__
             if (auto found = llvm::sys::findProgramByName("xcrun"))
             {
                 llvm::SmallString<256> outPath;
-                if (std::error_code ec =
-                        llvm::sys::fs::createTemporaryFile("ct_sysroot", "txt", outPath))
+                if (llvm::sys::fs::createTemporaryFile("ct_sysroot", "txt", outPath))
                     return {};
+                llvm::FileRemover removeOut(outPath);
 
                 llvm::SmallString<256> errPath;
-                if (std::error_code ec =
-                        llvm::sys::fs::createTemporaryFile("ct_sysroot_err", "txt", errPath))
+                if (llvm::sys::fs::createTemporaryFile("ct_sysroot_err", "txt", errPath))
                     return {};
+                llvm::FileRemover removeErr(errPath);
 
                 llvm::SmallVector<llvm::StringRef, 4> args;
                 args.push_back(*found);
@@ -372,6 +373,17 @@ namespace compilerlib
             }
 #endif
             return {};
+        }
+
+        // Spawning xcrun is by far the most expensive step of driver configuration
+        // and the SDK path does not change while the process runs, so the answer is
+        // computed once per process. (The clang path is deliberately not cached: it
+        // honours the CT_CLANG environment variable, which a library user may change
+        // between calls, and probing it only costs a few stat calls.)
+        CT_NODISCARD const std::string& detectMacSysroot()
+        {
+            static const std::string sysroot = queryMacSysroot();
+            return sysroot;
         }
 
     } // namespace
