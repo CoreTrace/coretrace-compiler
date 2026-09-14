@@ -143,6 +143,8 @@ def main() -> int:
     vtable_src = FIXTURES / "vtable.cpp"
     leak_src = FIXTURES / "leak.c"
     overflow_src = FIXTURES / "overflow.c"
+    broken_src = FIXTURES / "broken.c"
+    undefined_ref_src = FIXTURES / "undefined_ref.c"
 
     def base_out_assertions(out_name: str):
         assertions = [
@@ -568,7 +570,50 @@ def main() -> int:
         ],
     )
 
-    common_cases = [tc_o_eq, tc_d_space, tc_d_compact, tc_cpp, tc_x_cxx]
+    # Failures must be reported through the exit code even on the non-instrumented
+    # path, which delegates to the clang driver.
+    tc_fail_compile = TestCase(
+        name="plain_compile_error_exits_nonzero",
+        plan=CompilePlan(
+            name="plain_compile_error_exits_nonzero",
+            sources=[Path("broken.c")],
+            out=None,
+            extra_args=["-c"],
+        ),
+        assertions=[
+            assert_exit_code(1),
+            assert_stderr_contains("undeclared_symbol"),
+        ],
+    )
+    tc_fail_missing_input = TestCase(
+        name="plain_missing_input_exits_nonzero",
+        plan=CompilePlan(
+            name="plain_missing_input_exits_nonzero",
+            sources=[Path("does_not_exist.c")],
+            out=None,
+            extra_args=["-o", "missing_app"],
+        ),
+        assertions=[
+            assert_exit_code(1),
+            assert_stderr_contains("does_not_exist.c"),
+        ],
+    )
+    tc_fail_link = TestCase(
+        name="plain_link_error_exits_nonzero",
+        plan=CompilePlan(
+            name="plain_link_error_exits_nonzero",
+            sources=[Path("undefined_ref.c")],
+            out=None,
+            extra_args=["-o", "undefined_app"],
+        ),
+        assertions=[
+            assert_exit_code(1),
+            assert_stderr_contains("never_defined"),
+        ],
+    )
+
+    common_cases = [tc_o_eq, tc_d_space, tc_d_compact, tc_cpp, tc_x_cxx,
+                    tc_fail_compile, tc_fail_missing_input, tc_fail_link]
     instrument_cases = [
         tc_instrument_c,
         tc_instrument_cpp,
@@ -621,7 +666,8 @@ def main() -> int:
         import tempfile
         with tempfile.TemporaryDirectory(prefix=f"{case.name}_", dir=str(WORK)) as d:
             ws = Path(d)
-            copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src, leak_src, overflow_src])
+            copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src,
+                               leak_src, overflow_src, broken_src, undefined_ref_src])
             reports.append(case.run(runner, ws))
 
     rep = type("Tmp", (), {"name": suite.name, "reports": reports})()
