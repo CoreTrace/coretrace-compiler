@@ -3,7 +3,21 @@
 
 #include "ct_runtime_helpers.h"
 
+#include <atomic>
 #include <format>
+
+namespace
+{
+    // Function entry/exit tracing stays silent until main is entered so static
+    // initialisers do not flood the output. This is a trace-module policy only; the
+    // logger itself is enabled at runtime initialisation.
+    std::atomic<int> ct_trace_started{0};
+
+    CT_NODISCARD CT_NOINSTR int ct_trace_is_started(void)
+    {
+        return ct_trace_started.load(std::memory_order_acquire);
+    }
+} // namespace
 
 extern "C"
 {
@@ -32,14 +46,13 @@ extern "C"
             ct_write_cstr("\n");
         }
 
-        if (!ct_log_is_enabled())
+        if (!ct_trace_is_started())
         {
             if (!ct_streq(func, "main"))
             {
                 return;
             }
-            ct_enable_logging();
-            ct_maybe_install_backtrace();
+            ct_trace_started.store(1, std::memory_order_release);
         }
 
         std::string demangled;
@@ -68,7 +81,7 @@ extern "C"
         {
             return;
         }
-        if (!ct_log_is_enabled())
+        if (!ct_trace_is_started())
         {
             return;
         }

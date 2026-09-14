@@ -720,11 +720,6 @@ extern "C"
     CT_NOINSTR void __ct_vtable_dump(void* this_ptr, const char* site, const char* static_type)
     {
         ct_init_env_once();
-        if (!ct_log_is_enabled())
-        {
-            ct_enable_logging();
-            ct_maybe_install_backtrace();
-        }
         ct_log_vtable_diag_state();
 
         const char* site_name = ct_site_name(site);
@@ -810,11 +805,6 @@ extern "C"
                                      const char* static_type)
     {
         ct_init_env_once();
-        if (!ct_log_is_enabled())
-        {
-            ct_enable_logging();
-            ct_maybe_install_backtrace();
-        }
         ct_log_vtable_diag_state();
 
         const char* site_name = ct_site_name(site);

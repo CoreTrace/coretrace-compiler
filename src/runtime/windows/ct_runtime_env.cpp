@@ -122,6 +122,9 @@ namespace
     {
         CT_NOINSTR CtRuntimeInit()
         {
+            // See the POSIX runtime: logging is enabled once at initialisation so
+            // diagnostics do not depend on which module runs first.
+            ct_enable_logging();
             ct_maybe_install_backtrace();
             ct_apply_compiled_config();
             ct_apply_env_config();
@@ -139,6 +142,7 @@ CT_NOINSTR void ct_init_env_once(void)
         return;
     }
 
+    ct_enable_logging();
     ct_apply_compiled_config();
     ct_apply_env_config();
 }

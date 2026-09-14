@@ -65,6 +65,10 @@ CT_NOINSTR static void ct_apply_compiled_config(void)
 
 CT_NOINSTR __attribute__((constructor)) static void ct_runtime_init(void)
 {
+    // Diagnostics (bounds, alloc tracing, vtable) must be visible regardless of which
+    // instrumentation module is linked, so logging is switched on here rather than by
+    // the first module that happens to run.
+    ct_enable_logging();
     ct_maybe_install_backtrace();
     ct_apply_compiled_config();
 #ifdef _MSC_VER
@@ -123,6 +127,7 @@ CT_NOINSTR void ct_init_env_once(void)
         return;
     }
 
+    ct_enable_logging();
     ct_apply_compiled_config();
 #ifdef _MSC_VER
 #pragma warning(push)
