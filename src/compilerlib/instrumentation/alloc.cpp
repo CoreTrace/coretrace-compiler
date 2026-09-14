@@ -549,10 +549,33 @@ namespace compilerlib
                                                        EscapeAnalysisContext& ctx);
         CT_NODISCARD EscapeState classifyAllocaEscape(llvm::AllocaInst* alloca,
                                                       EscapeAnalysisContext& ctx);
+        CT_NODISCARD EscapeState classifyScalarAllocaEscape(llvm::AllocaInst* alloca,
+                                                            EscapeAnalysisContext& ctx);
         CT_NODISCARD EscapeState promoteState(EscapeState current, EscapeState next,
                                               const char* reason, llvm::Value* value,
                                               llvm::Value* user = nullptr);
         CT_NODISCARD bool isAllocaDead(llvm::AllocaInst* alloca);
+
+        // The escape analysis runs before the allocator calls are rewritten, so the
+        // alloca that receives posix_memalign's result is still passed to the raw
+        // callee. That call is the allocation itself, not a capture of the slot.
+        CT_NODISCARD bool isOutParamAllocatorCall(const llvm::CallBase& call,
+                                                  const llvm::Value* slot)
+        {
+            const llvm::Function* callee = call.getCalledFunction();
+            if (!callee || call.arg_size() == 0)
+            {
+                return false;
+            }
+            llvm::StringRef name = callee->getName();
+            const bool isMemalign = (name == "posix_memalign" && isPosixMemalignLike(*callee)) ||
+                                    name == "__ct_posix_memalign";
+            if (!isMemalign)
+            {
+                return false;
+            }
+            return call.getArgOperand(0)->stripPointerCasts() == slot->stripPointerCasts();
+        }
 
         CT_NODISCARD EscapeState classifyAllocaEscape(llvm::AllocaInst* alloca,
                                                       EscapeAnalysisContext& ctx)
@@ -667,6 +690,11 @@ namespace compilerlib
                                 return finish(state);
                             }
                         }
+                        continue;
+                    }
+                    if (auto* call = llvm::dyn_cast<llvm::CallBase>(user);
+                        call && isOutParamAllocatorCall(*call, current))
+                    {
                         continue;
                     }
                     if (llvm::isa<llvm::CallBase>(user) || llvm::isa<llvm::ReturnInst>(user))
@@ -810,6 +838,16 @@ namespace compilerlib
                                 {
                                     continue;
                                 }
+                                EscapeState slotState = classifyScalarAllocaEscape(alloca, ctx);
+                                if (slotState == EscapeState::ReachableLocal)
+                                {
+                                    continue;
+                                }
+                                state = promoteState(state, slotState,
+                                                     "escape: through scalar alloca", value, user);
+                                ctx.valueCache[value] = state;
+                                ctx.inProgress.erase(value);
+                                return state;
                             }
                             if (auto* obj = llvm::getUnderlyingObject(dest))
                             {
@@ -856,6 +894,68 @@ namespace compilerlib
             ctx.valueCache[value] = state;
             ctx.inProgress.erase(value);
             return state;
+        }
+
+        // A local slot holding an integer derived from a pointer (typically a ptrtoint
+        // spilled at -O0). The slot itself must not escape, and every value loaded from
+        // it is followed with the scalar rules.
+        CT_NODISCARD EscapeState classifyScalarAllocaEscape(llvm::AllocaInst* alloca,
+                                                            EscapeAnalysisContext& ctx)
+        {
+            if (auto it = ctx.allocaCache.find(alloca); it != ctx.allocaCache.end())
+            {
+                return it->second;
+            }
+            if (!ctx.inProgress.insert(alloca).second)
+            {
+                return EscapeState::EscapedCall;
+            }
+
+            EscapeState state = EscapeState::ReachableLocal;
+            auto finish = [&](EscapeState finalState)
+            {
+                ctx.allocaCache[alloca] = finalState;
+                ctx.inProgress.erase(alloca);
+                return finalState;
+            };
+
+            for (llvm::Use& use : alloca->uses())
+            {
+                auto* user = use.getUser();
+                if (llvm::isa<llvm::DbgInfoIntrinsic>(user) ||
+                    llvm::isa<llvm::LifetimeIntrinsic>(user))
+                {
+                    continue;
+                }
+                if (auto* store = llvm::dyn_cast<llvm::StoreInst>(user))
+                {
+                    if (store->getPointerOperand() == alloca)
+                    {
+                        continue;
+                    }
+                    return finish(promoteState(state, EscapeState::EscapedStore,
+                                               "escape: scalar slot address stored", alloca, user));
+                }
+                if (auto* load = llvm::dyn_cast<llvm::LoadInst>(user))
+                {
+                    EscapeState inner = classifyScalarEscape(load, ctx);
+                    if (inner != EscapeState::ReachableLocal)
+                    {
+                        return finish(
+                            promoteState(state, inner, "escape: scalar slot load", alloca, user));
+                    }
+                    continue;
+                }
+                if (llvm::isa<llvm::CallBase>(user) || llvm::isa<llvm::ReturnInst>(user))
+                {
+                    return finish(promoteState(state, EscapeState::EscapedCall,
+                                               "escape: scalar slot call", alloca, user));
+                }
+                return finish(promoteState(state, EscapeState::EscapedStore,
+                                           "escape: scalar slot unknown", alloca, user));
+            }
+
+            return finish(state);
         }
 
         CT_NODISCARD EscapeState classifyPointerEscape(llvm::Value* value,
