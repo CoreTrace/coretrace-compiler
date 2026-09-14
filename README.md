@@ -81,14 +81,14 @@ another compiler binary. CI runs all of them on Linux and macOS.
 ./cc --instrument --ct-shadow -o app main.c
 ./cc --instrument --ct-shadow-aggressive --ct-bounds-no-abort -o app main.c
 ./cc --instrument --ct-modules=vtable --ct-vcall-trace -o app main.cpp
-./cc --in-mem -emit-llvm test.c
+./cc --in-mem -S -emit-llvm test.c
 ```
 
 ## CLI Options
 
 Core options:
 - `--instrument`: enable CoreTrace instrumentation (required for `--ct-*` flags).
-- `--in-mem`, `--in-memory`: print LLVM IR to stdout (use with `-emit-llvm`).
+- `--in-mem`, `--in-memory`: print LLVM IR to stdout (use with `-S -emit-llvm`).
 
 Instrumentation toggles:
 - `--ct-modules=<list>`: comma-separated list `trace,alloc,bounds,vtable,all`.

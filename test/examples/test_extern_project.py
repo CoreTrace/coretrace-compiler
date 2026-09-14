@@ -230,15 +230,16 @@ def configure_and_build() -> Path:
         print(err)
         raise SystemExit(1)
 
-    cc1 = _platform_executable(BUILD / "cc1")
-    if not cc1.exists():
-        cc1 = _platform_executable(BUILD / "Release" / "cc1")
-    if not cc1.exists():
-        cc1 = _platform_executable(BUILD / "Debug" / "cc1")
-    if not cc1.exists():
-        print(f"cc1 binary not found after build: {cc1}")
-        raise SystemExit(1)
-    return cc1.resolve()
+    return find_built_executable("cc1"), find_built_executable("cc1_c")
+
+
+def find_built_executable(name: str) -> Path:
+    for subdir in ("", "Release", "Debug"):
+        candidate = _platform_executable(BUILD / subdir / name)
+        if candidate.exists():
+            return candidate.resolve()
+    print(f"{name} binary not found after build: {BUILD / name}")
+    raise SystemExit(1)
 
 
 def copy_fixtures(ws: Path, files: list[Path]) -> None:
@@ -248,8 +249,9 @@ def copy_fixtures(ws: Path, files: list[Path]) -> None:
 
 
 def main() -> int:
-    cc1 = configure_and_build()
+    cc1, cc1_c = configure_and_build()
     runner = CompilerRunner(RunnerConfig(executable=cc1))
+    runner_c = CompilerRunner(RunnerConfig(executable=cc1_c))
 
     src_c = FIXTURES / "hello.c"
     src_cpp = FIXTURES / "hello.cpp"
@@ -290,13 +292,30 @@ def main() -> int:
         ],
     )
 
+    # Same compilation through the C entry point (compile_c) from a C program.
+    tc_c_api = TestCase(
+        name="extern_project_compile_c_api",
+        plan=CompilePlan(
+            name="extern_project_compile_c_api",
+            sources=[Path("hello.c")],
+            out=Path("hello_ext_capi.o"),
+            extra_args=["-c"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_name("hello_ext_capi.o"),
+            assert_output_exists(),
+            assert_windows_native_artifact("hello_ext_capi.o") if os.name == "nt" else assert_native_binary_kind(),
+        ],
+    )
+
     WORK.mkdir(parents=True, exist_ok=True)
     reports = []
-    for tc in (tc_c, tc_cpp):
+    for tc, tc_runner in ((tc_c, runner), (tc_cpp, runner), (tc_c_api, runner_c)):
         with tempfile.TemporaryDirectory(prefix=f"{tc.name}_", dir=str(WORK)) as d:
             ws = Path(d)
             copy_fixtures(ws, [src_c, src_cpp])
-            reports.append(tc.run(runner, ws))
+            reports.append(tc.run(tc_runner, ws))
 
     rep = type("Tmp", (), {"name": "extern_project", "reports": reports})()
     return ConsoleReporter().render(rep)

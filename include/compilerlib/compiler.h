@@ -2,6 +2,8 @@
 #ifndef COMPILERLIB_COMPILER_H
 #define COMPILERLIB_COMPILER_H
 
+#include "compilerlib/compiler_c.h"
+
 #include <string>
 #include <vector>
 
@@ -25,16 +27,8 @@ namespace compilerlib
     CompileResult compile(const std::vector<std::string>& args,
                           OutputMode mode = OutputMode::ToFile, bool instrument = false);
 
-#ifdef __cplusplus
-    extern "C"
-    {
-#endif
-
-        int compile_c(int argc, const char** argv, char* output_buffer, int buffer_size);
-
-#ifdef __cplusplus
-    }
-#endif
+    // compile_c used to be declared inside this namespace; keep that spelling valid.
+    using ::compile_c;
 
 } // namespace compilerlib
 

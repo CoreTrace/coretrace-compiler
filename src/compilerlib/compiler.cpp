@@ -112,11 +112,11 @@ namespace compilerlib
 
         const char* findArgValue(const llvm::opt::ArgStringList& args, llvm::StringRef opt)
         {
-            for (size_t i = 0; i + 1 < args.size(); ++i)
+            for (size_t i = 0; i < args.size(); ++i)
             {
                 if (opt == args[i])
                 {
-                    return args[i + 1];
+                    return i + 1 < args.size() ? args[i + 1] : nullptr;
                 }
                 if (llvm::StringRef(args[i]).starts_with(opt) &&
                     llvm::StringRef(args[i]).size() > opt.size() &&
@@ -140,16 +140,30 @@ namespace compilerlib
             return false;
         }
 
-        bool hasDebugFlag(const std::vector<std::string>& args)
+        // Mirrors clang's "last debug level wins" rule: -g0 turns debug info off
+        // again and -gno-* only adjusts how debug info is emitted. Every other -g*
+        // spelling (-g, -g1..3, -gline-tables-only, -gdwarf*, -ggdb*, ...) is
+        // treated as a request for debug info.
+        bool requestsDebugInfo(const std::vector<std::string>& args)
         {
+            bool requested = false;
             for (const auto& arg : args)
             {
-                if (arg.rfind("-g", 0) == 0)
+                llvm::StringRef flag = arg;
+                if (!flag.starts_with("-g"))
                 {
-                    return true;
+                    continue;
+                }
+                if (flag == "-g0")
+                {
+                    requested = false;
+                }
+                else if (!flag.starts_with("-gno-"))
+                {
+                    requested = true;
                 }
             }
-            return false;
+            return requested;
         }
 
         CT_NODISCARD llvm::Triple effectiveTargetTriple(const std::vector<std::string>& args)
@@ -326,7 +340,7 @@ namespace compilerlib
 
                 if (ctx_.instrument)
                 {
-                    if (!hasDebugFlag(ctx_.filtered_args))
+                    if (!requestsDebugInfo(ctx_.filtered_args))
                     {
                         ctx_.clang_args.push_back("-gline-tables-only");
                     }
@@ -1072,36 +1086,57 @@ namespace compilerlib
         return runPlainToFile(ctx, cc1, plan, error);
     }
 
-    extern "C" int compile_c(int argc, const char** argv, char* output_buffer, int buffer_size)
+} // namespace compilerlib
+
+namespace
+{
+    // Copies as much of text as fits into buffer (buffer_size > 0), always
+    // NUL-terminating the result.
+    void copyTruncated(char* buffer, int buffer_size, const std::string& text)
     {
-        std::vector<std::string> args;
-        args.reserve(static_cast<size_t>(argc));
-        OutputMode mode = OutputMode::ToFile;
-        bool instrument = false;
+        const size_t capacity = static_cast<size_t>(buffer_size) - 1;
+        const size_t written = text.copy(buffer, capacity);
+        buffer[written] = '\0';
+    }
+} // namespace
 
-        for (int i = 0; i < argc; ++i)
-        {
-            std::string arg = argv[i];
-            if (arg == "--in-mem" || arg == "--in-memory")
-            {
-                mode = OutputMode::ToMemory;
-            }
-            else if (arg == "--instrument")
-            {
-                instrument = true;
-            }
-            else
-            {
-                args.emplace_back(std::move(arg));
-            }
-        }
-
-        CompileResult result = compilerlib::compile(args, mode, instrument);
-
-        std::strncpy(output_buffer, result.diagnostics.c_str(), buffer_size - 1);
-        output_buffer[buffer_size - 1] = '\0';
-
-        return result.success ? 1 : 0;
+extern "C" int compile_c(int argc, const char** argv, char* output_buffer, int buffer_size)
+{
+    if (output_buffer == nullptr || buffer_size <= 0)
+    {
+        return 0;
+    }
+    if (argc < 0 || (argc > 0 && argv == nullptr))
+    {
+        copyTruncated(output_buffer, buffer_size, "compile_c: invalid argument vector");
+        return 0;
     }
 
-} // namespace compilerlib
+    std::vector<std::string> args;
+    args.reserve(static_cast<size_t>(argc));
+    compilerlib::OutputMode mode = compilerlib::OutputMode::ToFile;
+    bool instrument = false;
+
+    for (int i = 0; i < argc; ++i)
+    {
+        std::string arg = argv[i];
+        if (arg == "--in-mem" || arg == "--in-memory")
+        {
+            mode = compilerlib::OutputMode::ToMemory;
+        }
+        else if (arg == "--instrument")
+        {
+            instrument = true;
+        }
+        else
+        {
+            args.emplace_back(std::move(arg));
+        }
+    }
+
+    compilerlib::CompileResult result = compilerlib::compile(args, mode, instrument);
+
+    copyTruncated(output_buffer, buffer_size, result.diagnostics);
+
+    return result.success ? 1 : 0;
+}
