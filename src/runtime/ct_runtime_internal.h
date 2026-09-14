@@ -226,6 +226,36 @@ CT_NOINSTR inline void ct_write_prefix(CTLevel level)
     coretrace::write_prefix(level);
 }
 
+// Prefix writer for process teardown and signal handlers. coretrace::write_prefix reads
+// the configurable tag under a mutex that may already be destroyed when a global
+// destructor runs, and a mutex is never safe inside a signal handler. This variant only
+// uses lock-free logger helpers and the runtime's fixed "==ct==" tag, so its output
+// matches the regular prefix as long as the runtime never calls coretrace::set_prefix.
+CT_NOINSTR inline void ct_write_prefix_nolock(CTLevel level)
+{
+    constexpr std::string_view tag = "==ct==";
+
+    ct_write_str(ct_color(CTColor::Dim));
+    ct_write_raw("|", 1);
+    ct_write_dec(static_cast<size_t>(ct_pid()));
+    ct_write_raw("|", 1);
+    ct_write_str(ct_color(CTColor::Reset));
+    ct_write_raw(" ", 1);
+
+    ct_write_str(ct_color(CTColor::Gray));
+    ct_write_str(ct_color(CTColor::Italic));
+    ct_write_str(tag);
+    ct_write_raw(" ", 1);
+    ct_write_str(ct_color(CTColor::Reset));
+
+    ct_write_str(ct_level_color(level));
+    ct_write_raw("[", 1);
+    ct_write_str(ct_level_label(level));
+    ct_write_raw("]", 1);
+    ct_write_str(ct_color(CTColor::Reset));
+    ct_write_raw(" ", 1);
+}
+
 template <typename... Args>
 CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... args)
 {

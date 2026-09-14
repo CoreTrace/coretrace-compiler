@@ -2941,7 +2941,7 @@ CT_NOINSTR __attribute__((destructor)) static void ct_report_leaks(void)
 
     ct_disable_logging();
 
-    ct_write_prefix(CTLevel::Error);
+    ct_write_prefix_nolock(CTLevel::Error);
     ct_write_str(ct_color(CTColor::Red));
     ct_write_cstr("ct: leaks detected count=");
     ct_write_dec(ct_alloc_count);
@@ -2954,7 +2954,7 @@ CT_NOINSTR __attribute__((destructor)) static void ct_report_leaks(void)
         if (ct_alloc_table[i].state != CT_ENTRY_USED)
             continue;
 
-        ct_write_prefix(CTLevel::Warn);
+        ct_write_prefix_nolock(CTLevel::Warn);
         ct_write_str(ct_color(CTColor::Yellow));
         ct_write_cstr("ct: leak ptr=");
         ct_write_hex(reinterpret_cast<uintptr_t>(ct_alloc_table[i].ptr));
@@ -2965,7 +2965,7 @@ CT_NOINSTR __attribute__((destructor)) static void ct_report_leaks(void)
 
         if (++reported >= 32)
         {
-            ct_write_prefix(CTLevel::Warn);
+            ct_write_prefix_nolock(CTLevel::Warn);
             ct_write_str(ct_color(CTColor::Yellow));
             ct_write_cstr("ct: leak list truncated");
             ct_write_str(ct_color(CTColor::Reset));

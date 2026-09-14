@@ -12,7 +12,7 @@ namespace
     CT_NOINSTR void ct_signal_handler(int signo)
     {
         ct_disable_logging();
-        ct_write_prefix(CTLevel::Error);
+        ct_write_prefix_nolock(CTLevel::Error);
         ct_write_str(ct_color(CTColor::Red));
         ct_write_cstr("ct: fatal signal ");
         ct_write_dec(static_cast<size_t>(signo));

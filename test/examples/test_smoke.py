@@ -51,6 +51,22 @@ def assert_stderr_contains(text: str) -> Assertion:
                 f"stderr does not contain '{text}'\nstderr:\n{res.run.stderr}")
     return Assertion(name=f"stderr_contains_{text}", check=_check)
 
+def assert_run_artifact(path: str, expected_exit: int, stderr_contains: str) -> Assertion:
+    """Run the artifact produced by the compile step and check its exit code and stderr."""
+    def _check(res) -> None:
+        import subprocess
+        artifact = Path(path)
+        if not artifact.is_absolute():
+            artifact = res.run.cwd / artifact
+        require(artifact.exists(), f"output does not exist: {artifact}")
+        proc = subprocess.run([str(artifact)], cwd=res.run.cwd,
+                              capture_output=True, text=True, timeout=60)
+        require(proc.returncode == expected_exit,
+                f"expected exit {expected_exit}, got {proc.returncode}\nstderr:\n{proc.stderr}")
+        require(stderr_contains in proc.stderr,
+                f"stderr does not contain '{stderr_contains}'\nstderr:\n{proc.stderr}")
+    return Assertion(name=f"run_artifact_{Path(path).name}", check=_check)
+
 def _read_artifact_bytes(res, path: str) -> bytes:
     artifact = Path(path)
     if not artifact.is_absolute():
@@ -125,6 +141,8 @@ def main() -> int:
     cpp_src = FIXTURES / "hello.cpp"
     cpp_as_c_src = FIXTURES / "cpp_as_c.c"
     vtable_src = FIXTURES / "vtable.cpp"
+    leak_src = FIXTURES / "leak.c"
+    overflow_src = FIXTURES / "overflow.c"
 
     def base_out_assertions(out_name: str):
         assertions = [
@@ -514,6 +532,42 @@ def main() -> int:
         ],
     )
 
+    # Runtime behaviour: an instrumented program that leaks must exit normally and
+    # print the leak report; the report runs at process teardown and must not touch
+    # logger state that may already be destroyed.
+    tc_runtime_leak_report = TestCase(
+        name="runtime_leak_report_at_exit",
+        plan=CompilePlan(
+            name="runtime_leak_report_at_exit",
+            sources=[Path("leak.c")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=alloc", "-o", "leak_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("leak_app"),
+            assert_run_artifact("leak_app", 0, "ct: leaks detected"),
+        ],
+    )
+
+    # Runtime behaviour: bounds diagnostics must be reported even when the trace
+    # module is not part of the build.
+    tc_runtime_bounds_without_trace = TestCase(
+        name="runtime_bounds_report_without_trace",
+        plan=CompilePlan(
+            name="runtime_bounds_report_without_trace",
+            sources=[Path("overflow.c")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=alloc,bounds", "--ct-bounds-no-abort",
+                        "-o", "overflow_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("overflow_app"),
+            assert_run_artifact("overflow_app", 0, "heap-buffer-overflow"),
+        ],
+    )
+
     common_cases = [tc_o_eq, tc_d_space, tc_d_compact, tc_cpp, tc_x_cxx]
     instrument_cases = [
         tc_instrument_c,
@@ -521,6 +575,12 @@ def main() -> int:
         tc_instrument_x_cxx,
         tc_instrument_emit_llvm,
         tc_instrument_emit_bc,
+    ]
+    # The Windows runtime has no leak report at exit yet, so the runtime cases are
+    # only part of the POSIX suites.
+    runtime_cases = [
+        tc_runtime_leak_report,
+        tc_runtime_bounds_without_trace,
     ]
     readme_cases = [
         tc_readme_emit_llvm,
@@ -536,9 +596,9 @@ def main() -> int:
         tc_optnone_disable_o0,
     ]
     if platform.os == OS.MACOS:
-        cases = [tc_macho, *common_cases, *instrument_cases, *readme_cases]
+        cases = [tc_macho, *common_cases, *instrument_cases, *runtime_cases, *readme_cases]
     elif platform.os == OS.LINUX:
-        cases = [tc_elf, *common_cases, *instrument_cases, *readme_cases]
+        cases = [tc_elf, *common_cases, *instrument_cases, *runtime_cases, *readme_cases]
     else:
         windows_readme_cases = [
             tc_readme_emit_llvm,
@@ -561,7 +621,7 @@ def main() -> int:
         import tempfile
         with tempfile.TemporaryDirectory(prefix=f"{case.name}_", dir=str(WORK)) as d:
             ws = Path(d)
-            copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src])
+            copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src, leak_src, overflow_src])
             reports.append(case.run(runner, ws))
 
     rep = type("Tmp", (), {"name": suite.name, "reports": reports})()
