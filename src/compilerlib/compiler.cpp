@@ -27,6 +27,8 @@
 #include <llvm/IR/Module.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Support/FileSystem.h>
+#include <llvm/Support/FileUtilities.h>
+#include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/Program.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/VirtualFileSystem.h>
@@ -865,16 +867,70 @@ namespace compilerlib
                 new clang::DiagnosticOptions, &ctx.dc, false);
         }
 
+        // Jobs on this path run as subprocesses, so their stderr is redirected to one
+        // temporary file per job and folded into CompileResult::diagnostics, matching
+        // what the in-process cc1 path reports.
+        class JobStderrCapture
+        {
+          public:
+            explicit JobStderrCapture(clang::driver::Compilation& comp)
+            {
+                for (auto& job : comp.getJobs())
+                {
+                    llvm::SmallString<128> path;
+                    if (llvm::sys::fs::createTemporaryFile("ct_job_stderr", "txt", path))
+                    {
+                        continue;
+                    }
+                    paths_.emplace_back(path.str().str());
+                    job.setRedirectFiles({std::nullopt, std::nullopt, paths_.back()});
+                }
+            }
+
+            ~JobStderrCapture()
+            {
+                for (const auto& path : paths_)
+                {
+                    llvm::sys::fs::remove(path);
+                }
+            }
+
+            JobStderrCapture(const JobStderrCapture&) = delete;
+            JobStderrCapture& operator=(const JobStderrCapture&) = delete;
+
+            CT_NODISCARD std::string collect() const
+            {
+                std::string out;
+                for (const auto& path : paths_)
+                {
+                    auto buffer = llvm::MemoryBuffer::getFile(path);
+                    if (buffer)
+                    {
+                        out += (*buffer)->getBuffer();
+                    }
+                }
+                return out;
+            }
+
+          private:
+            std::vector<std::string> paths_;
+        };
+
         CT_NODISCARD CompileResult runNonInstrumentedCompilation(CompileContext& ctx,
                                                                  DriverSession& driver,
                                                                  clang::driver::Compilation& comp)
         {
+            JobStderrCapture capture(comp);
             llvm::SmallVector<std::pair<int, const clang::driver::Command*>, 4> failingCommands;
+            // ExecuteCompilation only returns non-zero for crashes and internal errors;
+            // an ordinary failing job is reported through failingCommands, exactly as
+            // clang's own driver checks it.
             int rc = driver.driver().ExecuteCompilation(comp, failingCommands);
 
             CompileResult result;
-            result.success = (rc == 0);
-            result.diagnostics = std::move(ctx.dc.message);
+            result.success = (rc == 0) && failingCommands.empty();
+            result.diagnostics = mergeDiagnostics(ctx.dc.message, capture.collect());
+            ctx.dc.message.clear();
             result.llvmIR = {};
             if (!result.success && result.diagnostics.empty())
             {
