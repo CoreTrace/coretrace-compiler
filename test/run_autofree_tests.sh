@@ -32,7 +32,7 @@ mkdir -p "${OUT_DIR}"
 
 expect_leak() {
   case "$1" in
-    ct_autofree_local.c|ct_autofree_select_escape.c|ct_autofree_ptrtoint_escape.c|ct_autofree_inttoptr_escape.c)
+    ct_autofree_local.c|ct_autofree_select_escape.c|ct_autofree_ptrtoint_escape.c|ct_autofree_inttoptr_escape.c|ct_autofree_scalar_slot_escape.c)
       return 0
       ;;
     *)
@@ -54,13 +54,25 @@ expect_autofree() {
 
 expect_nonzero_exit() {
   case "$1" in
-    ct_autofree_select_escape.c|ct_autofree_ptrtoint_escape.c|ct_autofree_inttoptr_escape.c)
+    ct_autofree_select_escape.c|ct_autofree_ptrtoint_escape.c|ct_autofree_inttoptr_escape.c|ct_autofree_scalar_slot_escape.c)
       return 0
       ;;
     *)
       return 1
       ;;
   esac
+}
+
+# Fixtures that depend on a platform facility which cannot work on the host are
+# skipped explicitly rather than expected to pass. Prints the reason on success.
+skip_reason() {
+  case "$(uname -s):$1" in
+    Darwin:ct_autofree_sbrk.c)
+      echo "sbrk cannot grow the program break on macOS (returns -1)"
+      return 0
+      ;;
+  esac
+  return 1
 }
 
 TESTS=(
@@ -70,6 +82,7 @@ TESTS=(
   ct_autofree_select_escape.c
   ct_autofree_ptrtoint.c
   ct_autofree_ptrtoint_escape.c
+  ct_autofree_scalar_slot_escape.c
   ct_autofree_inttoptr.c
   ct_autofree_inttoptr_escape.c
   ct_autofree_new_nothrow.cpp
@@ -82,6 +95,7 @@ TESTS=(
 
 PASS=0
 FAIL=0
+SKIP=0
 
 run_one() {
   local test_file="$1"
@@ -140,6 +154,12 @@ run_one() {
 }
 
 for t in "${TESTS[@]}"; do
+  if reason="$(skip_reason "${t}")"; then
+    echo "==> ${t}"
+    echo "  SKIP: ${reason}"
+    SKIP=$((SKIP + 1))
+    continue
+  fi
   if run_one "${t}"; then
     PASS=$((PASS + 1))
   else
@@ -148,5 +168,5 @@ for t in "${TESTS[@]}"; do
 done
 
 echo ""
-echo "Summary: ${PASS} passed, ${FAIL} failed"
+echo "Summary: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped"
 [[ "${FAIL}" -eq 0 ]]
