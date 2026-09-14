@@ -848,11 +848,19 @@ namespace compilerlib
         class Linker
         {
           public:
+            explicit Linker(bool verbose) : verbose_(verbose) {}
+
             CT_NODISCARD bool run(const llvm::SmallVector<const clang::driver::Command*, 4>& jobs,
                                   std::string& error) const
             {
                 for (const auto* job : jobs)
                 {
+                    // The driver prints every job it executes under -v; jobs run from
+                    // here bypass the driver, so print them the same way.
+                    if (verbose_)
+                    {
+                        job->Print(llvm::errs(), "\n", /*Quote=*/true);
+                    }
                     std::string errMsg;
                     bool execFailed = false;
                     int rc = job->Execute({}, &errMsg, &execFailed);
@@ -867,6 +875,9 @@ namespace compilerlib
                 }
                 return true;
             }
+
+          private:
+            bool verbose_;
         };
 
         CT_NODISCARD llvm::IntrusiveRefCntPtr<clang::DiagnosticsEngine>
@@ -975,7 +986,7 @@ namespace compilerlib
         CT_NODISCARD CompileResult runInstrumentedToFile(CompileContext& ctx, Cc1Runner& cc1,
                                                          const JobPlan& plan, std::string& error)
         {
-            Linker linker;
+            Linker linker(hasArg(ctx.filtered_args, "-v"));
             std::string cc1_diags;
 
             for (const auto* job : plan.cc1Jobs)
@@ -1002,7 +1013,7 @@ namespace compilerlib
         CT_NODISCARD CompileResult runPlainToFile(CompileContext& ctx, Cc1Runner& cc1,
                                                   const JobPlan& plan, std::string& error)
         {
-            Linker linker;
+            Linker linker(hasArg(ctx.filtered_args, "-v"));
             std::string cc1_diags;
 
             for (const auto* job : plan.cc1Jobs)
@@ -1073,7 +1084,7 @@ namespace compilerlib
 
         if (plan.cc1Jobs.empty())
         {
-            Linker linker;
+            Linker linker(hasArg(ctx.filtered_args, "-v"));
             if (!linker.run(plan.otherJobs, error))
                 return {false, mergeDiagnostics(ctx.driver_diagnostics, error), {}};
             return {true, mergeDiagnostics(ctx.driver_diagnostics, {}), {}};
