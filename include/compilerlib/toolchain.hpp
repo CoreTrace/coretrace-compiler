@@ -23,6 +23,18 @@ namespace compilerlib
     CT_NODISCARD bool resolveDriverConfig(const std::vector<std::string>& args, DriverConfig& out,
                                           std::string& error);
 
+    struct RuntimeArchives
+    {
+        std::string runtime;
+        std::string logger;
+    };
+
+    // Locates the instrumentation runtime archives linked into instrumented programs.
+    // Order: CT_RUNTIME_LIB_DIR, then <executable dir>/../lib (installed layout), then
+    // the executable's own directory, then the build-tree paths recorded at configure
+    // time. A directory is accepted only if it holds both archives.
+    CT_NODISCARD bool resolveRuntimeArchives(RuntimeArchives& out, std::string& error);
+
 } // namespace compilerlib
 
 #endif // COMPILERLIB_TOOLCHAIN_HPP

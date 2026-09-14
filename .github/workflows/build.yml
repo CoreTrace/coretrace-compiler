@@ -99,6 +99,7 @@ jobs:
         python test/examples/test_smoke.py
         python3 test/examples/test_extern_project.py
         python3 test/examples/test_help_smoke.py
+        python3 test/examples/test_install_layout.py
 
     - name: Run runtime fixture suites (Linux/macOS)
       if: runner.os == 'Linux' || runner.os == 'macOS'

@@ -13,6 +13,11 @@ int main(int argc, char* argv[])
         cli::printHelp(argv[0]);
         return 0;
     }
+    if (parsed.outcome == cli::ParseOutcome::Version)
+    {
+        cli::printVersion();
+        return 0;
+    }
     if (parsed.outcome == cli::ParseOutcome::Error)
     {
         std::cerr << parsed.error;

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "cli/help.h"
 
+#include <llvm/Config/llvm-config.h>
+
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -28,6 +30,7 @@ namespace cli
             << "\n"
             << "Core options:\n"
             << "  -h, --help               Show this help and exit.\n"
+            << "  --version                Print the compiler version and exit.\n"
             << "  --instrument             Enable CoreTrace instrumentation (required for "
                "--ct-*).\n"
             << "  --in-mem, --in-memory     Print LLVM IR to stdout (use with -S -emit-llvm).\n"
@@ -64,5 +67,13 @@ namespace cli
             << "\n"
             << "Exit codes:\n"
             << "  0 on success, 1 on compiler errors.\n";
+    }
+
+    void printVersion(void)
+    {
+#ifndef CT_VERSION
+#define CT_VERSION "unknown"
+#endif
+        std::cout << "CoreTrace Compiler " CT_VERSION " (LLVM " LLVM_VERSION_STRING ")\n";
     }
 } // namespace cli

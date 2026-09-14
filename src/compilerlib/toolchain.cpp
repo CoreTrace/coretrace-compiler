@@ -323,6 +323,11 @@ namespace compilerlib
 
         CT_NODISCARD std::string detectResourceDir(const std::string& clang_path)
         {
+            if (const char* env = std::getenv("CT_CLANG_RESOURCE_DIR"))
+            {
+                if (llvm::sys::fs::exists(env))
+                    return env;
+            }
             if (!clang_path.empty())
             {
                 std::string resource = clang::driver::Driver::GetResourcesPath(clang_path);
@@ -387,6 +392,72 @@ namespace compilerlib
         }
 
     } // namespace
+
+    namespace
+    {
+        CT_NODISCARD bool runtimeArchivesInDir(llvm::StringRef dir, RuntimeArchives& out)
+        {
+#if defined(CT_RUNTIME_LIB_NAME) && defined(CT_RUNTIME_LOGGER_LIB_NAME)
+            llvm::SmallString<256> runtime(dir);
+            llvm::sys::path::append(runtime, CT_RUNTIME_LIB_NAME);
+            llvm::SmallString<256> logger(dir);
+            llvm::sys::path::append(logger, CT_RUNTIME_LOGGER_LIB_NAME);
+            if (!llvm::sys::fs::exists(runtime) || !llvm::sys::fs::exists(logger))
+                return false;
+            out.runtime = runtime.str().str();
+            out.logger = logger.str().str();
+            return true;
+#else
+            (void)dir;
+            (void)out;
+            return false;
+#endif
+        }
+
+        CT_NODISCARD std::string mainExecutableDir(void)
+        {
+            std::string exe = llvm::sys::fs::getMainExecutable(
+                nullptr, reinterpret_cast<void*>(&mainExecutableDir));
+            if (exe.empty())
+                return {};
+            return llvm::sys::path::parent_path(exe).str();
+        }
+    } // namespace
+
+    bool resolveRuntimeArchives(RuntimeArchives& out, std::string& error)
+    {
+        if (const char* env = std::getenv("CT_RUNTIME_LIB_DIR"))
+        {
+            if (runtimeArchivesInDir(env, out))
+                return true;
+            error = std::string("CT_RUNTIME_LIB_DIR does not contain the runtime archives: ") + env;
+            return false;
+        }
+
+        std::string exeDir = mainExecutableDir();
+        if (!exeDir.empty())
+        {
+            llvm::SmallString<256> libDir(exeDir);
+            llvm::sys::path::append(libDir, "..", "lib");
+            if (runtimeArchivesInDir(libDir, out))
+                return true;
+            if (runtimeArchivesInDir(exeDir, out))
+                return true;
+        }
+
+#if defined(CT_RUNTIME_LIB_PATH) && defined(CT_RUNTIME_LOGGER_LIB_PATH)
+        if (llvm::sys::fs::exists(CT_RUNTIME_LIB_PATH) &&
+            llvm::sys::fs::exists(CT_RUNTIME_LOGGER_LIB_PATH))
+        {
+            out.runtime = CT_RUNTIME_LIB_PATH;
+            out.logger = CT_RUNTIME_LOGGER_LIB_PATH;
+            return true;
+        }
+#endif
+        error = "instrumentation runtime archives not found; set CT_RUNTIME_LIB_DIR or install "
+                "the compiler with cmake --install";
+        return false;
+    }
 
     CT_NODISCARD bool resolveDriverConfig(const std::vector<std::string>& args, DriverConfig& out,
                                           std::string& error)
