@@ -4,7 +4,7 @@ cmake_policy(SET CMP0091 NEW)
 if(POLICY CMP0169)
   cmake_policy(SET CMP0169 OLD)
 endif()
-project(cc)
+project(cc VERSION 0.7.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -287,6 +287,10 @@ add_library(cc::compilerlib_static ALIAS compilerlib_static)
 
 target_compile_definitions(compilerlib_static
   PRIVATE
+    CT_RUNTIME_LIB_NAME="$<TARGET_FILE_NAME:ct_instrument_runtime>"
+    CT_RUNTIME_LOGGER_LIB_NAME="$<TARGET_FILE_NAME:coretrace_logger>"
+    # Build-tree locations, used only when no installed layout is found next to
+    # the executable (see resolveRuntimeArchives).
     CT_RUNTIME_LIB_PATH="$<TARGET_FILE:ct_instrument_runtime>"
     CT_RUNTIME_LOGGER_LIB_PATH="$<TARGET_FILE:coretrace_logger>"
 )
@@ -307,6 +311,10 @@ add_library(cc::compilerlib_shared ALIAS compilerlib_shared)
 
 target_compile_definitions(compilerlib_shared
   PRIVATE
+    CT_RUNTIME_LIB_NAME="$<TARGET_FILE_NAME:ct_instrument_runtime>"
+    CT_RUNTIME_LOGGER_LIB_NAME="$<TARGET_FILE_NAME:coretrace_logger>"
+    # Build-tree locations, used only when no installed layout is found next to
+    # the executable (see resolveRuntimeArchives).
     CT_RUNTIME_LIB_PATH="$<TARGET_FILE:ct_instrument_runtime>"
     CT_RUNTIME_LOGGER_LIB_PATH="$<TARGET_FILE:coretrace_logger>"
 )
@@ -316,6 +324,7 @@ target_link_libraries(compilerlib_shared PRIVATE ${CT_CLANG_LINK_LIBS} ${CT_LLVM
 
 add_executable(cc src/cli/main.cc src/cli/help.cc src/cli/args.cc)
 target_include_directories(cc PRIVATE src)
+target_compile_definitions(cc PRIVATE CT_VERSION="${PROJECT_VERSION}")
 coretrace_force_msvc_runtime(cc)
 
 foreach(tgt compilerlib_static compilerlib_shared cc)
@@ -342,11 +351,14 @@ endforeach()
 coretrace_disable_rtti(cc)
 target_link_libraries(cc PRIVATE compilerlib_static ${CT_CLANG_LINK_LIBS} ${CT_LLVM_LINK_LIBS})
 
-install(TARGETS compilerlib_static compilerlib_shared cc
+install(TARGETS compilerlib_static compilerlib_shared cc ct_instrument_runtime
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
+# The logger target lives in the fetched subdirectory; install its archive next to
+# the runtime so an installed cc can link instrumented programs.
+install(FILES $<TARGET_FILE:coretrace_logger> DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include)
 
 set(USE_SHARED_LIB OFF CACHE BOOL "Link with shared compilerlib")

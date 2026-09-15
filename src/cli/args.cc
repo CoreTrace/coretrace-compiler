@@ -30,6 +30,11 @@ namespace cli
                 result.outcome = ParseOutcome::Help;
                 return result;
             }
+            if (arg == "--version")
+            {
+                result.outcome = ParseOutcome::Version;
+                return result;
+            }
 
             if (arg == "--")
             {

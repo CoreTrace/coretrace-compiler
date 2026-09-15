@@ -45,6 +45,18 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
   && cmake --build build -j"$(nproc)"
 ```
 
+## Install
+
+```zsh
+cmake --install build --prefix /opt/coretrace
+/opt/coretrace/bin/cc --version
+```
+
+The prefix contains `bin/cc`, `lib/libct_instrument_runtime.a`, `lib/libcoretrace_logger.a`
+and `include/`. `cc` finds the runtime archives relative to its own location, so the prefix can
+be moved. Overrides: `CT_RUNTIME_LIB_DIR` (directory holding both archives), `CT_CLANG`
+(clang executable), `CT_CLANG_RESOURCE_DIR` (clang resource directory).
+
 ## Tests
 
 After building into `build/`:

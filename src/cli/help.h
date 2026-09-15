@@ -5,6 +5,7 @@
 namespace cli
 {
     void printHelp(const char* argv0);
-}
+    void printVersion(void);
+} // namespace cli
 
 #endif // CORETRACE_CLI_HELP_H

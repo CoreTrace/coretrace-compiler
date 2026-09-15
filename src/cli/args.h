@@ -13,6 +13,7 @@ namespace cli
     {
         Ok,
         Help,
+        Version,
         Error,
     };
 

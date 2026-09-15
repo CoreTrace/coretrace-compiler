@@ -67,6 +67,14 @@ def assert_run_artifact(path: str, expected_exit: int, stderr_contains: str) -> 
                 f"stderr does not contain '{stderr_contains}'\nstderr:\n{proc.stderr}")
     return Assertion(name=f"run_artifact_{Path(path).name}", check=_check)
 
+def assert_stdout_matches(pattern: str) -> Assertion:
+    def _check(res) -> None:
+        import re
+        out = res.run.stdout or ""
+        require(re.search(pattern, out) is not None,
+                f"stdout does not match /{pattern}/\nstdout:\n{out}")
+    return Assertion(name=f"stdout_matches", check=_check)
+
 def _read_artifact_bytes(res, path: str) -> bytes:
     artifact = Path(path)
     if not artifact.is_absolute():
@@ -647,7 +655,22 @@ def main() -> int:
         ],
     )
 
-    common_cases = [tc_o_eq, tc_d_space, tc_d_compact, tc_cpp, tc_x_cxx,
+    tc_version = TestCase(
+        name="version_flag",
+        plan=CompilePlan(
+            name="version_flag",
+            sources=[Path("hello.c")],
+            out=None,
+            extra_args=["--version"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_stdout_contains("CoreTrace Compiler "),
+            assert_stdout_matches(r"CoreTrace Compiler [0-9]+\.[0-9]+\.[0-9]+"),
+        ],
+    )
+
+    common_cases = [tc_version, tc_o_eq, tc_d_space, tc_d_compact, tc_cpp, tc_x_cxx,
                     tc_fail_compile, tc_fail_missing_input, tc_fail_link]
     instrument_cases = [
         tc_instrument_c,
