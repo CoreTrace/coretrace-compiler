@@ -20,5 +20,16 @@ target_link_libraries(compilerlib_unit_tests PRIVATE compilerlib_static GTest::g
 coretrace_force_msvc_runtime(compilerlib_unit_tests)
 coretrace_disable_rtti(compilerlib_unit_tests)
 
+# The runtime's allocation table, linked as instrumented programs link it. The
+# runtime installs its constructors and leak report in this process; every test
+# releases what it inserts.
+add_executable(runtime_unit_tests
+  runtime_table_test.cpp
+)
+target_include_directories(runtime_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+target_link_libraries(runtime_unit_tests PRIVATE ct_instrument_runtime coretrace_logger GTest::gtest_main)
+coretrace_force_msvc_runtime(runtime_unit_tests)
+
 include(GoogleTest)
 gtest_discover_tests(compilerlib_unit_tests)
+gtest_discover_tests(runtime_unit_tests)
