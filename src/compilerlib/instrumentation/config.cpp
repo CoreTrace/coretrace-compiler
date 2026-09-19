@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "compilerlib/instrumentation/config.hpp"
 #include "compilerlib/attributes.hpp"
+#include "coretrace/runtime_abi.h"
 
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/GlobalVariable.h>
@@ -218,14 +219,20 @@ namespace compilerlib
 
     void emitRuntimeConfigGlobals(llvm::Module& module, const RuntimeConfig& config)
     {
-        setConfigGlobal(module, "__ct_config_shadow", config.shadow_enabled ? 1 : 0);
-        setConfigGlobal(module, "__ct_config_shadow_aggressive", config.shadow_aggressive ? 1 : 0);
-        setConfigGlobal(module, "__ct_config_bounds_no_abort", config.bounds_no_abort ? 1 : 0);
-        setConfigGlobal(module, "__ct_config_disable_alloc", config.alloc_enabled ? 0 : 1);
-        setConfigGlobal(module, "__ct_config_disable_autofree", config.autofree_enabled ? 0 : 1);
-        setConfigGlobal(module, "__ct_config_disable_alloc_trace",
+        setConfigGlobal(module, CT_RUNTIME_SYMBOL(__ct_config_shadow),
+                        config.shadow_enabled ? 1 : 0);
+        setConfigGlobal(module, CT_RUNTIME_SYMBOL(__ct_config_shadow_aggressive),
+                        config.shadow_aggressive ? 1 : 0);
+        setConfigGlobal(module, CT_RUNTIME_SYMBOL(__ct_config_bounds_no_abort),
+                        config.bounds_no_abort ? 1 : 0);
+        setConfigGlobal(module, CT_RUNTIME_SYMBOL(__ct_config_disable_alloc),
+                        config.alloc_enabled ? 0 : 1);
+        setConfigGlobal(module, CT_RUNTIME_SYMBOL(__ct_config_disable_autofree),
+                        config.autofree_enabled ? 0 : 1);
+        setConfigGlobal(module, CT_RUNTIME_SYMBOL(__ct_config_disable_alloc_trace),
                         config.alloc_trace_enabled ? 0 : 1);
-        setConfigGlobal(module, "__ct_config_vtable_diag", config.vtable_diag_enabled ? 1 : 0);
+        setConfigGlobal(module, CT_RUNTIME_SYMBOL(__ct_config_vtable_diag),
+                        config.vtable_diag_enabled ? 1 : 0);
     }
 
 } // namespace compilerlib

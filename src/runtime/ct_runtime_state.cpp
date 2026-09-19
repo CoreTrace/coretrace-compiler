@@ -31,6 +31,22 @@ namespace
     }
 } // namespace
 
+// Every entry point the ABI declares must be defined by this runtime: taking their
+// addresses turns a missing definition into a link error of the runtime's own tests.
+namespace
+{
+#if defined(_MSC_VER)
+#define CT_ABI_USED
+#else
+#define CT_ABI_USED __attribute__((used))
+#endif
+#define CT_ABI_ENTRY_POINT_ADDRESS(ret, name, params) reinterpret_cast<const void*>(&name),
+    CT_ABI_USED const void* const ct_abi_entry_points[] = {
+        CT_RUNTIME_ENTRY_POINTS(CT_ABI_ENTRY_POINT_ADDRESS)};
+#undef CT_ABI_ENTRY_POINT_ADDRESS
+#undef CT_ABI_USED
+} // namespace
+
 int ct_disable_trace = 0;
 int ct_disable_alloc = 0;
 int ct_disable_bounds = 0;

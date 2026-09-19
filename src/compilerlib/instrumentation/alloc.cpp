@@ -3,6 +3,7 @@
 #include "alloc_internal.hpp"
 #include "compilerlib/instrumentation/common.hpp"
 #include "compilerlib/attributes.hpp"
+#include "runtime_abi.hpp"
 
 #include <llvm/Analysis/CaptureTracking.h>
 #include <llvm/Analysis/ValueTracking.h>
@@ -341,7 +342,7 @@ namespace compilerlib
             }
             llvm::StringRef name = callee->getName();
             const bool isMemalign = (name == "posix_memalign" && isPosixMemalignLike(*callee)) ||
-                                    name == "__ct_posix_memalign";
+                                    name == CT_RUNTIME_SYMBOL(__ct_posix_memalign);
             if (!isMemalign)
             {
                 return false;
@@ -1292,71 +1293,45 @@ namespace compilerlib
         llvm::Type* voidPtrTy = llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
         llvm::Type* sizeTy = layout.getIntPtrType(context);
         llvm::Type* intTy = llvm::Type::getInt32Ty(context);
-
-        auto* mallocTy = llvm::FunctionType::get(voidPtrTy, {sizeTy, voidPtrTy}, false);
-        auto* callocTy = llvm::FunctionType::get(voidPtrTy, {sizeTy, sizeTy, voidPtrTy}, false);
-        auto* reallocTy = llvm::FunctionType::get(voidPtrTy, {voidPtrTy, sizeTy, voidPtrTy}, false);
-        auto* freeTy = llvm::FunctionType::get(llvm::Type::getVoidTy(context), {voidPtrTy}, false);
-
-        llvm::FunctionCallee ctMalloc = module.getOrInsertFunction("__ct_malloc", mallocTy);
+        llvm::FunctionCallee ctMalloc = CT_RUNTIME_CALLEE(module, __ct_malloc);
         llvm::FunctionCallee ctMallocUnreachable =
-            module.getOrInsertFunction("__ct_malloc_unreachable", mallocTy);
-        llvm::FunctionCallee ctCalloc = module.getOrInsertFunction("__ct_calloc", callocTy);
+            CT_RUNTIME_CALLEE(module, __ct_malloc_unreachable);
+        llvm::FunctionCallee ctCalloc = CT_RUNTIME_CALLEE(module, __ct_calloc);
         llvm::FunctionCallee ctCallocUnreachable =
-            module.getOrInsertFunction("__ct_calloc_unreachable", callocTy);
-        llvm::FunctionCallee ctRealloc = module.getOrInsertFunction("__ct_realloc", reallocTy);
-        llvm::FunctionCallee ctNew = module.getOrInsertFunction("__ct_new", mallocTy);
-        llvm::FunctionCallee ctNewUnreachable =
-            module.getOrInsertFunction("__ct_new_unreachable", mallocTy);
-        llvm::FunctionCallee ctNewArray = module.getOrInsertFunction("__ct_new_array", mallocTy);
+            CT_RUNTIME_CALLEE(module, __ct_calloc_unreachable);
+        llvm::FunctionCallee ctRealloc = CT_RUNTIME_CALLEE(module, __ct_realloc);
+        llvm::FunctionCallee ctNew = CT_RUNTIME_CALLEE(module, __ct_new);
+        llvm::FunctionCallee ctNewUnreachable = CT_RUNTIME_CALLEE(module, __ct_new_unreachable);
+        llvm::FunctionCallee ctNewArray = CT_RUNTIME_CALLEE(module, __ct_new_array);
         llvm::FunctionCallee ctNewArrayUnreachable =
-            module.getOrInsertFunction("__ct_new_array_unreachable", mallocTy);
-        llvm::FunctionCallee ctNewNothrow =
-            module.getOrInsertFunction("__ct_new_nothrow", mallocTy);
+            CT_RUNTIME_CALLEE(module, __ct_new_array_unreachable);
+        llvm::FunctionCallee ctNewNothrow = CT_RUNTIME_CALLEE(module, __ct_new_nothrow);
         llvm::FunctionCallee ctNewNothrowUnreachable =
-            module.getOrInsertFunction("__ct_new_nothrow_unreachable", mallocTy);
-        llvm::FunctionCallee ctNewArrayNothrow =
-            module.getOrInsertFunction("__ct_new_array_nothrow", mallocTy);
+            CT_RUNTIME_CALLEE(module, __ct_new_nothrow_unreachable);
+        llvm::FunctionCallee ctNewArrayNothrow = CT_RUNTIME_CALLEE(module, __ct_new_array_nothrow);
         llvm::FunctionCallee ctNewArrayNothrowUnreachable =
-            module.getOrInsertFunction("__ct_new_array_nothrow_unreachable", mallocTy);
+            CT_RUNTIME_CALLEE(module, __ct_new_array_nothrow_unreachable);
         llvm::Type* voidPtrPtrTy = llvm::PointerType::get(voidPtrTy, 0);
-        llvm::FunctionCallee ctFree = module.getOrInsertFunction("__ct_free", freeTy);
-        llvm::FunctionCallee ctDelete = module.getOrInsertFunction("__ct_delete", freeTy);
-        llvm::FunctionCallee ctDeleteArray =
-            module.getOrInsertFunction("__ct_delete_array", freeTy);
-        llvm::FunctionCallee ctDeleteNothrow =
-            module.getOrInsertFunction("__ct_delete_nothrow", freeTy);
+        llvm::FunctionCallee ctFree = CT_RUNTIME_CALLEE(module, __ct_free);
+        llvm::FunctionCallee ctDelete = CT_RUNTIME_CALLEE(module, __ct_delete);
+        llvm::FunctionCallee ctDeleteArray = CT_RUNTIME_CALLEE(module, __ct_delete_array);
+        llvm::FunctionCallee ctDeleteNothrow = CT_RUNTIME_CALLEE(module, __ct_delete_nothrow);
         llvm::FunctionCallee ctDeleteArrayNothrow =
-            module.getOrInsertFunction("__ct_delete_array_nothrow", freeTy);
-        llvm::FunctionCallee ctDeleteDestroying =
-            module.getOrInsertFunction("__ct_delete_destroying", freeTy);
+            CT_RUNTIME_CALLEE(module, __ct_delete_array_nothrow);
+        llvm::FunctionCallee ctDeleteDestroying = CT_RUNTIME_CALLEE(module, __ct_delete_destroying);
         llvm::FunctionCallee ctDeleteArrayDestroying =
-            module.getOrInsertFunction("__ct_delete_array_destroying", freeTy);
-        llvm::FunctionCallee ctAutoFree = module.getOrInsertFunction("__ct_autofree", freeTy);
-        llvm::FunctionCallee ctAutoFreeDelete =
-            module.getOrInsertFunction("__ct_autofree_delete", freeTy);
+            CT_RUNTIME_CALLEE(module, __ct_delete_array_destroying);
+        llvm::FunctionCallee ctAutoFree = CT_RUNTIME_CALLEE(module, __ct_autofree);
+        llvm::FunctionCallee ctAutoFreeDelete = CT_RUNTIME_CALLEE(module, __ct_autofree_delete);
         llvm::FunctionCallee ctAutoFreeDeleteArray =
-            module.getOrInsertFunction("__ct_autofree_delete_array", freeTy);
-        auto* posixMemalignTy =
-            llvm::FunctionType::get(intTy, {voidPtrPtrTy, sizeTy, sizeTy, voidPtrTy}, false);
-        llvm::FunctionCallee ctPosixMemalign =
-            module.getOrInsertFunction("__ct_posix_memalign", posixMemalignTy);
-        auto* alignedAllocTy =
-            llvm::FunctionType::get(voidPtrTy, {sizeTy, sizeTy, voidPtrTy}, false);
-        llvm::FunctionCallee ctAlignedAlloc =
-            module.getOrInsertFunction("__ct_aligned_alloc", alignedAllocTy);
-        llvm::FunctionCallee ctMmap = module.getOrInsertFunction(
-            "__ct_mmap",
-            llvm::FunctionType::get(
-                voidPtrTy, {voidPtrTy, sizeTy, intTy, intTy, intTy, sizeTy, voidPtrTy}, false));
-        auto* munmapTy = llvm::FunctionType::get(intTy, {voidPtrTy, sizeTy, voidPtrTy}, false);
-        llvm::FunctionCallee ctMunmap = module.getOrInsertFunction("__ct_munmap", munmapTy);
-        auto* sbrkTy = llvm::FunctionType::get(voidPtrTy, {sizeTy, voidPtrTy}, false);
-        llvm::FunctionCallee ctSbrk = module.getOrInsertFunction("__ct_sbrk", sbrkTy);
-        auto* brkTy = llvm::FunctionType::get(voidPtrTy, {voidPtrTy, voidPtrTy}, false);
-        llvm::FunctionCallee ctBrk = module.getOrInsertFunction("__ct_brk", brkTy);
-        llvm::FunctionCallee ctAutoFreeMunmap =
-            module.getOrInsertFunction("__ct_autofree_munmap", freeTy);
+            CT_RUNTIME_CALLEE(module, __ct_autofree_delete_array);
+        llvm::FunctionCallee ctPosixMemalign = CT_RUNTIME_CALLEE(module, __ct_posix_memalign);
+        llvm::FunctionCallee ctAlignedAlloc = CT_RUNTIME_CALLEE(module, __ct_aligned_alloc);
+        llvm::FunctionCallee ctMmap = CT_RUNTIME_CALLEE(module, __ct_mmap);
+        llvm::FunctionCallee ctMunmap = CT_RUNTIME_CALLEE(module, __ct_munmap);
+        llvm::FunctionCallee ctSbrk = CT_RUNTIME_CALLEE(module, __ct_sbrk);
+        llvm::FunctionCallee ctBrk = CT_RUNTIME_CALLEE(module, __ct_brk);
+        llvm::FunctionCallee ctAutoFreeMunmap = CT_RUNTIME_CALLEE(module, __ct_autofree_munmap);
 
         llvm::DenseMap<const llvm::DILocation*, llvm::Constant*> siteCache;
         llvm::Constant* unknownSite = nullptr;
@@ -1633,8 +1608,7 @@ namespace compilerlib
             }
             else if (kind == ReturnAllocKind::SbrkLike)
             {
-                llvm::FunctionCallee ctAutoFreeSbrk =
-                    module.getOrInsertFunction("__ct_autofree_sbrk", freeTy);
+                llvm::FunctionCallee ctAutoFreeSbrk = CT_RUNTIME_CALLEE(module, __ct_autofree_sbrk);
                 builder.CreateCall(ctAutoFreeSbrk, {ptr});
             }
             else
@@ -1751,7 +1725,7 @@ namespace compilerlib
                     else if (site.kind == ReturnAllocKind::SbrkLike)
                     {
                         llvm::FunctionCallee ctAutoFreeSbrk =
-                            module.getOrInsertFunction("__ct_autofree_sbrk", freeTy);
+                            CT_RUNTIME_CALLEE(module, __ct_autofree_sbrk);
                         builder.CreateCall(ctAutoFreeSbrk, {ptr});
                     }
                     else
@@ -2057,8 +2031,7 @@ namespace compilerlib
                 {
                     ptr = afterBuilder.CreateBitCast(ptr, voidPtrTy);
                 }
-                llvm::FunctionCallee ctAutoFreeSbrk =
-                    module.getOrInsertFunction("__ct_autofree_sbrk", freeTy);
+                llvm::FunctionCallee ctAutoFreeSbrk = CT_RUNTIME_CALLEE(module, __ct_autofree_sbrk);
                 afterBuilder.CreateCall(ctAutoFreeSbrk, {ptr});
                 logAutofreeState("autofree-immediate", EscapeState::Unreachable, ptr, nullptr);
             }

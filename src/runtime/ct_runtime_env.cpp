@@ -14,13 +14,9 @@ namespace
 
 extern "C"
 {
-    extern int __ct_config_shadow CT_WEAK_IMPORT;
-    extern int __ct_config_shadow_aggressive CT_WEAK_IMPORT;
-    extern int __ct_config_bounds_no_abort CT_WEAK_IMPORT;
-    extern int __ct_config_disable_alloc CT_WEAK_IMPORT;
-    extern int __ct_config_disable_autofree CT_WEAK_IMPORT;
-    extern int __ct_config_disable_alloc_trace CT_WEAK_IMPORT;
-    extern int __ct_config_vtable_diag CT_WEAK_IMPORT;
+#define CT_DECLARE_WEAK_CONFIG_GLOBAL(name) extern int name CT_WEAK_IMPORT;
+    CT_RUNTIME_CONFIG_GLOBALS(CT_DECLARE_WEAK_CONFIG_GLOBAL)
+#undef CT_DECLARE_WEAK_CONFIG_GLOBAL
 }
 
 namespace

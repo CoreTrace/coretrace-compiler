@@ -3,6 +3,7 @@
 #define CT_RUNTIME_INTERNAL_H
 
 #include "compilerlib/attributes.hpp"
+#include "coretrace/runtime_abi.h"
 
 #include <coretrace/logger.hpp>
 
