@@ -467,6 +467,23 @@ namespace
     }
 } // namespace
 
+// True when alloc tracking knows this object was already released. Checked before
+// any read through the pointer: a freed object's vptr is garbage and following it
+// would crash the diagnostic that is supposed to report the use-after-free.
+CT_NODISCARD CT_NOINSTR bool ct_object_is_freed(const void* this_ptr)
+{
+    if (!this_ptr || !ct_is_enabled(CT_FEATURE_ALLOC))
+    {
+        return false;
+    }
+    unsigned char state = 0;
+    ct_lock_acquire();
+    const int found =
+        ct_table_lookup_containing(this_ptr, nullptr, nullptr, nullptr, nullptr, &state);
+    ct_lock_release();
+    return found && state == CT_ENTRY_FREED;
+}
+
 extern "C"
 {
     CT_NOINSTR void __ct_vtable_dump(void* this_ptr, const char* site, const char* static_type)
@@ -475,7 +492,8 @@ extern "C"
         ct_log_vtable_diag_state();
 
         CtVtableInfo info;
-        const bool has_vtable = ct_read_vtable_info(this_ptr, info);
+        const bool is_freed = ct_object_is_freed(this_ptr);
+        const bool has_vtable = !is_freed && ct_read_vtable_info(this_ptr, info);
         const char* site_name = ct_site_name(site);
 
         std::vector<CtBoxLine> lines;
@@ -500,7 +518,7 @@ extern "C"
         {
             warnings.push_back("null this pointer");
         }
-        if (!has_vtable)
+        if (!has_vtable && !is_freed)
         {
             warnings.push_back("no vptr");
         }
@@ -522,17 +540,9 @@ extern "C"
             }
         }
 
-        if (ct_is_enabled(CT_FEATURE_ALLOC))
+        if (is_freed)
         {
-            unsigned char state = 0;
-            ct_lock_acquire();
-            const int found =
-                ct_table_lookup_containing(this_ptr, nullptr, nullptr, nullptr, nullptr, &state);
-            ct_lock_release();
-            if (found && state == CT_ENTRY_FREED)
-            {
-                warnings.push_back("vptr on freed object");
-            }
+            warnings.push_back("vptr on freed object");
         }
 
         if (!ct_is_unknown_type(static_type) && info.dynamic_type != "<unknown>" &&
@@ -556,7 +566,8 @@ extern "C"
         ct_log_vtable_diag_state();
 
         CtVtableInfo info;
-        const bool has_vtable = ct_read_vtable_info(this_ptr, info);
+        const bool is_freed = ct_object_is_freed(this_ptr);
+        const bool has_vtable = !is_freed && ct_read_vtable_info(this_ptr, info);
         const char* site_name = ct_site_name(site);
 
         std::string symbol_name = "<unknown>";
@@ -596,7 +607,7 @@ extern "C"
         {
             warnings.push_back("null this pointer");
         }
-        if (!has_vtable)
+        if (!has_vtable && !is_freed)
         {
             warnings.push_back("no vptr");
         }
@@ -630,17 +641,9 @@ extern "C"
             warnings.push_back("target points to stack memory");
         }
 
-        if (ct_is_enabled(CT_FEATURE_ALLOC))
+        if (is_freed)
         {
-            unsigned char state = 0;
-            ct_lock_acquire();
-            const int found =
-                ct_table_lookup_containing(this_ptr, nullptr, nullptr, nullptr, nullptr, &state);
-            ct_lock_release();
-            if (found && state == CT_ENTRY_FREED)
-            {
-                warnings.push_back("vptr on freed object");
-            }
+            warnings.push_back("vptr on freed object");
         }
 
         if (!ct_is_unknown_type(static_type) && info.dynamic_type != "<unknown>" &&

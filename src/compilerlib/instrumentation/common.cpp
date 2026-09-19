@@ -54,7 +54,7 @@ namespace compilerlib
         return site;
     }
 
-    bool shouldInstrument(const llvm::Function& func)
+    bool isUserDefinedFunction(const llvm::Function& func)
     {
         if (func.isDeclaration())
             return false;
@@ -65,11 +65,8 @@ namespace compilerlib
         {
             return false;
         }
-        if (func.hasAvailableExternallyLinkage() || func.hasLinkOnceODRLinkage() ||
-            func.hasLinkOnceAnyLinkage() || func.hasWeakAnyLinkage() || func.hasWeakODRLinkage())
-        {
+        if (func.hasAvailableExternallyLinkage())
             return false;
-        }
 
         if (auto* subprogram = func.getSubprogram())
         {
@@ -89,6 +86,19 @@ namespace compilerlib
         }
 
         return true;
+    }
+
+    bool shouldInstrument(const llvm::Function& func)
+    {
+        if (!isUserDefinedFunction(func))
+            return false;
+        return !(func.hasLinkOnceODRLinkage() || func.hasLinkOnceAnyLinkage() ||
+                 func.hasWeakAnyLinkage() || func.hasWeakODRLinkage());
+    }
+
+    bool shouldRewriteAllocations(const llvm::Function& func)
+    {
+        return isUserDefinedFunction(func);
     }
 
 } // namespace compilerlib

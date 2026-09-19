@@ -49,7 +49,7 @@ expect_stderr() {
     ct_new_delete.cpp) echo "tracing-new-unreachable" ;;
     ct_vtable_diag_null.cpp) echo "null this pointer" ;;
     ct_vtable_diag_fake.cpp) echo "vtable resolve failed" ;;
-    ct_vtable_diag_freed.cpp) echo "warn" ;;
+    ct_vtable_diag_freed.cpp) echo "vptr on freed object" ;;
     ct_vtable_diag_mismatch.cpp) echo "module mismatch" ;;
     ct_vtable_diag_stack_target.cpp) echo "target in non-exec memory" ;;
     *) echo "" ;;
@@ -75,9 +75,6 @@ FORBIDDEN_STDERR=("heap-buffer-overflow" "mutex lock failed" "terminating due to
 # entry gets removed once the defect is fixed.
 known_failure() {
   case "$1" in
-    # operator delete inside linkonce_odr deleting destructors is not instrumented,
-    # so polymorphic deletes are reported as leaks: CoreTrace/coretrace-compiler#50
-    ct_vtable_basic.cpp|ct_vtable_interface.cpp|ct_vtable_diag_freed.cpp) return 0 ;;
     *) return 1 ;;
   esac
 }

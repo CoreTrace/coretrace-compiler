@@ -1621,7 +1621,7 @@ namespace compilerlib
 
         for (llvm::Function& func : module)
         {
-            if (!shouldInstrument(func))
+            if (!shouldRewriteAllocations(func))
             {
                 continue;
             }
@@ -1634,7 +1634,7 @@ namespace compilerlib
 
         for (llvm::Function& func : module)
         {
-            if (!shouldInstrument(func))
+            if (!shouldRewriteAllocations(func))
             {
                 continue;
             }
@@ -1874,7 +1874,7 @@ namespace compilerlib
 
         for (llvm::Function& func : module)
         {
-            if (!shouldInstrument(func))
+            if (!shouldRewriteAllocations(func))
             {
                 continue;
             }
