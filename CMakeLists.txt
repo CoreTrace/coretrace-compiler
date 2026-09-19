@@ -122,6 +122,7 @@ set(LIB_SOURCES
   src/compilerlib/frontend/optnone_action.cpp
   src/compilerlib/toolchain.cpp
   src/compilerlib/instrumentation/alloc.cpp
+  src/compilerlib/instrumentation/alloc_names.cpp
   src/compilerlib/instrumentation/bounds.cpp
   src/compilerlib/instrumentation/common.cpp
   src/compilerlib/instrumentation/config.cpp

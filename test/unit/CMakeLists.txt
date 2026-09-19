@@ -12,6 +12,7 @@ set(BUILD_GMOCK OFF CACHE BOOL "GoogleMock is not used" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 add_executable(compilerlib_unit_tests
+  alloc_names_test.cpp
   args_test.cpp
 )
 target_include_directories(compilerlib_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
