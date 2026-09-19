@@ -17,11 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install LLVM/Clang toolchain (retried: apt.llvm.org has short outages)
-COPY scripts/ci/install-llvm-apt.sh /tmp/install-llvm-apt.sh
-RUN bash /tmp/install-llvm-apt.sh ${LLVM_VERSION} libclang-${LLVM_VERSION}-dev \
-    && rm -f /tmp/install-llvm-apt.sh \
-    && rm -rf /var/lib/apt/lists/*
+# Install LLVM/Clang toolchain (vendored signing key, apt retries the mirror)
+COPY scripts/ci/install-llvm-apt.sh scripts/ci/apt.llvm.org.asc /tmp/ci/
+RUN bash /tmp/ci/install-llvm-apt.sh ${LLVM_VERSION} libclang-${LLVM_VERSION}-dev \
+    && rm -rf /tmp/ci /var/lib/apt/lists/*
 
 WORKDIR /repo
 COPY . /repo
