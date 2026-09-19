@@ -24,6 +24,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <cstdlib>
+#include <functional>
 
 namespace compilerlib
 {
@@ -1283,6 +1284,122 @@ namespace compilerlib
             return true;
         }
 
+        // Forwards the first `count` arguments of the original call, coerced to the
+        // parameter types of the callee in argument order: pointers are bitcast,
+        // integers extended or truncated (sign-extended when `signExtendIntegers`, as
+        // sbrk's increment requires). Extra original arguments, such as the nothrow
+        // tag of operator new or the size of a sized delete, are dropped.
+        llvm::SmallVector<llvm::Value*, 8> coerceArguments(llvm::IRBuilder<>& builder,
+                                                           llvm::CallBase& call,
+                                                           llvm::FunctionType& calleeType,
+                                                           unsigned count, bool signExtendIntegers)
+        {
+            llvm::SmallVector<llvm::Value*, 8> args;
+            for (unsigned i = 0; i < count; ++i)
+            {
+                llvm::Value* arg = call.getArgOperand(i);
+                llvm::Type* want = calleeType.getParamType(i);
+                if (arg->getType() != want)
+                {
+                    if (want->isPointerTy())
+                    {
+                        arg = builder.CreateBitCast(arg, want);
+                    }
+                    else if (signExtendIntegers)
+                    {
+                        arg = builder.CreateSExtOrTrunc(arg, want);
+                    }
+                    else
+                    {
+                        arg = builder.CreateZExtOrTrunc(arg, want);
+                    }
+                }
+                args.push_back(arg);
+            }
+            return args;
+        }
+
+        // Releases `value` right after `after` with `release`, for allocations whose
+        // result the program never uses.
+        void insertImmediateAutoFree(llvm::Instruction& after, llvm::Value* value,
+                                     llvm::FunctionCallee release, llvm::Type* voidPtrTy)
+        {
+            llvm::Instruction* insertPt = after.getNextNode();
+            if (!insertPt)
+            {
+                insertPt = after.getParent()->getTerminator();
+            }
+            if (!insertPt)
+            {
+                return;
+            }
+            llvm::IRBuilder<> afterBuilder(insertPt);
+            llvm::Value* ptr = value;
+            if (ptr->getType() != voidPtrTy)
+            {
+                ptr = afterBuilder.CreateBitCast(ptr, voidPtrTy);
+            }
+            afterBuilder.CreateCall(release, {ptr});
+            logAutofreeState("autofree-immediate", EscapeState::Unreachable, ptr, nullptr);
+        }
+
+        // How one family of allocator calls is rewritten.
+        struct CallRewrite
+        {
+            llvm::FunctionCallee target;
+            // Used instead of `target` when the result is unused; empty keeps `target`.
+            llvm::FunctionCallee unreachableTarget;
+            // Runtime release for an unused result; empty means the family has none.
+            // Resolved lazily so the module's declaration order does not depend on
+            // which families are present.
+            std::function<llvm::FunctionCallee()> release;
+            bool appendSite = true;
+            bool signExtendIntegers = false;
+        };
+
+        struct RewriteContext
+        {
+            llvm::Module& module;
+            llvm::DenseMap<const llvm::DILocation*, llvm::Constant*>& siteCache;
+            llvm::Constant*& unknownSite;
+            const llvm::SmallPtrSetImpl<const llvm::Value*>& instantAutoFreeValues;
+            llvm::Type* voidPtrTy;
+        };
+
+        template <typename Calls>
+        void rewriteCalls(const Calls& calls, RewriteContext& ctx, CallRewrite rewrite)
+        {
+            for (const auto& handle : calls)
+            {
+                auto* call =
+                    llvm::dyn_cast_or_null<llvm::CallBase>(static_cast<llvm::Value*>(handle));
+                if (!call)
+                {
+                    continue;
+                }
+                const bool unused = rewrite.release && ctx.instantAutoFreeValues.contains(call);
+                llvm::FunctionCallee target = unused && rewrite.unreachableTarget.getCallee()
+                                                  ? rewrite.unreachableTarget
+                                                  : rewrite.target;
+                llvm::FunctionType& targetType = *target.getFunctionType();
+                const unsigned forwarded =
+                    targetType.getNumParams() - (rewrite.appendSite ? 1u : 0u);
+                llvm::IRBuilder<> builder(call);
+                llvm::SmallVector<llvm::Value*, 8> args = coerceArguments(
+                    builder, *call, targetType, forwarded, rewrite.signExtendIntegers);
+                if (rewrite.appendSite)
+                {
+                    args.push_back(
+                        getSiteString(ctx.module, *call, ctx.siteCache, ctx.unknownSite));
+                }
+                llvm::CallBase* newCall = replaceCall(call, target, args);
+                if (unused && newCall)
+                {
+                    insertImmediateAutoFree(*newCall, newCall, rewrite.release(), ctx.voidPtrTy);
+                }
+            }
+        }
+
     } // namespace
 
     void wrapAllocCalls(llvm::Module& module)
@@ -1292,7 +1409,6 @@ namespace compilerlib
         EscapeAnalysisContext escapeCtx(layout);
         llvm::Type* voidPtrTy = llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
         llvm::Type* sizeTy = layout.getIntPtrType(context);
-        llvm::Type* intTy = llvm::Type::getInt32Ty(context);
         llvm::FunctionCallee ctMalloc = CT_RUNTIME_CALLEE(module, __ct_malloc);
         llvm::FunctionCallee ctMallocUnreachable =
             CT_RUNTIME_CALLEE(module, __ct_malloc_unreachable);
@@ -1311,7 +1427,6 @@ namespace compilerlib
         llvm::FunctionCallee ctNewArrayNothrow = CT_RUNTIME_CALLEE(module, __ct_new_array_nothrow);
         llvm::FunctionCallee ctNewArrayNothrowUnreachable =
             CT_RUNTIME_CALLEE(module, __ct_new_array_nothrow_unreachable);
-        llvm::Type* voidPtrPtrTy = llvm::PointerType::get(voidPtrTy, 0);
         llvm::FunctionCallee ctFree = CT_RUNTIME_CALLEE(module, __ct_free);
         llvm::FunctionCallee ctDelete = CT_RUNTIME_CALLEE(module, __ct_delete);
         llvm::FunctionCallee ctDeleteArray = CT_RUNTIME_CALLEE(module, __ct_delete_array);
@@ -1738,101 +1853,23 @@ namespace compilerlib
             }
         }
 
-        for (llvm::CallBase* call : mallocCalls)
-        {
-            bool unused = instantAutoFreeValues.contains(call);
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* sizeArg = call->getArgOperand(0);
-            if (sizeArg->getType() != sizeTy)
-            {
-                sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
-            }
+        RewriteContext ctx{module, siteCache, unknownSite, instantAutoFreeValues, voidPtrTy};
+        auto release = [](llvm::FunctionCallee callee) { return [callee]() { return callee; }; };
 
-            llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::FunctionCallee target = unused ? ctMallocUnreachable : ctMalloc;
-            llvm::CallBase* newCall = replaceCall(call, target, {sizeArg, site});
-            if (unused && newCall)
-            {
-                llvm::Instruction* insertPt = newCall->getNextNode();
-                if (!insertPt)
-                {
-                    insertPt = newCall->getParent()->getTerminator();
-                }
-                if (insertPt)
-                {
-                    llvm::IRBuilder<> afterBuilder(insertPt);
-                    llvm::Value* ptr = newCall;
-                    if (ptr->getType() != voidPtrTy)
-                    {
-                        ptr = afterBuilder.CreateBitCast(ptr, voidPtrTy);
-                    }
-                    afterBuilder.CreateCall(ctAutoFree, {ptr});
-                    logAutofreeState("autofree-immediate", EscapeState::Unreachable, ptr, nullptr);
-                }
-            }
-        }
-
-        for (llvm::CallBase* call : callocCalls)
-        {
-            bool unused = instantAutoFreeValues.contains(call);
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* countArg = call->getArgOperand(0);
-            llvm::Value* sizeArg = call->getArgOperand(1);
-            if (countArg->getType() != sizeTy)
-            {
-                countArg = builder.CreateZExtOrTrunc(countArg, sizeTy);
-            }
-            if (sizeArg->getType() != sizeTy)
-            {
-                sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
-            }
-
-            llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::FunctionCallee target = unused ? ctCallocUnreachable : ctCalloc;
-            llvm::CallBase* newCall = replaceCall(call, target, {countArg, sizeArg, site});
-            if (unused && newCall)
-            {
-                llvm::Instruction* insertPt = newCall->getNextNode();
-                if (!insertPt)
-                {
-                    insertPt = newCall->getParent()->getTerminator();
-                }
-                if (insertPt)
-                {
-                    llvm::IRBuilder<> afterBuilder(insertPt);
-                    llvm::Value* ptr = newCall;
-                    if (ptr->getType() != voidPtrTy)
-                    {
-                        ptr = afterBuilder.CreateBitCast(ptr, voidPtrTy);
-                    }
-                    afterBuilder.CreateCall(ctAutoFree, {ptr});
-                    logAutofreeState("autofree-immediate", EscapeState::Unreachable, ptr, nullptr);
-                }
-            }
-        }
+        rewriteCalls(mallocCalls, ctx, {ctMalloc, ctMallocUnreachable, release(ctAutoFree)});
+        rewriteCalls(callocCalls, ctx, {ctCalloc, ctCallocUnreachable, release(ctAutoFree)});
 
         for (llvm::CallBase* call : posixMemalignCalls)
         {
             llvm::IRBuilder<> builder(call);
-            llvm::Value* outArg = call->getArgOperand(0);
-            llvm::Value* alignArg = call->getArgOperand(1);
-            llvm::Value* sizeArg = call->getArgOperand(2);
-            if (outArg->getType() != voidPtrPtrTy)
-            {
-                outArg = builder.CreateBitCast(outArg, voidPtrPtrTy);
-            }
-            if (alignArg->getType() != sizeTy)
-            {
-                alignArg = builder.CreateZExtOrTrunc(alignArg, sizeTy);
-            }
-            if (sizeArg->getType() != sizeTy)
-            {
-                sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
-            }
-            llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::CallBase* newCall =
-                replaceCall(call, ctPosixMemalign, {outArg, alignArg, sizeArg, site});
+            llvm::SmallVector<llvm::Value*, 8> args =
+                coerceArguments(builder, *call, *ctPosixMemalign.getFunctionType(), 3, false);
+            llvm::Value* outArg = args[0];
+            args.push_back(getSiteString(module, *call, siteCache, unknownSite));
+            llvm::CallBase* newCall = replaceCall(call, ctPosixMemalign, args);
 
+            // The result lives in the out-parameter: a dead out-alloca means the
+            // program never reads it, so the allocation is released at once.
             if (auto* outAlloca = llvm::dyn_cast<llvm::AllocaInst>(outArg->stripPointerCasts()))
             {
                 if (isAllocaDead(outAlloca))
@@ -1856,407 +1893,41 @@ namespace compilerlib
             }
         }
 
-        for (llvm::CallBase* call : reallocCalls)
-        {
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* ptrArg = call->getArgOperand(0);
-            llvm::Value* sizeArg = call->getArgOperand(1);
-            if (ptrArg->getType() != voidPtrTy)
-            {
-                ptrArg = builder.CreateBitCast(ptrArg, voidPtrTy);
-            }
-            if (sizeArg->getType() != sizeTy)
-            {
-                sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
-            }
+        rewriteCalls(reallocCalls, ctx, {ctRealloc});
+        rewriteCalls(alignedAllocCalls, ctx, {ctAlignedAlloc, {}, release(ctAutoFree)});
+        rewriteCalls(mmapCalls, ctx, {ctMmap, {}, release(ctAutoFreeMunmap)});
+        rewriteCalls(munmapCalls, ctx, {ctMunmap});
+        rewriteCalls(sbrkCalls, ctx,
+                     {ctSbrk,
+                      {},
+                      [&module]() { return CT_RUNTIME_CALLEE(module, __ct_autofree_sbrk); },
+                      /*appendSite=*/true,
+                      /*signExtendIntegers=*/true});
+        rewriteCalls(brkCalls, ctx, {ctBrk});
 
-            llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            (void)replaceCall(call, ctRealloc, {ptrArg, sizeArg, site});
-        }
+        rewriteCalls(newCalls, ctx, {ctNew, ctNewUnreachable, release(ctAutoFreeDelete)});
+        rewriteCalls(newArrayCalls, ctx,
+                     {ctNewArray, ctNewArrayUnreachable, release(ctAutoFreeDeleteArray)});
+        rewriteCalls(newNothrowCalls, ctx,
+                     {ctNewNothrow, ctNewNothrowUnreachable, release(ctAutoFreeDelete)});
+        rewriteCalls(
+            newArrayNothrowCalls, ctx,
+            {ctNewArrayNothrow, ctNewArrayNothrowUnreachable, release(ctAutoFreeDeleteArray)});
 
-        for (const auto& handle : alignedAllocCalls)
+        // Deallocations take the pointer only, no site.
+        auto releaseOnly = [](llvm::FunctionCallee callee)
         {
-            auto* call = llvm::dyn_cast_or_null<llvm::CallBase>(handle);
-            if (!call)
-            {
-                continue;
-            }
-            bool unused = instantAutoFreeValues.contains(call);
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* alignArg = call->getArgOperand(0);
-            llvm::Value* sizeArg = call->getArgOperand(1);
-            if (alignArg->getType() != sizeTy)
-            {
-                alignArg = builder.CreateZExtOrTrunc(alignArg, sizeTy);
-            }
-            if (sizeArg->getType() != sizeTy)
-            {
-                sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
-            }
-            llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::CallBase* newCall = replaceCall(call, ctAlignedAlloc, {alignArg, sizeArg, site});
-            if (unused && newCall)
-            {
-                llvm::Instruction* insertPt = newCall->getNextNode();
-                if (!insertPt)
-                {
-                    insertPt = newCall->getParent()->getTerminator();
-                }
-                if (!insertPt)
-                {
-                    continue;
-                }
-                llvm::IRBuilder<> afterBuilder(insertPt);
-                llvm::Value* ptr = newCall;
-                if (ptr->getType() != voidPtrTy)
-                {
-                    ptr = afterBuilder.CreateBitCast(ptr, voidPtrTy);
-                }
-                afterBuilder.CreateCall(ctAutoFree, {ptr});
-                logAutofreeState("autofree-immediate", EscapeState::Unreachable, ptr, nullptr);
-            }
-        }
-
-        for (const auto& handle : mmapCalls)
-        {
-            auto* call = llvm::dyn_cast_or_null<llvm::CallBase>(handle);
-            if (!call)
-            {
-                continue;
-            }
-            bool unused = instantAutoFreeValues.contains(call);
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* addrArg = call->getArgOperand(0);
-            llvm::Value* lenArg = call->getArgOperand(1);
-            llvm::Value* protArg = call->getArgOperand(2);
-            llvm::Value* flagsArg = call->getArgOperand(3);
-            llvm::Value* fdArg = call->getArgOperand(4);
-            llvm::Value* offArg = call->getArgOperand(5);
-            if (addrArg->getType() != voidPtrTy)
-            {
-                addrArg = builder.CreateBitCast(addrArg, voidPtrTy);
-            }
-            if (lenArg->getType() != sizeTy)
-            {
-                lenArg = builder.CreateZExtOrTrunc(lenArg, sizeTy);
-            }
-            if (protArg->getType() != intTy)
-            {
-                protArg = builder.CreateZExtOrTrunc(protArg, intTy);
-            }
-            if (flagsArg->getType() != intTy)
-            {
-                flagsArg = builder.CreateZExtOrTrunc(flagsArg, intTy);
-            }
-            if (fdArg->getType() != intTy)
-            {
-                fdArg = builder.CreateZExtOrTrunc(fdArg, intTy);
-            }
-            if (offArg->getType() != sizeTy)
-            {
-                offArg = builder.CreateZExtOrTrunc(offArg, sizeTy);
-            }
-            llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::CallBase* newCall = replaceCall(
-                call, ctMmap, {addrArg, lenArg, protArg, flagsArg, fdArg, offArg, site});
-            if (unused && newCall)
-            {
-                llvm::Instruction* insertPt = newCall->getNextNode();
-                if (!insertPt)
-                {
-                    insertPt = newCall->getParent()->getTerminator();
-                }
-                if (!insertPt)
-                {
-                    continue;
-                }
-                llvm::IRBuilder<> afterBuilder(insertPt);
-                llvm::Value* ptr = newCall;
-                if (ptr->getType() != voidPtrTy)
-                {
-                    ptr = afterBuilder.CreateBitCast(ptr, voidPtrTy);
-                }
-                afterBuilder.CreateCall(ctAutoFreeMunmap, {ptr});
-                logAutofreeState("autofree-immediate", EscapeState::Unreachable, ptr, nullptr);
-            }
-        }
-
-        for (llvm::CallBase* call : munmapCalls)
-        {
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* addrArg = call->getArgOperand(0);
-            llvm::Value* lenArg = call->getArgOperand(1);
-            if (addrArg->getType() != voidPtrTy)
-            {
-                addrArg = builder.CreateBitCast(addrArg, voidPtrTy);
-            }
-            if (lenArg->getType() != sizeTy)
-            {
-                lenArg = builder.CreateZExtOrTrunc(lenArg, sizeTy);
-            }
-            llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            (void)replaceCall(call, ctMunmap, {addrArg, lenArg, site});
-        }
-
-        for (const auto& handle : sbrkCalls)
-        {
-            auto* call = llvm::dyn_cast_or_null<llvm::CallBase>(handle);
-            if (!call)
-            {
-                continue;
-            }
-            bool unused = instantAutoFreeValues.contains(call);
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* incrArg = call->getArgOperand(0);
-            if (incrArg->getType() != sizeTy)
-            {
-                incrArg = builder.CreateSExtOrTrunc(incrArg, sizeTy);
-            }
-            llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::CallBase* newCall = replaceCall(call, ctSbrk, {incrArg, site});
-            if (unused && newCall)
-            {
-                llvm::Instruction* insertPt = newCall->getNextNode();
-                if (!insertPt)
-                {
-                    insertPt = newCall->getParent()->getTerminator();
-                }
-                if (!insertPt)
-                {
-                    continue;
-                }
-                llvm::IRBuilder<> afterBuilder(insertPt);
-                llvm::Value* ptr = newCall;
-                if (ptr->getType() != voidPtrTy)
-                {
-                    ptr = afterBuilder.CreateBitCast(ptr, voidPtrTy);
-                }
-                llvm::FunctionCallee ctAutoFreeSbrk = CT_RUNTIME_CALLEE(module, __ct_autofree_sbrk);
-                afterBuilder.CreateCall(ctAutoFreeSbrk, {ptr});
-                logAutofreeState("autofree-immediate", EscapeState::Unreachable, ptr, nullptr);
-            }
-        }
-
-        for (llvm::CallBase* call : brkCalls)
-        {
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* addrArg = call->getArgOperand(0);
-            if (addrArg->getType() != voidPtrTy)
-            {
-                addrArg = builder.CreateBitCast(addrArg, voidPtrTy);
-            }
-            llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            (void)replaceCall(call, ctBrk, {addrArg, site});
-        }
-
-        for (llvm::CallBase* call : newCalls)
-        {
-            bool unused = instantAutoFreeValues.contains(call);
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* sizeArg = call->getArgOperand(0);
-            if (sizeArg->getType() != sizeTy)
-            {
-                sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
-            }
-            llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::FunctionCallee target = unused ? ctNewUnreachable : ctNew;
-            llvm::CallBase* newCall = replaceCall(call, target, {sizeArg, site});
-            if (unused && newCall)
-            {
-                llvm::Instruction* insertPt = newCall->getNextNode();
-                if (!insertPt)
-                {
-                    insertPt = newCall->getParent()->getTerminator();
-                }
-                if (insertPt)
-                {
-                    llvm::IRBuilder<> afterBuilder(insertPt);
-                    llvm::Value* ptr = newCall;
-                    if (ptr->getType() != voidPtrTy)
-                    {
-                        ptr = afterBuilder.CreateBitCast(ptr, voidPtrTy);
-                    }
-                    afterBuilder.CreateCall(ctAutoFreeDelete, {ptr});
-                    logAutofreeState("autofree-immediate", EscapeState::Unreachable, ptr, nullptr);
-                }
-            }
-        }
-
-        for (llvm::CallBase* call : newArrayCalls)
-        {
-            bool unused = instantAutoFreeValues.contains(call);
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* sizeArg = call->getArgOperand(0);
-            if (sizeArg->getType() != sizeTy)
-            {
-                sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
-            }
-            llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::FunctionCallee target = unused ? ctNewArrayUnreachable : ctNewArray;
-            llvm::CallBase* newCall = replaceCall(call, target, {sizeArg, site});
-            if (unused && newCall)
-            {
-                llvm::Instruction* insertPt = newCall->getNextNode();
-                if (!insertPt)
-                {
-                    insertPt = newCall->getParent()->getTerminator();
-                }
-                if (insertPt)
-                {
-                    llvm::IRBuilder<> afterBuilder(insertPt);
-                    llvm::Value* ptr = newCall;
-                    if (ptr->getType() != voidPtrTy)
-                    {
-                        ptr = afterBuilder.CreateBitCast(ptr, voidPtrTy);
-                    }
-                    afterBuilder.CreateCall(ctAutoFreeDeleteArray, {ptr});
-                    logAutofreeState("autofree-immediate", EscapeState::Unreachable, ptr, nullptr);
-                }
-            }
-        }
-
-        for (llvm::CallBase* call : newNothrowCalls)
-        {
-            bool unused = instantAutoFreeValues.contains(call);
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* sizeArg = call->getArgOperand(0);
-            if (sizeArg->getType() != sizeTy)
-            {
-                sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
-            }
-            llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::FunctionCallee target = unused ? ctNewNothrowUnreachable : ctNewNothrow;
-            llvm::CallBase* newCall = replaceCall(call, target, {sizeArg, site});
-            if (unused && newCall)
-            {
-                llvm::Instruction* insertPt = newCall->getNextNode();
-                if (!insertPt)
-                {
-                    insertPt = newCall->getParent()->getTerminator();
-                }
-                if (insertPt)
-                {
-                    llvm::IRBuilder<> afterBuilder(insertPt);
-                    llvm::Value* ptr = newCall;
-                    if (ptr->getType() != voidPtrTy)
-                    {
-                        ptr = afterBuilder.CreateBitCast(ptr, voidPtrTy);
-                    }
-                    afterBuilder.CreateCall(ctAutoFreeDelete, {ptr});
-                    logAutofreeState("autofree-immediate", EscapeState::Unreachable, ptr, nullptr);
-                }
-            }
-        }
-
-        for (llvm::CallBase* call : newArrayNothrowCalls)
-        {
-            bool unused = instantAutoFreeValues.contains(call);
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* sizeArg = call->getArgOperand(0);
-            if (sizeArg->getType() != sizeTy)
-            {
-                sizeArg = builder.CreateZExtOrTrunc(sizeArg, sizeTy);
-            }
-            llvm::Value* site = getSiteString(module, *call, siteCache, unknownSite);
-            llvm::FunctionCallee target = unused ? ctNewArrayNothrowUnreachable : ctNewArrayNothrow;
-            llvm::CallBase* newCall = replaceCall(call, target, {sizeArg, site});
-            if (unused && newCall)
-            {
-                llvm::Instruction* insertPt = newCall->getNextNode();
-                if (!insertPt)
-                {
-                    insertPt = newCall->getParent()->getTerminator();
-                }
-                if (insertPt)
-                {
-                    llvm::IRBuilder<> afterBuilder(insertPt);
-                    llvm::Value* ptr = newCall;
-                    if (ptr->getType() != voidPtrTy)
-                    {
-                        ptr = afterBuilder.CreateBitCast(ptr, voidPtrTy);
-                    }
-                    afterBuilder.CreateCall(ctAutoFreeDeleteArray, {ptr});
-                    logAutofreeState("autofree-immediate", EscapeState::Unreachable, ptr, nullptr);
-                }
-            }
-        }
-
-        for (llvm::CallBase* call : freeCalls)
-        {
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* ptrArg = call->getArgOperand(0);
-            if (ptrArg->getType() != voidPtrTy)
-            {
-                ptrArg = builder.CreateBitCast(ptrArg, voidPtrTy);
-            }
-            (void)replaceCall(call, ctFree, {ptrArg});
-        }
-
-        for (llvm::CallBase* call : deleteCalls)
-        {
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* ptrArg = call->getArgOperand(0);
-            if (ptrArg->getType() != voidPtrTy)
-            {
-                ptrArg = builder.CreateBitCast(ptrArg, voidPtrTy);
-            }
-            (void)replaceCall(call, ctDelete, {ptrArg});
-        }
-
-        for (llvm::CallBase* call : deleteArrayCalls)
-        {
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* ptrArg = call->getArgOperand(0);
-            if (ptrArg->getType() != voidPtrTy)
-            {
-                ptrArg = builder.CreateBitCast(ptrArg, voidPtrTy);
-            }
-            (void)replaceCall(call, ctDeleteArray, {ptrArg});
-        }
-
-        for (llvm::CallBase* call : deleteNothrowCalls)
-        {
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* ptrArg = call->getArgOperand(0);
-            if (ptrArg->getType() != voidPtrTy)
-            {
-                ptrArg = builder.CreateBitCast(ptrArg, voidPtrTy);
-            }
-            (void)replaceCall(call, ctDeleteNothrow, {ptrArg});
-        }
-
-        for (llvm::CallBase* call : deleteArrayNothrowCalls)
-        {
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* ptrArg = call->getArgOperand(0);
-            if (ptrArg->getType() != voidPtrTy)
-            {
-                ptrArg = builder.CreateBitCast(ptrArg, voidPtrTy);
-            }
-            (void)replaceCall(call, ctDeleteArrayNothrow, {ptrArg});
-        }
-
-        for (llvm::CallBase* call : deleteDestroyingCalls)
-        {
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* ptrArg = call->getArgOperand(0);
-            if (ptrArg->getType() != voidPtrTy)
-            {
-                ptrArg = builder.CreateBitCast(ptrArg, voidPtrTy);
-            }
-            (void)replaceCall(call, ctDeleteDestroying, {ptrArg});
-        }
-
-        for (llvm::CallBase* call : deleteArrayDestroyingCalls)
-        {
-            llvm::IRBuilder<> builder(call);
-            llvm::Value* ptrArg = call->getArgOperand(0);
-            if (ptrArg->getType() != voidPtrTy)
-            {
-                ptrArg = builder.CreateBitCast(ptrArg, voidPtrTy);
-            }
-            (void)replaceCall(call, ctDeleteArrayDestroying, {ptrArg});
-        }
+            CallRewrite rewrite{callee};
+            rewrite.appendSite = false;
+            return rewrite;
+        };
+        rewriteCalls(freeCalls, ctx, releaseOnly(ctFree));
+        rewriteCalls(deleteCalls, ctx, releaseOnly(ctDelete));
+        rewriteCalls(deleteArrayCalls, ctx, releaseOnly(ctDeleteArray));
+        rewriteCalls(deleteNothrowCalls, ctx, releaseOnly(ctDeleteNothrow));
+        rewriteCalls(deleteArrayNothrowCalls, ctx, releaseOnly(ctDeleteArrayNothrow));
+        rewriteCalls(deleteDestroyingCalls, ctx, releaseOnly(ctDeleteDestroying));
+        rewriteCalls(deleteArrayDestroyingCalls, ctx, releaseOnly(ctDeleteArrayDestroying));
     }
 
 } // namespace compilerlib
