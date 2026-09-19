@@ -100,6 +100,19 @@ CT_NOINSTR void ct_lock_release(void)
     __atomic_store_n(&ct_alloc_lock, 0, __ATOMIC_RELEASE);
 }
 
+// Warns once per process that the allocation table can no longer grow; later
+// allocations go untracked. Called with ct_alloc_lock held.
+CT_NOINSTR static void ct_warn_alloc_table_full(void)
+{
+    if (ct_alloc_table_full_logged)
+    {
+        return;
+    }
+    ct_alloc_table_full_logged = 1;
+    ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
+           ct_alloc_table_size, ct_color(CTColor::Reset));
+}
+
 CT_NODISCARD CT_NOINSTR static size_t ct_hash_ptr(const void* ptr, size_t mask)
 {
     uintptr_t value = reinterpret_cast<uintptr_t>(ptr);
@@ -1676,12 +1689,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_malloc_impl(size_t size, const char* sit
     ct_lock_acquire();
     if (ptr && !ct_table_insert(ptr, size, real_size, site, CT_ALLOC_KIND_MALLOC))
     {
-        if (!ct_alloc_table_full_logged)
-        {
-            ct_alloc_table_full_logged = 1;
-            ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
-                   ct_alloc_table_size, ct_color(CTColor::Reset));
-        }
+        ct_warn_alloc_table_full();
     }
     ct_lock_release();
 
@@ -1730,12 +1738,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_calloc_impl(size_t count, size_t size, c
     ct_lock_acquire();
     if (ptr && !ct_table_insert(ptr, req_size, real_size, site, CT_ALLOC_KIND_MALLOC))
     {
-        if (!ct_alloc_table_full_logged)
-        {
-            ct_alloc_table_full_logged = 1;
-            ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
-                   ct_alloc_table_size, ct_color(CTColor::Reset));
-        }
+        ct_warn_alloc_table_full();
     }
     ct_lock_release();
 
@@ -1779,12 +1782,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_new_impl(size_t size, const char* site, 
     unsigned char kind = is_array ? CT_ALLOC_KIND_NEW_ARRAY : CT_ALLOC_KIND_NEW;
     if (ptr && !ct_table_insert(ptr, size, real_size, site, kind))
     {
-        if (!ct_alloc_table_full_logged)
-        {
-            ct_alloc_table_full_logged = 1;
-            ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
-                   ct_alloc_table_size, ct_color(CTColor::Reset));
-        }
+        ct_warn_alloc_table_full();
     }
     ct_lock_release();
 
@@ -1835,12 +1833,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_new_nothrow_impl(size_t size, const char
     ct_lock_acquire();
     if (ptr && !ct_table_insert(ptr, size, real_size, site, kind))
     {
-        if (!ct_alloc_table_full_logged)
-        {
-            ct_alloc_table_full_logged = 1;
-            ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
-                   ct_alloc_table_size, ct_color(CTColor::Reset));
-        }
+        ct_warn_alloc_table_full();
     }
     ct_lock_release();
 
@@ -1911,12 +1904,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, con
 
         if (!ct_table_insert(new_ptr, size, real_size, site, CT_ALLOC_KIND_MALLOC))
         {
-            if (!ct_alloc_table_full_logged)
-            {
-                ct_alloc_table_full_logged = 1;
-                ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
-                       ct_alloc_table_size, ct_color(CTColor::Reset));
-            }
+            ct_warn_alloc_table_full();
         }
     }
     else if (ptr && size == 0)
@@ -1968,191 +1956,54 @@ CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, con
     return new_ptr;
 }
 
-CT_NOINSTR static void ct_delete_impl(void* ptr, int is_array)
+// The tracked-release path shared by every operator delete the compiler rewrites.
+// Only the deallocation call itself differs between them; everything before it, the
+// table removal and the diagnostics, is common.
+enum class CtReleaseApi : unsigned char
 {
-    ct_init_env_once();
-    if (!ct_is_enabled(CT_FEATURE_ALLOC))
-    {
-        if (is_array)
-        {
-            ::operator delete[](ptr);
-        }
-        else
-        {
-            ::operator delete(ptr);
-        }
-        return;
-    }
+    Delete,
+    DeleteArray,
+    DeleteNothrow,
+    DeleteArrayNothrow,
+    DeleteDestroying,
+    DeleteArrayDestroying
+};
 
-    size_t size = 0;
-    size_t req_size = 0;
-    const char* site = nullptr;
-    int found = 0;
-    (void)req_size;
-
-    ct_lock_acquire();
-    if (ptr)
-        found = ct_table_remove(ptr, &size, &req_size, &site);
-
-    ct_lock_release();
-
-    const char* label = is_array ? "tracing-delete-array" : "tracing-delete";
-
-    if (!ptr)
-    {
-        ct_log(CTLevel::Warn, "{}{} ptr=null{}\n", ct_color(CTColor::Yellow), label,
-               ct_color(CTColor::Reset));
-        if (is_array)
-        {
-            ::operator delete[](ptr);
-        }
-        else
-        {
-            ::operator delete(ptr);
-        }
-        return;
-    }
-    if (found == -1)
-    {
-        ct_log(CTLevel::Warn, "{}{} ptr={:p} (double free){}\n", ct_color(CTColor::Red), label, ptr,
-               ct_color(CTColor::Reset));
-        return;
-    }
-    if (found == 0)
-    {
-        ct_log(CTLevel::Warn, "{}{} ptr={:p} (unknown){}\n", ct_color(CTColor::Red), label, ptr,
-               ct_color(CTColor::Reset));
-        if (is_array)
-        {
-            ::operator delete[](ptr);
-        }
-        else
-        {
-            ::operator delete(ptr);
-        }
-        return;
-    }
-
-    if (ct_is_enabled(CT_FEATURE_SHADOW))
-    {
-        ct_shadow_poison_range(ptr, size);
-    }
-
-    if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
-    {
-        ct_log(CTLevel::Info, "{}{} ptr={:p} size={}{}\n", ct_color(CTColor::Cyan), label, ptr,
-               size, ct_color(CTColor::Reset));
-    }
-
-    if (is_array)
-    {
-        ::operator delete[](ptr);
-    }
-    else
-    {
-        ::operator delete(ptr);
-    }
+CT_NODISCARD CT_NOINSTR static int ct_release_api_is_array(CtReleaseApi api)
+{
+    return api == CtReleaseApi::DeleteArray || api == CtReleaseApi::DeleteArrayNothrow ||
+           api == CtReleaseApi::DeleteArrayDestroying;
 }
 
-CT_NOINSTR static void ct_delete_nothrow_impl(void* ptr, int is_array)
+CT_NOINSTR static void ct_release_by_api(void* ptr, CtReleaseApi api)
 {
-    ct_init_env_once();
-    if (!ct_is_enabled(CT_FEATURE_ALLOC))
+    switch (api)
     {
-        if (is_array)
-        {
-            ::operator delete[](ptr, std::nothrow);
-        }
-        else
-        {
-            ::operator delete(ptr, std::nothrow);
-        }
-        return;
-    }
-
-    size_t size = 0;
-    size_t req_size = 0;
-    const char* site = nullptr;
-    int found = 0;
-    (void)req_size;
-
-    ct_lock_acquire();
-    if (ptr)
-        found = ct_table_remove(ptr, &size, &req_size, &site);
-
-    ct_lock_release();
-
-    const char* label = is_array ? "tracing-delete-array" : "tracing-delete";
-
-    if (!ptr)
-    {
-        ct_log(CTLevel::Warn, "{}{} ptr=null{}\n", ct_color(CTColor::Yellow), label,
-               ct_color(CTColor::Reset));
-        if (is_array)
-        {
-            ::operator delete[](ptr, std::nothrow);
-        }
-        else
-        {
-            ::operator delete(ptr, std::nothrow);
-        }
-        return;
-    }
-    if (found == -1)
-    {
-        ct_log(CTLevel::Warn, "{}{} ptr={:p} (double free){}\n", ct_color(CTColor::Red), label, ptr,
-               ct_color(CTColor::Reset));
-        return;
-    }
-    if (found == 0)
-    {
-        ct_log(CTLevel::Warn, "{}{} ptr={:p} (unknown){}\n", ct_color(CTColor::Red), label, ptr,
-               ct_color(CTColor::Reset));
-        if (is_array)
-        {
-            ::operator delete[](ptr, std::nothrow);
-        }
-        else
-        {
-            ::operator delete(ptr, std::nothrow);
-        }
-        return;
-    }
-
-    if (ct_is_enabled(CT_FEATURE_SHADOW))
-    {
-        ct_shadow_poison_range(ptr, size);
-    }
-
-    if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
-    {
-        ct_log(CTLevel::Info, "{}{} ptr={:p} size={}{}\n", ct_color(CTColor::Cyan), label, ptr,
-               size, ct_color(CTColor::Reset));
-    }
-
-    if (is_array)
-    {
-        ::operator delete[](ptr, std::nothrow);
-    }
-    else
-    {
+    case CtReleaseApi::DeleteNothrow:
         ::operator delete(ptr, std::nothrow);
+        return;
+    case CtReleaseApi::DeleteArrayNothrow:
+        ::operator delete[](ptr, std::nothrow);
+        return;
+    case CtReleaseApi::DeleteArray:
+    case CtReleaseApi::DeleteArrayDestroying:
+        ::operator delete[](ptr);
+        return;
+    case CtReleaseApi::Delete:
+    case CtReleaseApi::DeleteDestroying:
+        ::operator delete(ptr);
+        return;
     }
 }
 
-CT_NOINSTR static void ct_delete_destroying_impl(void* ptr, int is_array)
+CT_NOINSTR static void ct_release_tracked_pointer(void* ptr, CtReleaseApi api)
 {
+    const int is_array = ct_release_api_is_array(api);
+
     ct_init_env_once();
     if (!ct_is_enabled(CT_FEATURE_ALLOC))
     {
-        if (is_array)
-        {
-            ::operator delete[](ptr);
-        }
-        else
-        {
-            ::operator delete(ptr);
-        }
+        ct_release_by_api(ptr, api);
         return;
     }
 
@@ -2174,14 +2025,7 @@ CT_NOINSTR static void ct_delete_destroying_impl(void* ptr, int is_array)
     {
         ct_log(CTLevel::Warn, "{}{} ptr=null{}\n", ct_color(CTColor::Yellow), label,
                ct_color(CTColor::Reset));
-        if (is_array)
-        {
-            ::operator delete[](ptr);
-        }
-        else
-        {
-            ::operator delete(ptr);
-        }
+        ct_release_by_api(ptr, api);
         return;
     }
     if (found == -1)
@@ -2194,14 +2038,7 @@ CT_NOINSTR static void ct_delete_destroying_impl(void* ptr, int is_array)
     {
         ct_log(CTLevel::Warn, "{}{} ptr={:p} (unknown){}\n", ct_color(CTColor::Red), label, ptr,
                ct_color(CTColor::Reset));
-        if (is_array)
-        {
-            ::operator delete[](ptr);
-        }
-        else
-        {
-            ::operator delete(ptr);
-        }
+        ct_release_by_api(ptr, api);
         return;
     }
 
@@ -2216,14 +2053,7 @@ CT_NOINSTR static void ct_delete_destroying_impl(void* ptr, int is_array)
                size, ct_color(CTColor::Reset));
     }
 
-    if (is_array)
-    {
-        ::operator delete[](ptr);
-    }
-    else
-    {
-        ::operator delete(ptr);
-    }
+    ct_release_by_api(ptr, api);
 }
 
 extern "C"
@@ -2315,12 +2145,7 @@ extern "C"
         ct_lock_acquire();
         if (!ct_table_insert(ptr, size, real_size, site, CT_ALLOC_KIND_MALLOC))
         {
-            if (!ct_alloc_table_full_logged)
-            {
-                ct_alloc_table_full_logged = 1;
-                ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
-                       ct_alloc_table_size, ct_color(CTColor::Reset));
-            }
+            ct_warn_alloc_table_full();
         }
         ct_lock_release();
 
@@ -2348,12 +2173,7 @@ extern "C"
         ct_lock_acquire();
         if (ptr && !ct_table_insert(ptr, size, real_size, site, CT_ALLOC_KIND_MALLOC))
         {
-            if (!ct_alloc_table_full_logged)
-            {
-                ct_alloc_table_full_logged = 1;
-                ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
-                       ct_alloc_table_size, ct_color(CTColor::Reset));
-            }
+            ct_warn_alloc_table_full();
         }
         ct_lock_release();
 
@@ -2381,12 +2201,7 @@ extern "C"
         ct_lock_acquire();
         if (!ct_table_insert(ptr, len, len, site, CT_ALLOC_KIND_MMAP))
         {
-            if (!ct_alloc_table_full_logged)
-            {
-                ct_alloc_table_full_logged = 1;
-                ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
-                       ct_alloc_table_size, ct_color(CTColor::Reset));
-            }
+            ct_warn_alloc_table_full();
         }
         ct_lock_release();
 
@@ -2516,349 +2331,160 @@ extern "C"
 #endif
     }
 
-    CT_NOINSTR void __ct_autofree(void* ptr)
+    // Every __ct_autofree* entry point walks the same path: honour the features, give
+    // the conservative scan a chance to prove the pointer still reachable, remove the
+    // entry, then release it with the API matching how it was allocated.
+    enum class CtAutoFreeApi : unsigned char
     {
-        ct_init_env_once();
-        ct_autofree_scan_init_once();
-        if (!ct_is_enabled(CT_FEATURE_ALLOC))
-        {
-            return;
-        }
-        if (!ct_is_enabled(CT_FEATURE_AUTOFREE))
-        {
-            return;
-        }
-        if (!ptr)
-        {
-            ct_log(CTLevel::Warn, "{}ct: auto-free ptr=null{}\n", ct_color(CTColor::BgBrightYellow),
-                   ct_color(CTColor::Reset));
-            return;
-        }
+        Free,
+        Munmap,
+        Sbrk,
+        Delete,
+        DeleteArray
+    };
 
-        size_t size = 0;
-        size_t req_size = 0;
-        const char* site = nullptr;
-        int found = 0;
-        (void)req_size;
-
-        if (ct_autofree_scan_enabled.load(std::memory_order_acquire) &&
-            ct_autofree_scan_ptr.load(std::memory_order_acquire))
-        {
-            unsigned char state = CT_ENTRY_EMPTY;
-            ct_lock_acquire();
-            int lookup = ct_table_lookup(ptr, &size, &req_size, &site, &state);
-            ct_lock_release();
-            if (lookup == 1 && state == CT_ENTRY_USED)
-            {
-                if (ct_autofree_scan_for_ptr(ptr, size))
-                {
-                    return;
-                }
-            }
-        }
-
-        ct_lock_acquire();
-        found = ct_table_remove_autofree(ptr, &size, &req_size, &site);
-        ct_lock_release();
-
-        if (found == -2)
-        {
-            return;
-        }
-        if (found == -1)
-        {
-            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} (already freed){}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr, ct_color(CTColor::Reset));
-            return;
-        }
-        if (found == 0)
-        {
-            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} (unknown){}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr, ct_color(CTColor::Reset));
-            return;
-        }
-
-        if (ct_is_enabled(CT_FEATURE_SHADOW))
-        {
-            ct_shadow_poison_range(ptr, size);
-        }
-
-        ct_log(CTLevel::Warn, "{}auto-free ptr={:p} size={} site={}{}\n",
-               ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
-               ct_color(CTColor::Reset));
-        free(ptr);
-    }
-
-    CT_NOINSTR void __ct_autofree_munmap(void* ptr)
+    CT_NOINSTR static void ct_autofree_release(void* ptr, size_t size, const char* site,
+                                               CtAutoFreeApi api)
     {
-        ct_init_env_once();
-        ct_autofree_scan_init_once();
-        if (!ct_is_enabled(CT_FEATURE_ALLOC) || !ct_is_enabled(CT_FEATURE_AUTOFREE))
+        if (api == CtAutoFreeApi::Sbrk)
         {
-            return;
-        }
-        if (!ptr)
-        {
-            ct_log(CTLevel::Warn, "{}ct: auto-free ptr=null{}\n", ct_color(CTColor::BgBrightYellow),
-                   ct_color(CTColor::Reset));
-            return;
-        }
-
-        size_t size = 0;
-        size_t req_size = 0;
-        const char* site = nullptr;
-        int found = 0;
-        (void)req_size;
-
-        if (ct_autofree_scan_enabled.load(std::memory_order_acquire) &&
-            ct_autofree_scan_ptr.load(std::memory_order_acquire))
-        {
-            unsigned char state = CT_ENTRY_EMPTY;
-            ct_lock_acquire();
-            int lookup = ct_table_lookup(ptr, &size, &req_size, &site, &state);
-            ct_lock_release();
-            if (lookup == 1 && state == CT_ENTRY_USED)
-            {
-                if (ct_autofree_scan_for_ptr(ptr, size))
-                {
-                    return;
-                }
-            }
-        }
-
-        ct_lock_acquire();
-        found = ct_table_remove_autofree(ptr, &size, &req_size, &site);
-        ct_lock_release();
-
-        if (found == -2)
-        {
-            return;
-        }
-        if (found <= 0)
-        {
-            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} ({}){}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr, found == 0 ? "unknown" : "already freed",
-                   ct_color(CTColor::Reset));
-            return;
-        }
-
-        if (ct_is_enabled(CT_FEATURE_SHADOW))
-        {
-            ct_shadow_poison_range(ptr, size);
-        }
-
-        ct_log(CTLevel::Warn, "{}auto-free ptr={:p} size={} site={}{}\n",
-               ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
-               ct_color(CTColor::Reset));
-        (void)munmap(ptr, size);
-    }
-
-    CT_NOINSTR void __ct_autofree_sbrk(void* ptr)
-    {
-        ct_init_env_once();
-        ct_autofree_scan_init_once();
-        if (!ct_is_enabled(CT_FEATURE_ALLOC) || !ct_is_enabled(CT_FEATURE_AUTOFREE))
-        {
-            return;
-        }
-        if (!ptr)
-        {
-            ct_log(CTLevel::Warn, "{}ct: auto-free ptr=null{}\n", ct_color(CTColor::BgBrightYellow),
-                   ct_color(CTColor::Reset));
-            return;
-        }
-
-        size_t size = 0;
-        size_t req_size = 0;
-        const char* site = nullptr;
-        int found = 0;
-        (void)req_size;
-
-        if (ct_autofree_scan_enabled.load(std::memory_order_acquire) &&
-            ct_autofree_scan_ptr.load(std::memory_order_acquire))
-        {
-            unsigned char state = CT_ENTRY_EMPTY;
-            ct_lock_acquire();
-            int lookup = ct_table_lookup(ptr, &size, &req_size, &site, &state);
-            ct_lock_release();
-            if (lookup == 1 && state == CT_ENTRY_USED)
-            {
-                if (ct_autofree_scan_for_ptr(ptr, size))
-                {
-                    return;
-                }
-            }
-        }
-
-        ct_lock_acquire();
-        found = ct_table_remove_autofree(ptr, &size, &req_size, &site);
-        ct_lock_release();
-
-        if (found == -2)
-        {
-            return;
-        }
-        if (found <= 0)
-        {
-            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} ({}){}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr, found == 0 ? "unknown" : "already freed",
-                   ct_color(CTColor::Reset));
-            return;
-        }
 #if defined(__linux__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
-        void* current = sbrk(0);
-        if (current != (void*)-1 &&
-            static_cast<char*>(ptr) + static_cast<ptrdiff_t>(size) == current)
-        {
-            (void)sbrk(-static_cast<intptr_t>(size));
-            if (ct_is_enabled(CT_FEATURE_SHADOW))
+            // The break can only shrink from its top, so an allocation that is no
+            // longer the last one cannot be returned to the system.
+            void* current = sbrk(0);
+            if (current != (void*)-1 &&
+                static_cast<char*>(ptr) + static_cast<ptrdiff_t>(size) == current)
             {
-                ct_shadow_poison_range(ptr, size);
+                (void)sbrk(-static_cast<intptr_t>(size));
+                if (ct_is_enabled(CT_FEATURE_SHADOW))
+                {
+                    ct_shadow_poison_range(ptr, size);
+                }
+                ct_log(CTLevel::Warn, "{}auto-free ptr={:p} size={} site={}{}\n",
+                       ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
+                       ct_color(CTColor::Reset));
+                return;
             }
-            ct_log(CTLevel::Warn, "{}auto-free ptr={:p} size={} site={}{}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
-                   ct_color(CTColor::Reset));
-            return;
 #pragma clang diagnostic pop
+            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} (sbrk not top){}\n",
+                   ct_color(CTColor::BgBrightYellow), ptr, ct_color(CTColor::Reset));
+#else
+            (void)size;
+            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} (sbrk not supported){}\n",
+                   ct_color(CTColor::BgBrightYellow), ptr, ct_color(CTColor::Reset));
+#endif
+            return;
         }
 
-        ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} (sbrk not top){}\n",
-               ct_color(CTColor::BgBrightYellow), ptr, ct_color(CTColor::Reset));
-#else
-        ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} (sbrk not supported){}\n",
-               ct_color(CTColor::BgBrightYellow), ptr, ct_color(CTColor::Reset));
-#endif
+        if (ct_is_enabled(CT_FEATURE_SHADOW))
+        {
+            ct_shadow_poison_range(ptr, size);
+        }
+
+        ct_log(CTLevel::Warn, "{}auto-free ptr={:p} size={} site={}{}\n",
+               ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
+               ct_color(CTColor::Reset));
+
+        switch (api)
+        {
+        case CtAutoFreeApi::Munmap:
+            (void)munmap(ptr, size);
+            return;
+        case CtAutoFreeApi::Delete:
+            ::operator delete(ptr);
+            return;
+        case CtAutoFreeApi::DeleteArray:
+            ::operator delete[](ptr);
+            return;
+        case CtAutoFreeApi::Free:
+        case CtAutoFreeApi::Sbrk:
+            free(ptr);
+            return;
+        }
+    }
+
+    CT_NOINSTR static void ct_autofree_tracked(void* ptr, CtAutoFreeApi api)
+    {
+        ct_init_env_once();
+        ct_autofree_scan_init_once();
+        if (!ct_is_enabled(CT_FEATURE_ALLOC) || !ct_is_enabled(CT_FEATURE_AUTOFREE))
+        {
+            return;
+        }
+        if (!ptr)
+        {
+            ct_log(CTLevel::Warn, "{}ct: auto-free ptr=null{}\n", ct_color(CTColor::BgBrightYellow),
+                   ct_color(CTColor::Reset));
+            return;
+        }
+
+        size_t size = 0;
+        size_t req_size = 0;
+        const char* site = nullptr;
+        (void)req_size;
+
+        if (ct_autofree_scan_enabled.load(std::memory_order_acquire) &&
+            ct_autofree_scan_ptr.load(std::memory_order_acquire))
+        {
+            unsigned char state = CT_ENTRY_EMPTY;
+            ct_lock_acquire();
+            int lookup = ct_table_lookup(ptr, &size, &req_size, &site, &state);
+            ct_lock_release();
+            if (lookup == 1 && state == CT_ENTRY_USED)
+            {
+                if (ct_autofree_scan_for_ptr(ptr, size))
+                {
+                    return;
+                }
+            }
+        }
+
+        ct_lock_acquire();
+        const int found = ct_table_remove_autofree(ptr, &size, &req_size, &site);
+        ct_lock_release();
+
+        // -2: the scan thread released it already, and said so.
+        if (found == -2)
+        {
+            return;
+        }
+        if (found <= 0)
+        {
+            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} ({}){}\n",
+                   ct_color(CTColor::BgBrightYellow), ptr, found == 0 ? "unknown" : "already freed",
+                   ct_color(CTColor::Reset));
+            return;
+        }
+
+        ct_autofree_release(ptr, size, site, api);
+    }
+
+    CT_NOINSTR void __ct_autofree(void* ptr)
+    {
+        ct_autofree_tracked(ptr, CtAutoFreeApi::Free);
+    }
+
+    CT_NOINSTR void __ct_autofree_munmap(void* ptr)
+    {
+        ct_autofree_tracked(ptr, CtAutoFreeApi::Munmap);
+    }
+
+    CT_NOINSTR void __ct_autofree_sbrk(void* ptr)
+    {
+        ct_autofree_tracked(ptr, CtAutoFreeApi::Sbrk);
     }
 
     CT_NOINSTR void __ct_autofree_delete(void* ptr)
     {
-        ct_init_env_once();
-        ct_autofree_scan_init_once();
-        if (!ct_is_enabled(CT_FEATURE_ALLOC) || !ct_is_enabled(CT_FEATURE_AUTOFREE))
-        {
-            return;
-        }
-        if (!ptr)
-        {
-            ct_log(CTLevel::Warn, "{}ct: auto-free ptr=null{}\n", ct_color(CTColor::BgBrightYellow),
-                   ct_color(CTColor::Reset));
-            return;
-        }
-
-        size_t size = 0;
-        size_t req_size = 0;
-        const char* site = nullptr;
-        int found = 0;
-        (void)req_size;
-
-        if (ct_autofree_scan_enabled.load(std::memory_order_acquire) &&
-            ct_autofree_scan_ptr.load(std::memory_order_acquire))
-        {
-            unsigned char state = CT_ENTRY_EMPTY;
-            ct_lock_acquire();
-            int lookup = ct_table_lookup(ptr, &size, &req_size, &site, &state);
-            ct_lock_release();
-            if (lookup == 1 && state == CT_ENTRY_USED)
-            {
-                if (ct_autofree_scan_for_ptr(ptr, size))
-                {
-                    return;
-                }
-            }
-        }
-
-        ct_lock_acquire();
-        found = ct_table_remove_autofree(ptr, &size, &req_size, &site);
-        ct_lock_release();
-
-        if (found == -2)
-        {
-            return;
-        }
-        if (found <= 0)
-        {
-            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} ({}){}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr, found == 0 ? "unknown" : "already freed",
-                   ct_color(CTColor::Reset));
-            return;
-        }
-
-        if (ct_is_enabled(CT_FEATURE_SHADOW))
-        {
-            ct_shadow_poison_range(ptr, size);
-        }
-
-        ct_log(CTLevel::Warn, "{}auto-free ptr={:p} size={} site={}{}\n",
-               ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
-               ct_color(CTColor::Reset));
-        ::operator delete(ptr);
+        ct_autofree_tracked(ptr, CtAutoFreeApi::Delete);
     }
 
     CT_NOINSTR void __ct_autofree_delete_array(void* ptr)
     {
-        ct_init_env_once();
-        ct_autofree_scan_init_once();
-        if (!ct_is_enabled(CT_FEATURE_ALLOC) || !ct_is_enabled(CT_FEATURE_AUTOFREE))
-        {
-            return;
-        }
-        if (!ptr)
-        {
-            ct_log(CTLevel::Warn, "{}ct: auto-free ptr=null{}\n", ct_color(CTColor::BgBrightYellow),
-                   ct_color(CTColor::Reset));
-            return;
-        }
-
-        size_t size = 0;
-        size_t req_size = 0;
-        const char* site = nullptr;
-        int found = 0;
-        (void)req_size;
-
-        if (ct_autofree_scan_enabled.load(std::memory_order_acquire) &&
-            ct_autofree_scan_ptr.load(std::memory_order_acquire))
-        {
-            unsigned char state = CT_ENTRY_EMPTY;
-            ct_lock_acquire();
-            int lookup = ct_table_lookup(ptr, &size, &req_size, &site, &state);
-            ct_lock_release();
-            if (lookup == 1 && state == CT_ENTRY_USED)
-            {
-                if (ct_autofree_scan_for_ptr(ptr, size))
-                {
-                    return;
-                }
-            }
-        }
-
-        ct_lock_acquire();
-        found = ct_table_remove_autofree(ptr, &size, &req_size, &site);
-        ct_lock_release();
-
-        if (found == -2)
-        {
-            return;
-        }
-        if (found <= 0)
-        {
-            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} ({}){}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr, found == 0 ? "unknown" : "already freed",
-                   ct_color(CTColor::Reset));
-            return;
-        }
-
-        if (ct_is_enabled(CT_FEATURE_SHADOW))
-        {
-            ct_shadow_poison_range(ptr, size);
-        }
-
-        ct_log(CTLevel::Warn, "{}auto-free ptr={:p} size={} site={}{}\n",
-               ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
-               ct_color(CTColor::Reset));
-        ::operator delete[](ptr);
+        ct_autofree_tracked(ptr, CtAutoFreeApi::DeleteArray);
     }
 
     CT_NOINSTR void __ct_free(void* ptr)
@@ -2919,39 +2545,39 @@ extern "C"
 
     CT_NOINSTR void __ct_delete(void* ptr)
     {
-        ct_delete_impl(ptr, 0);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::Delete);
     }
 
     CT_NOINSTR void __ct_delete_array(void* ptr)
     {
-        ct_delete_impl(ptr, 1);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArray);
     }
 
     CT_NOINSTR void __ct_delete_nothrow(void* ptr)
     {
-        ct_delete_nothrow_impl(ptr, 0);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteNothrow);
     }
 
     CT_NOINSTR void __ct_delete_array_nothrow(void* ptr)
     {
-        ct_delete_nothrow_impl(ptr, 1);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayNothrow);
     }
 
     CT_NOINSTR void __ct_delete_destroying(void* ptr)
     {
 #if defined(__cpp_lib_destroying_delete) && __cpp_lib_destroying_delete >= 201806L
-        ct_delete_destroying_impl(ptr, 0);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteDestroying);
 #else
-        ct_delete_impl(ptr, 0);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::Delete);
 #endif
     }
 
     CT_NOINSTR void __ct_delete_array_destroying(void* ptr)
     {
 #if defined(__cpp_lib_destroying_delete) && __cpp_lib_destroying_delete >= 201806L
-        ct_delete_destroying_impl(ptr, 1);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayDestroying);
 #else
-        ct_delete_impl(ptr, 1);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArray);
 #endif
     }
 
