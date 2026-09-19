@@ -34,6 +34,8 @@ RUN rm -rf build \
        -DUSE_SHARED_LIB=OFF \
     && cmake --build build -j"$(nproc)"
 
+RUN ctest --test-dir build --output-on-failure
+
 RUN bash test/scripts/linux_compile.sh \
     && bash test/run_autofree_tests.sh /tmp/ct_autofree_tests \
     && bash test/run_runtime_tests.sh /tmp/ct_runtime_tests
