@@ -57,5 +57,6 @@ echo "deb [signed-by=${KEYRING}] https://apt.llvm.org/${CODENAME}/ llvm-toolchai
   > "${SOURCES}"
 
 retry apt-get "${APT_OPTS[@]}" update
+# clang, llvm and the LLVM CMake package (llvm-<v>-dev provides LLVMConfig.cmake).
 retry apt-get "${APT_OPTS[@]}" install -y --no-install-recommends \
-  "clang-${LLVM_VERSION}" "llvm-${LLVM_VERSION}" "${EXTRA_PACKAGES[@]}"
+  "clang-${LLVM_VERSION}" "llvm-${LLVM_VERSION}" "llvm-${LLVM_VERSION}-dev" "${EXTRA_PACKAGES[@]}"
