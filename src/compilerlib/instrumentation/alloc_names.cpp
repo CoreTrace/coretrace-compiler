@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "alloc_internal.hpp"
 
+#include "coretrace/runtime_abi.h"
+
 namespace compilerlib
 {
     int escapeRank(EscapeState state)
@@ -188,11 +190,15 @@ namespace compilerlib
 
     bool isFreeLikeName(llvm::StringRef name)
     {
-        return name == "free" || name == "__ct_free" || name == "__ct_autofree" ||
-               name == "__ct_delete" || name == "__ct_delete_array" ||
-               name == "__ct_delete_nothrow" || name == "__ct_delete_array_nothrow" ||
-               name == "__ct_autofree_delete" || name == "__ct_autofree_delete_array" ||
-               name == "__ct_munmap" || name == "__ct_autofree_munmap";
+        return name == "free" || name == CT_RUNTIME_SYMBOL(__ct_free) ||
+               name == CT_RUNTIME_SYMBOL(__ct_autofree) || name == CT_RUNTIME_SYMBOL(__ct_delete) ||
+               name == CT_RUNTIME_SYMBOL(__ct_delete_array) ||
+               name == CT_RUNTIME_SYMBOL(__ct_delete_nothrow) ||
+               name == CT_RUNTIME_SYMBOL(__ct_delete_array_nothrow) ||
+               name == CT_RUNTIME_SYMBOL(__ct_autofree_delete) ||
+               name == CT_RUNTIME_SYMBOL(__ct_autofree_delete_array) ||
+               name == CT_RUNTIME_SYMBOL(__ct_munmap) ||
+               name == CT_RUNTIME_SYMBOL(__ct_autofree_munmap);
     }
 
 } // namespace compilerlib

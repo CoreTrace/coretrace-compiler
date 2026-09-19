@@ -2,6 +2,7 @@
 #include "compilerlib/instrumentation/bounds.hpp"
 #include "compilerlib/instrumentation/common.hpp"
 #include "compilerlib/attributes.hpp"
+#include "runtime_abi.hpp"
 
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallVector.h>
@@ -172,10 +173,7 @@ namespace compilerlib
         llvm::Type* sizeTy = layout.getIntPtrType(context);
         llvm::Type* intTy = llvm::Type::getInt32Ty(context);
 
-        auto* checkTy =
-            llvm::FunctionType::get(llvm::Type::getVoidTy(context),
-                                    {voidPtrTy, voidPtrTy, sizeTy, voidPtrTy, intTy}, false);
-        llvm::FunctionCallee checkFn = module.getOrInsertFunction("__ct_check_bounds", checkTy);
+        llvm::FunctionCallee checkFn = CT_RUNTIME_CALLEE(module, __ct_check_bounds);
 
         llvm::DenseMap<const llvm::DILocation*, llvm::Constant*> siteCache;
         llvm::Constant* unknownSite = nullptr;

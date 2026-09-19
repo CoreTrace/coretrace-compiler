@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "compilerlib/instrumentation/trace.hpp"
 #include "compilerlib/instrumentation/common.hpp"
+#include "runtime_abi.hpp"
 
 #include <llvm/ADT/StringMap.h>
 #include <llvm/ADT/SmallVector.h>
@@ -40,29 +41,16 @@ namespace compilerlib
     void instrumentModule(llvm::Module& module)
     {
         llvm::LLVMContext& context = module.getContext();
-        llvm::Type* voidTy = llvm::Type::getVoidTy(context);
         llvm::Type* voidPtrTy = llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
         llvm::Type* i64Ty = llvm::Type::getInt64Ty(context);
         llvm::Type* doubleTy = llvm::Type::getDoubleTy(context);
 
-        auto* enterTy = llvm::FunctionType::get(voidTy, {voidPtrTy}, false);
-        auto* exitVoidTy = llvm::FunctionType::get(voidTy, {voidPtrTy}, false);
-        auto* exitI64Ty = llvm::FunctionType::get(voidTy, {voidPtrTy, i64Ty}, false);
-        auto* exitPtrTy = llvm::FunctionType::get(voidTy, {voidPtrTy, voidPtrTy}, false);
-        auto* exitF64Ty = llvm::FunctionType::get(voidTy, {voidPtrTy, doubleTy}, false);
-        auto* exitUnknownTy = llvm::FunctionType::get(voidTy, {voidPtrTy}, false);
-
-        llvm::FunctionCallee enterFn = module.getOrInsertFunction("__ct_trace_enter", enterTy);
-        llvm::FunctionCallee exitVoidFn =
-            module.getOrInsertFunction("__ct_trace_exit_void", exitVoidTy);
-        llvm::FunctionCallee exitI64Fn =
-            module.getOrInsertFunction("__ct_trace_exit_i64", exitI64Ty);
-        llvm::FunctionCallee exitPtrFn =
-            module.getOrInsertFunction("__ct_trace_exit_ptr", exitPtrTy);
-        llvm::FunctionCallee exitF64Fn =
-            module.getOrInsertFunction("__ct_trace_exit_f64", exitF64Ty);
-        llvm::FunctionCallee exitUnknownFn =
-            module.getOrInsertFunction("__ct_trace_exit_unknown", exitUnknownTy);
+        llvm::FunctionCallee enterFn = CT_RUNTIME_CALLEE(module, __ct_trace_enter);
+        llvm::FunctionCallee exitVoidFn = CT_RUNTIME_CALLEE(module, __ct_trace_exit_void);
+        llvm::FunctionCallee exitI64Fn = CT_RUNTIME_CALLEE(module, __ct_trace_exit_i64);
+        llvm::FunctionCallee exitPtrFn = CT_RUNTIME_CALLEE(module, __ct_trace_exit_ptr);
+        llvm::FunctionCallee exitF64Fn = CT_RUNTIME_CALLEE(module, __ct_trace_exit_f64);
+        llvm::FunctionCallee exitUnknownFn = CT_RUNTIME_CALLEE(module, __ct_trace_exit_unknown);
 
         llvm::StringMap<llvm::Constant*> funcNameCache;
         for (llvm::Function& func : module)

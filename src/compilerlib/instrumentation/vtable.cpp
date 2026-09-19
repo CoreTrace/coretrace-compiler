@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "compilerlib/instrumentation/vtable.hpp"
 #include "compilerlib/instrumentation/common.hpp"
+#include "runtime_abi.hpp"
 
 #include <llvm/Config/llvm-config.h>
 #include <llvm/ADT/DenseMap.h>
@@ -179,15 +180,10 @@ namespace compilerlib
         }
 
         llvm::LLVMContext& context = module.getContext();
-        llvm::Type* voidTy = llvm::Type::getVoidTy(context);
         llvm::Type* voidPtrTy = llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
 
-        auto* traceTy =
-            llvm::FunctionType::get(voidTy, {voidPtrTy, voidPtrTy, voidPtrTy, voidPtrTy}, false);
-        auto* dumpTy = llvm::FunctionType::get(voidTy, {voidPtrTy, voidPtrTy, voidPtrTy}, false);
-
-        llvm::FunctionCallee traceFn = module.getOrInsertFunction("__ct_vcall_trace", traceTy);
-        llvm::FunctionCallee dumpFn = module.getOrInsertFunction("__ct_vtable_dump", dumpTy);
+        llvm::FunctionCallee traceFn = CT_RUNTIME_CALLEE(module, __ct_vcall_trace);
+        llvm::FunctionCallee dumpFn = CT_RUNTIME_CALLEE(module, __ct_vtable_dump);
 
         llvm::DenseMap<const llvm::DILocation*, llvm::Constant*> siteCache;
         llvm::Constant* unknownSite = nullptr;
