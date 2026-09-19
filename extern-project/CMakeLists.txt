@@ -26,5 +26,9 @@ target_link_libraries(cc1 PRIVATE cc::compilerlib_static)
 add_executable(cc1_c src/main_c.c)
 
 target_link_libraries(cc1_c PRIVATE cc::compilerlib_static)
+
+# Self-checking consumer: compile_c argument validation and buffer bounds.
+add_executable(cc1_c_checks src/compile_c_checks.c)
+target_link_libraries(cc1_c_checks PRIVATE cc::compilerlib_static)
 # OR
 # target_link_libraries(cc1 PRIVATE compilerlib_static)
