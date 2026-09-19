@@ -13,6 +13,7 @@ from ctestfw.framework.reporter import ConsoleReporter
 from ctestfw.assertions.core import Assertion, require
 from ctestfw.assertions.compiler import (
     assert_exit_code,
+    assert_stdout_contains,
     assert_output_name,
     assert_output_exists,
     assert_native_binary_kind,
@@ -230,7 +231,11 @@ def configure_and_build() -> Path:
         print(err)
         raise SystemExit(1)
 
-    return find_built_executable("cc1"), find_built_executable("cc1_c")
+    return (
+        find_built_executable("cc1"),
+        find_built_executable("cc1_c"),
+        find_built_executable("cc1_c_checks"),
+    )
 
 
 def find_built_executable(name: str) -> Path:
@@ -249,9 +254,10 @@ def copy_fixtures(ws: Path, files: list[Path]) -> None:
 
 
 def main() -> int:
-    cc1, cc1_c = configure_and_build()
+    cc1, cc1_c, cc1_c_checks = configure_and_build()
     runner = CompilerRunner(RunnerConfig(executable=cc1))
     runner_c = CompilerRunner(RunnerConfig(executable=cc1_c))
+    runner_c_checks = CompilerRunner(RunnerConfig(executable=cc1_c_checks))
 
     src_c = FIXTURES / "hello.c"
     src_cpp = FIXTURES / "hello.cpp"
@@ -309,9 +315,29 @@ def main() -> int:
         ],
     )
 
+    # compile_c argument validation and buffer bounds, checked by the C program itself.
+    tc_c_api_checks = TestCase(
+        name="extern_project_compile_c_edge_cases",
+        plan=CompilePlan(
+            name="extern_project_compile_c_edge_cases",
+            sources=[],
+            out=None,
+            extra_args=[],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_stdout_contains("compile_c checks: ok"),
+        ],
+    )
+
     WORK.mkdir(parents=True, exist_ok=True)
     reports = []
-    for tc, tc_runner in ((tc_c, runner), (tc_cpp, runner), (tc_c_api, runner_c)):
+    for tc, tc_runner in (
+        (tc_c, runner),
+        (tc_cpp, runner),
+        (tc_c_api, runner_c),
+        (tc_c_api_checks, runner_c_checks),
+    ):
         with tempfile.TemporaryDirectory(prefix=f"{tc.name}_", dir=str(WORK)) as d:
             ws = Path(d)
             copy_fixtures(ws, [src_c, src_cpp])
