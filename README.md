@@ -62,13 +62,16 @@ be moved. Overrides: `CT_RUNTIME_LIB_DIR` (directory holding both archives), `CT
 After building into `build/`:
 
 ```zsh
+ctest --test-dir build --output-on-failure # unit tests (GoogleTest 1.17.0, fetched at configure time)
 python3 test/examples/test_smoke.py        # compiler smoke tests (needs coretrace-testkit)
 bash test/run_autofree_tests.sh            # auto-free fixtures under test/
 bash test/run_runtime_tests.sh             # alloc, new/delete, shadow and vtable fixtures
 ```
 
 Both shell runners accept an output directory as first argument and `CC_BIN` to point at
-another compiler binary. CI runs all of them on Linux and macOS.
+another compiler binary. CI runs all of them on Linux and macOS. Unit tests are built only
+when this project is the top-level CMake project; pass `-DCORETRACE_BUILD_UNIT_TESTS=OFF`
+to skip them.
 
 ## Code Style (clang-format)
 

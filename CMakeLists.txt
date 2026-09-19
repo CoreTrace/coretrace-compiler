@@ -116,6 +116,7 @@ if(ENABLE_DEBUG_ASAN)
 endif()
 
 set(LIB_SOURCES
+  src/compilerlib/args.cpp
   src/compilerlib/compiler.cpp
   src/compilerlib/emit/llvm_output.cpp
   src/compilerlib/frontend/optnone_action.cpp
@@ -362,6 +363,12 @@ install(FILES $<TARGET_FILE:coretrace_logger> DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include)
 
 set(USE_SHARED_LIB OFF CACHE BOOL "Link with shared compilerlib")
+
+option(CORETRACE_BUILD_UNIT_TESTS "Build the GoogleTest unit tests (top-level builds only)" ON)
+if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME AND CORETRACE_BUILD_UNIT_TESTS)
+  enable_testing()
+  add_subdirectory(test/unit)
+endif()
 
 if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
   add_custom_target(format

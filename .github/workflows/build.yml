@@ -87,6 +87,11 @@ jobs:
           exit 1
         fi
 
+    - name: Run unit tests (Linux/macOS)
+      if: runner.os == 'Linux' || runner.os == 'macOS'
+      run: |
+        ctest --test-dir build --output-on-failure
+
     - name: Run Python smoke tests (Linux/macOS)
       if: runner.os == 'Linux' || runner.os == 'macOS'
       run: |
