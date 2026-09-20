@@ -171,6 +171,7 @@ coretrace_force_msvc_runtime(coretrace_logger)
 
 add_library(ct_instrument_runtime STATIC
   src/runtime/ct_instrument_runtime.cpp
+  src/runtime/ct_runtime_config.cpp
   ${CT_RUNTIME_PLATFORM_SOURCES}
   src/runtime/ct_runtime_bounds.cpp
   src/runtime/ct_runtime_logging.cpp

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "ct_runtime_internal.h"
-
-#include <cstdlib>
+//
+// POSIX side of the runtime configuration: reads the compile-time globals, whose
+// weak symbols are absent when the program was built without instrumentation, and
+// runs the shared configuration sequence at start-up.
+#include "ct_runtime_config.h"
 
 namespace
 {
@@ -22,41 +24,18 @@ extern "C"
 namespace
 {
     int ct_env_initialized = 0;
-}
+} // namespace
 
-CT_NOINSTR static void ct_apply_compiled_config(void)
+CT_NODISCARD CT_NOINSTR CtCompiledConfig ct_read_compiled_config(void)
 {
-    auto readWeak = [](const int* ptr) -> int { return ptr ? *ptr : 0; };
+    // An absent weak symbol has address zero; that is the uninstrumented default.
+    const auto read = [](const int* value) { return value ? *value : 0; };
 
-    if (readWeak(&__ct_config_shadow) || readWeak(&__ct_config_shadow_aggressive))
-    {
-        ct_set_enabled(CT_FEATURE_SHADOW, 1);
-    }
-    if (readWeak(&__ct_config_shadow_aggressive))
-    {
-        ct_set_enabled(CT_FEATURE_SHADOW_AGGR, 1);
-    }
-    if (readWeak(&__ct_config_bounds_no_abort))
-    {
-        ct_set_bounds_abort(0);
-    }
-    if (readWeak(&__ct_config_disable_alloc))
-    {
-        ct_set_enabled(CT_FEATURE_ALLOC, 0);
-        ct_alloc_disabled_by_config = 1;
-    }
-    if (readWeak(&__ct_config_disable_autofree))
-    {
-        ct_set_enabled(CT_FEATURE_AUTOFREE, 0);
-    }
-    if (readWeak(&__ct_config_disable_alloc_trace))
-    {
-        ct_set_enabled(CT_FEATURE_ALLOC_TRACE, 0);
-    }
-    if (readWeak(&__ct_config_vtable_diag))
-    {
-        ct_set_enabled(CT_FEATURE_VTABLE_DIAG, 1);
-    }
+    CtCompiledConfig config;
+#define CT_READ_WEAK_CONFIG_GLOBAL(name) config.name = read(&name);
+    CT_RUNTIME_CONFIG_GLOBALS(CT_READ_WEAK_CONFIG_GLOBAL)
+#undef CT_READ_WEAK_CONFIG_GLOBAL
+    return config;
 }
 
 CT_NOINSTR __attribute__((constructor)) static void ct_runtime_init(void)
@@ -66,52 +45,7 @@ CT_NOINSTR __attribute__((constructor)) static void ct_runtime_init(void)
     // the first module that happens to run.
     ct_enable_logging();
     ct_maybe_install_backtrace();
-    ct_apply_compiled_config();
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable : 4996) // MSVC warning: 'getenv': This function or variable may be unsafe
-#endif
-    if (getenv("CT_DISABLE_TRACE") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_TRACE, 0);
-    }
-    if (getenv("CT_DISABLE_ALLOC") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_ALLOC, 0);
-        ct_alloc_disabled_by_env = 1;
-    }
-    if (getenv("CT_EARLY_TRACE") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_EARLY_TRACE, 1);
-    }
-    if (getenv("CT_DISABLE_BOUNDS") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_BOUNDS, 0);
-    }
-    if (getenv("CT_BOUNDS_NO_ABORT") != nullptr)
-    {
-        ct_set_bounds_abort(0);
-    }
-    if (getenv("CT_SHADOW") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_SHADOW, 1);
-    }
-    if (getenv("CT_SHADOW_AGGRESSIVE") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_SHADOW, 1);
-        ct_set_enabled(CT_FEATURE_SHADOW_AGGR, 1);
-    }
-    if (getenv("CT_DISABLE_AUTOFREE") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_AUTOFREE, 0);
-    }
-    if (getenv("CT_DISABLE_ALLOC_TRACE") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_ALLOC_TRACE, 0);
-    }
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
+    ct_apply_runtime_config();
 }
 
 CT_NOINSTR void ct_init_env_once(void)
@@ -124,50 +58,5 @@ CT_NOINSTR void ct_init_env_once(void)
     }
 
     ct_enable_logging();
-    ct_apply_compiled_config();
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable : 4996) // MSVC warning: 'getenv': This function or variable may be unsafe
-#endif
-    if (getenv("CT_DISABLE_TRACE") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_TRACE, 0);
-    }
-    if (getenv("CT_DISABLE_ALLOC") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_ALLOC, 0);
-        ct_alloc_disabled_by_env = 1;
-    }
-    if (getenv("CT_EARLY_TRACE") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_EARLY_TRACE, 1);
-    }
-    if (getenv("CT_DISABLE_BOUNDS") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_BOUNDS, 0);
-    }
-    if (getenv("CT_BOUNDS_NO_ABORT") != nullptr)
-    {
-        ct_set_bounds_abort(0);
-    }
-    if (getenv("CT_SHADOW") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_SHADOW, 1);
-    }
-    if (getenv("CT_SHADOW_AGGRESSIVE") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_SHADOW, 1);
-        ct_set_enabled(CT_FEATURE_SHADOW_AGGR, 1);
-    }
-    if (getenv("CT_DISABLE_AUTOFREE") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_AUTOFREE, 0);
-    }
-    if (getenv("CT_DISABLE_ALLOC_TRACE") != nullptr)
-    {
-        ct_set_enabled(CT_FEATURE_ALLOC_TRACE, 0);
-    }
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
+    ct_apply_runtime_config();
 }
