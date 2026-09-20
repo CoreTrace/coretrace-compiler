@@ -132,6 +132,7 @@ set(LIB_SOURCES
 
 set(CT_RUNTIME_PLATFORM_SOURCES
   src/runtime/ct_runtime_alloc.cpp
+  src/runtime/ct_runtime_autofree_scan.cpp
   src/runtime/ct_runtime_backtrace.cpp
   src/runtime/ct_runtime_env.cpp
   src/runtime/ct_runtime_vtable.cpp
