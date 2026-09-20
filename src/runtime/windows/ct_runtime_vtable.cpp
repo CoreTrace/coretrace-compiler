@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "ct_runtime_internal.h"
+#include "ct_runtime_vtable_shared.h"
 
 #include "ct_runtime_helpers.h"
 
@@ -365,11 +365,6 @@ namespace
         return true;
     }
 
-    CT_NODISCARD CT_NOINSTR bool ct_is_unknown_type(const char* type_name)
-    {
-        return !type_name || type_name[0] == '\0' || ct_streq(type_name, "<unknown>");
-    }
-
     CT_NOINSTR void ct_append_box_line(std::vector<CtBoxLine>& lines, std::string label,
                                        std::string value)
     {
@@ -470,20 +465,6 @@ namespace
 // True when alloc tracking knows this object was already released. Checked before
 // any read through the pointer: a freed object's vptr is garbage and following it
 // would crash the diagnostic that is supposed to report the use-after-free.
-CT_NODISCARD CT_NOINSTR bool ct_object_is_freed(const void* this_ptr)
-{
-    if (!this_ptr || !ct_is_enabled(CT_FEATURE_ALLOC))
-    {
-        return false;
-    }
-    unsigned char state = 0;
-    ct_lock_acquire();
-    const int found =
-        ct_table_lookup_containing(this_ptr, nullptr, nullptr, nullptr, nullptr, &state);
-    ct_lock_release();
-    return found && state == CT_ENTRY_FREED;
-}
-
 extern "C"
 {
     CT_NOINSTR void __ct_vtable_dump(void* this_ptr, const char* site, const char* static_type)
@@ -514,41 +495,46 @@ extern "C"
         }
 
         std::vector<std::string> warnings;
-        if (!this_ptr)
+        // Warnings are diagnostics: the POSIX port only emits them under
+        // --ct-vtable-diag and this port must not be noisier.
+        if (ct_is_enabled(CT_FEATURE_VTABLE_DIAG))
         {
-            warnings.push_back("null this pointer");
-        }
-        if (!has_vtable && !is_freed)
-        {
-            warnings.push_back("no vptr");
-        }
-        if (has_vtable && !info.has_typeinfo)
-        {
-            warnings.push_back("missing RTTI");
-        }
-
-        if (has_vtable)
-        {
-            const CtAddrInfo vtable_addr = ct_resolve_address(info.vtable);
-            if (vtable_addr.has_module)
+            if (!this_ptr)
             {
-                ct_append_box_line(lines, "vmod", ct_module_display_name(vtable_addr.module));
+                warnings.push_back("null this pointer");
             }
-            else
+            if (!has_vtable && !is_freed)
             {
-                warnings.push_back("vtable resolve failed");
+                warnings.push_back("no vptr");
             }
-        }
+            if (has_vtable && !info.has_typeinfo)
+            {
+                warnings.push_back("missing RTTI");
+            }
 
-        if (is_freed)
-        {
-            warnings.push_back("vptr on freed object");
-        }
+            if (has_vtable)
+            {
+                const CtAddrInfo vtable_addr = ct_resolve_address(info.vtable);
+                if (vtable_addr.has_module)
+                {
+                    ct_append_box_line(lines, "vmod", ct_module_display_name(vtable_addr.module));
+                }
+                else
+                {
+                    warnings.push_back("vtable resolve failed");
+                }
+            }
 
-        if (!ct_is_unknown_type(static_type) && info.dynamic_type != "<unknown>" &&
-            info.dynamic_type != static_type)
-        {
-            warnings.push_back("static!=dynamic type");
+            if (is_freed)
+            {
+                warnings.push_back("vptr on freed object");
+            }
+
+            if (!ct_is_unknown_type(static_type) && info.dynamic_type != "<unknown>" &&
+                info.dynamic_type != static_type)
+            {
+                warnings.push_back("static!=dynamic type");
+            }
         }
 
         for (const auto& warning : warnings)
@@ -603,59 +589,65 @@ extern "C"
         }
 
         std::vector<std::string> warnings;
-        if (!this_ptr)
+        // Warnings are diagnostics: the POSIX port only emits them under
+        // --ct-vtable-diag and this port must not be noisier.
+        if (ct_is_enabled(CT_FEATURE_VTABLE_DIAG))
         {
-            warnings.push_back("null this pointer");
-        }
-        if (!has_vtable && !is_freed)
-        {
-            warnings.push_back("no vptr");
-        }
-        if (has_vtable && !info.has_typeinfo)
-        {
-            warnings.push_back("missing RTTI");
-        }
+            if (!this_ptr)
+            {
+                warnings.push_back("null this pointer");
+            }
+            if (!has_vtable && !is_freed)
+            {
+                warnings.push_back("no vptr");
+            }
+            if (has_vtable && !info.has_typeinfo)
+            {
+                warnings.push_back("missing RTTI");
+            }
 
-        const CtAddrInfo vtable_addr = has_vtable ? ct_resolve_address(info.vtable) : CtAddrInfo{};
-        const CtAddrInfo target_addr = target ? ct_resolve_address(target) : CtAddrInfo{};
+            const CtAddrInfo vtable_addr =
+                has_vtable ? ct_resolve_address(info.vtable) : CtAddrInfo{};
+            const CtAddrInfo target_addr = target ? ct_resolve_address(target) : CtAddrInfo{};
 
-        if (vtable_addr.has_module)
-        {
-            ct_append_box_line(lines, "vmod", ct_module_display_name(vtable_addr.module));
-        }
-        else if (has_vtable)
-        {
-            warnings.push_back("vtable resolve failed");
-        }
+            if (vtable_addr.has_module)
+            {
+                ct_append_box_line(lines, "vmod", ct_module_display_name(vtable_addr.module));
+            }
+            else if (has_vtable)
+            {
+                warnings.push_back("vtable resolve failed");
+            }
 
-        if (target_addr.has_module)
-        {
-            ct_append_box_line(lines, "tmod", ct_module_display_name(target_addr.module));
-        }
-        else if (target_addr.exec_known && !target_addr.is_exec)
-        {
-            warnings.push_back("target in non-exec memory");
-        }
-        else if (target_addr.on_stack)
-        {
-            warnings.push_back("target points to stack memory");
-        }
+            if (target_addr.has_module)
+            {
+                ct_append_box_line(lines, "tmod", ct_module_display_name(target_addr.module));
+            }
+            else if (target_addr.exec_known && !target_addr.is_exec)
+            {
+                warnings.push_back("target in non-exec memory");
+            }
+            else if (target_addr.on_stack)
+            {
+                warnings.push_back("target points to stack memory");
+            }
 
-        if (is_freed)
-        {
-            warnings.push_back("vptr on freed object");
-        }
+            if (is_freed)
+            {
+                warnings.push_back("vptr on freed object");
+            }
 
-        if (!ct_is_unknown_type(static_type) && info.dynamic_type != "<unknown>" &&
-            info.dynamic_type != static_type)
-        {
-            warnings.push_back("static!=dynamic type");
-        }
+            if (!ct_is_unknown_type(static_type) && info.dynamic_type != "<unknown>" &&
+                info.dynamic_type != static_type)
+            {
+                warnings.push_back("static!=dynamic type");
+            }
 
-        if (vtable_addr.has_module && target_addr.has_module &&
-            !ct_modules_match(vtable_addr.module, target_addr.module))
-        {
-            warnings.push_back("module mismatch between vtable and target");
+            if (vtable_addr.has_module && target_addr.has_module &&
+                !ct_modules_match(vtable_addr.module, target_addr.module))
+            {
+                warnings.push_back("module mismatch between vtable and target");
+            }
         }
 
         for (const auto& warning : warnings)
