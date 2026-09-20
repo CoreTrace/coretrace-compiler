@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "ct_runtime_internal.h"
+#include "ct_runtime_config.h"
 
 #include <atomic>
 #include <cstdlib>
@@ -42,82 +42,20 @@ extern "C"
 namespace
 {
     std::atomic<int> ct_env_initialized{0};
+} // namespace
 
-    CT_NOINSTR void ct_apply_compiled_config(void)
-    {
-        if (__ct_config_shadow || __ct_config_shadow_aggressive)
-        {
-            ct_set_enabled(CT_FEATURE_SHADOW, 1);
-        }
-        if (__ct_config_shadow_aggressive)
-        {
-            ct_set_enabled(CT_FEATURE_SHADOW_AGGR, 1);
-        }
-        if (__ct_config_bounds_no_abort)
-        {
-            ct_set_bounds_abort(0);
-        }
-        if (__ct_config_disable_alloc)
-        {
-            ct_set_enabled(CT_FEATURE_ALLOC, 0);
-            ct_alloc_disabled_by_config = 1;
-        }
-        if (__ct_config_disable_autofree)
-        {
-            ct_set_enabled(CT_FEATURE_AUTOFREE, 0);
-        }
-        if (__ct_config_disable_alloc_trace)
-        {
-            ct_set_enabled(CT_FEATURE_ALLOC_TRACE, 0);
-        }
-        if (__ct_config_vtable_diag)
-        {
-            ct_set_enabled(CT_FEATURE_VTABLE_DIAG, 1);
-        }
-    }
+CT_NODISCARD CT_NOINSTR CtCompiledConfig ct_read_compiled_config(void)
+{
+    // /alternatename above guarantees every global resolves, so no null check.
+    CtCompiledConfig config;
+#define CT_READ_CONFIG_GLOBAL(name) config.name = name;
+    CT_RUNTIME_CONFIG_GLOBALS(CT_READ_CONFIG_GLOBAL)
+#undef CT_READ_CONFIG_GLOBAL
+    return config;
+}
 
-    CT_NOINSTR void ct_apply_env_config(void)
-    {
-        if (std::getenv("CT_DISABLE_TRACE") != nullptr)
-        {
-            ct_set_enabled(CT_FEATURE_TRACE, 0);
-        }
-        if (std::getenv("CT_DISABLE_ALLOC") != nullptr)
-        {
-            ct_set_enabled(CT_FEATURE_ALLOC, 0);
-            ct_alloc_disabled_by_env = 1;
-        }
-        if (std::getenv("CT_EARLY_TRACE") != nullptr)
-        {
-            ct_set_enabled(CT_FEATURE_EARLY_TRACE, 1);
-        }
-        if (std::getenv("CT_DISABLE_BOUNDS") != nullptr)
-        {
-            ct_set_enabled(CT_FEATURE_BOUNDS, 0);
-        }
-        if (std::getenv("CT_BOUNDS_NO_ABORT") != nullptr)
-        {
-            ct_set_bounds_abort(0);
-        }
-        if (std::getenv("CT_SHADOW") != nullptr)
-        {
-            ct_set_enabled(CT_FEATURE_SHADOW, 1);
-        }
-        if (std::getenv("CT_SHADOW_AGGRESSIVE") != nullptr)
-        {
-            ct_set_enabled(CT_FEATURE_SHADOW, 1);
-            ct_set_enabled(CT_FEATURE_SHADOW_AGGR, 1);
-        }
-        if (std::getenv("CT_DISABLE_AUTOFREE") != nullptr)
-        {
-            ct_set_enabled(CT_FEATURE_AUTOFREE, 0);
-        }
-        if (std::getenv("CT_DISABLE_ALLOC_TRACE") != nullptr)
-        {
-            ct_set_enabled(CT_FEATURE_ALLOC_TRACE, 0);
-        }
-    }
-
+namespace
+{
     struct CtRuntimeInit
     {
         CT_NOINSTR CtRuntimeInit()
@@ -126,8 +64,7 @@ namespace
             // diagnostics do not depend on which module runs first.
             ct_enable_logging();
             ct_maybe_install_backtrace();
-            ct_apply_compiled_config();
-            ct_apply_env_config();
+            ct_apply_runtime_config();
         }
     };
 
@@ -143,6 +80,5 @@ CT_NOINSTR void ct_init_env_once(void)
     }
 
     ct_enable_logging();
-    ct_apply_compiled_config();
-    ct_apply_env_config();
+    ct_apply_runtime_config();
 }
