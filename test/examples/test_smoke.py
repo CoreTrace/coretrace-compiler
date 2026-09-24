@@ -51,20 +51,29 @@ def assert_stderr_contains(text: str) -> Assertion:
                 f"stderr does not contain '{text}'\nstderr:\n{res.run.stderr}")
     return Assertion(name=f"stderr_contains_{text}", check=_check)
 
-def assert_run_artifact(path: str, expected_exit: int, stderr_contains: str) -> Assertion:
-    """Run the artifact produced by the compile step and check its exit code and stderr."""
+def assert_run_artifact(path: str, expected_exit: int | None, stderr_contains: str | list[str],
+                        env: dict[str, str] | None = None) -> Assertion:
+    """Run the artifact produced by the compile step and check its exit code and stderr.
+
+    expected_exit None requires a failing status: a fatal signal or exception is reported
+    as a platform-specific code. env adds variables to the artifact's environment."""
+    expected_texts = [stderr_contains] if isinstance(stderr_contains, str) else stderr_contains
     def _check(res) -> None:
         import subprocess
         artifact = Path(path)
         if not artifact.is_absolute():
             artifact = res.run.cwd / artifact
         require(artifact.exists(), f"output does not exist: {artifact}")
-        proc = subprocess.run([str(artifact)], cwd=res.run.cwd,
+        proc = subprocess.run([str(artifact)], cwd=res.run.cwd, env={**os.environ, **(env or {})},
                               capture_output=True, text=True, timeout=60)
-        require(proc.returncode == expected_exit,
-                f"expected exit {expected_exit}, got {proc.returncode}\nstderr:\n{proc.stderr}")
-        require(stderr_contains in proc.stderr,
-                f"stderr does not contain '{stderr_contains}'\nstderr:\n{proc.stderr}")
+        if expected_exit is None:
+            require(proc.returncode != 0,
+                    f"expected a failing exit status, got 0\nstderr:\n{proc.stderr}")
+        else:
+            require(proc.returncode == expected_exit,
+                    f"expected exit {expected_exit}, got {proc.returncode}\nstderr:\n{proc.stderr}")
+        for text in expected_texts:
+            require(text in proc.stderr, f"stderr does not contain '{text}'\nstderr:\n{proc.stderr}")
     return Assertion(name=f"run_artifact_{Path(path).name}", check=_check)
 
 def assert_stdout_matches(pattern: str) -> Assertion:
@@ -155,6 +164,8 @@ def main() -> int:
     undefined_ref_src = FIXTURES / "undefined_ref.c"
     alloc_site_src = FIXTURES / "alloc_site.c"
     new_delete_src = FIXTURES / "new_delete.cpp"
+    crash_src = FIXTURES / "crash.c"
+    trace_threads_src = FIXTURES / "trace_threads.cpp"
 
     def base_out_assertions(out_name: str):
         assertions = [
@@ -666,6 +677,43 @@ def main() -> int:
             assert_run_artifact("trace_app", 0, "[ENTRY-FUNCTION]: -> main\n"),
         ],
     )
+    # CT_BACKTRACE installs the runtime's fatal-error handler: a signal handler on POSIX,
+    # an unhandled-exception filter on Windows. It reports the fault and, on Windows,
+    # the symbolised frames, before the process dies.
+    tc_runtime_backtrace = TestCase(
+        name="runtime_backtrace_on_fatal_error",
+        plan=CompilePlan(
+            name="runtime_backtrace_on_fatal_error",
+            sources=[Path("crash.c")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=trace", "-o", "crash_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("crash_app"),
+            assert_run_artifact(
+                "crash_app", None,
+                ["ct: fatal exception code=", "  at "] if platform.os == OS.WINDOWS
+                else ["ct: fatal signal 11"],
+                env={"CT_BACKTRACE": "1"}),
+        ],
+    )
+    # Traced C++ functions entered from several threads at once: their names are decoded
+    # concurrently, which on Windows goes through the serialised DbgHelp.
+    tc_runtime_trace_threads = TestCase(
+        name="runtime_trace_cpp_function_from_threads",
+        plan=CompilePlan(
+            name="runtime_trace_cpp_function_from_threads",
+            sources=[Path("trace_threads.cpp")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=trace", "-o", "trace_threads_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("trace_threads_app"),
+            assert_run_artifact("trace_threads_app", 0, "work(int)"),
+        ],
+    )
 
     # Failures must be reported through the exit code even on the non-instrumented
     # path, which delegates to the clang driver.
@@ -745,6 +793,8 @@ def main() -> int:
         tc_runtime_cpp_leak_report,
         tc_runtime_bounds_without_trace,
         tc_runtime_trace_c_function,
+        tc_runtime_backtrace,
+        tc_runtime_trace_threads,
     ]
     readme_cases = [
         tc_readme_emit_llvm,
@@ -788,7 +838,8 @@ def main() -> int:
             ws = Path(d)
             copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src,
                                leak_src, overflow_src, broken_src, undefined_ref_src,
-                               alloc_site_src, new_delete_src])
+                               alloc_site_src, new_delete_src, crash_src,
+                               trace_threads_src])
             reports.append(case.run(runner, ws))
 
     rep = type("Tmp", (), {"name": suite.name, "reports": reports})()
