@@ -191,7 +191,7 @@ $cmakeArgs = @(
     "-G", $Generator,
     "-DLLVM_DIR=$resolvedLLVMDir",
     "-DClang_DIR=$resolvedClangDir",
-    "-DBUILD_TESTS=$(if ($BuildTests) { "ON" } else { "OFF" })"
+    "-DCORETRACE_BUILD_UNIT_TESTS=$(if ($BuildTests) { "ON" } else { "OFF" })"
 )
 
 if ($Generator -like "Visual Studio*")

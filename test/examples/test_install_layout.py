@@ -15,12 +15,26 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "test" / "examples" / "fixtures"
 
 
-def resolve_build_dir() -> Path | None:
+def resolve_build_dir() -> tuple[Path, str | None] | None:
+    """Build tree of the compiler under test and, for a multi-config generator (Ninja
+    Multi-Config, Visual Studio), the configuration it was built in: those place the
+    compiler in ``<build>/<Config>/`` and install only with ``--config``."""
     env_cc = os.environ.get("CORETRACE_COMPILER_TEST_CC")
     if env_cc:
-        return Path(env_cc).resolve().parent
+        cc_dir = Path(env_cc).resolve().parent
+        if (cc_dir / "CMakeCache.txt").exists():
+            return cc_dir, None
+        if (cc_dir.parent / "CMakeCache.txt").exists():
+            return cc_dir.parent, cc_dir.name
+        return None
     candidate = ROOT / "build"
-    return candidate if (candidate / "cc").exists() else None
+    return (candidate, None) if (candidate / "cc").exists() else None
+
+
+def printed_by_verbose_driver(text: str) -> str:
+    # clang -v quotes arguments containing a backslash and doubles the backslash,
+    # so Windows paths appear escaped in the verbose link line.
+    return text.replace("\\\\", "\\")
 
 
 def run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -35,16 +49,20 @@ def check(cond: bool, message: str, details: str = "") -> bool:
 
 
 def main() -> int:
-    build_dir = resolve_build_dir()
-    if build_dir is None:
+    resolved = resolve_build_dir()
+    if resolved is None:
         print("build directory not found; build first or set CORETRACE_COMPILER_TEST_CC")
         return 1
+    build_dir, config = resolved
 
     ok = True
     with tempfile.TemporaryDirectory(prefix="ct_install_") as tmp:
         tmp_path = Path(tmp)
         prefix = tmp_path / "prefix"
-        res = run(["cmake", "--install", str(build_dir), "--prefix", str(prefix)], ROOT)
+        install = ["cmake", "--install", str(build_dir), "--prefix", str(prefix)]
+        if config:
+            install += ["--config", config]
+        res = run(install, ROOT)
         ok &= check(res.returncode == 0, "cmake --install succeeds", res.stdout + res.stderr)
 
         exe = "cc.exe" if os.name == "nt" else "cc"
@@ -68,11 +86,16 @@ def main() -> int:
         env.pop("CT_RUNTIME_LIB_DIR", None)
         res = run([str(cc), "--instrument", "-v", "-o", "app", "hello.c"], work, env)
         ok &= check(res.returncode == 0, "installed cc compiles with --instrument", res.stderr)
-        expected = str(moved / "lib" / runtime_lib)
-        ok &= check(expected in res.stderr,
+        # Matched by its tail: only the relocated prefix has a moved/lib directory, and
+        # the tail does not depend on how the temporary directory is spelled (Windows
+        # runners give an 8.3 short name such as RUNNER~1, which cc may report in its
+        # long form).
+        expected = str(Path("moved") / "lib" / runtime_lib)
+        ok &= check(expected in printed_by_verbose_driver(res.stderr),
                     "link line uses the runtime archive from the moved prefix",
                     f"expected '{expected}' in verbose output:\n{res.stderr[-3000:]}")
-        app = work / ("app.exe" if os.name == "nt" else "app")
+        # The driver writes -o verbatim, without adding .exe on Windows.
+        app = work / "app"
         res = run([str(app)], work, env)
         ok &= check(res.returncode == 0 and "hello" in res.stdout,
                     "instrumented program runs from the moved prefix", res.stderr)
@@ -82,7 +105,8 @@ def main() -> int:
         shutil.copytree(moved / "lib", override)
         env["CT_RUNTIME_LIB_DIR"] = str(override)
         res = run([str(cc), "--instrument", "-v", "-o", "app2", "hello.c"], work, env)
-        ok &= check(res.returncode == 0 and str(override / runtime_lib) in res.stderr,
+        ok &= check(res.returncode == 0
+                    and str(override / runtime_lib) in printed_by_verbose_driver(res.stderr),
                     "CT_RUNTIME_LIB_DIR overrides the executable-relative runtime lookup",
                     res.stderr[-3000:])
 

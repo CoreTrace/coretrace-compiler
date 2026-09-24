@@ -67,8 +67,7 @@ jobs:
         cmake .. -DCMAKE_BUILD_TYPE=Release \
                 -DLLVM_DIR=${{ env.LLVM_DIR }} \
                 -DClang_DIR=${{ env.Clang_DIR }} \
-                -DUSE_SHARED_LIB=OFF \
-                -DBUILD_TESTS=OFF
+                -DUSE_SHARED_LIB=OFF
         cmake --build . --config Release
 
     - name: Test compiler (Linux/macOS)
@@ -249,7 +248,8 @@ jobs:
         powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 `
           -LLVMDir "${env:LLVM_CMAKE_DIR}" `
           -LoggerSourceDir "${PWD}\deps\coretrace-log" `
-          -Configuration Release
+          -Configuration Release `
+          -BuildTests
 
     - name: Smoke test
       shell: pwsh
@@ -262,10 +262,18 @@ jobs:
         }
         Get-Content test.ll -TotalCount 10
 
+    - name: Run unit tests (Windows)
+      shell: pwsh
+      run: |
+        ctest --test-dir build-win -C Release --output-on-failure --no-tests=error
+
     - name: Run Python smoke tests (Windows)
       shell: pwsh
       run: |
         $ErrorActionPreference = "Stop"
+        # Without this, a failing native command does not stop the script and the step
+        # reports only the exit code of the last one, which hid failing suites.
+        $PSNativeCommandUseErrorActionPreference = $true
         python -m venv .venv
         .\.venv\Scripts\python -m pip install --upgrade pip
         .\.venv\Scripts\python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git
@@ -273,3 +281,7 @@ jobs:
         $env:CORETRACE_LOGGER_SOURCE_DIR = (Resolve-Path .\deps\coretrace-log).Path
         .\.venv\Scripts\python .\test\examples\test_smoke.py
         .\.venv\Scripts\python .\test\examples\test_extern_project.py
+        .\.venv\Scripts\python .\test\examples\test_help_smoke.py
+        # The install test installs a build tree, so it needs the compiler from build-win.
+        $env:CORETRACE_COMPILER_TEST_CC = (Resolve-Path .\build-win\Release\cc.exe).Path
+        .\.venv\Scripts\python .\test\examples\test_install_layout.py
