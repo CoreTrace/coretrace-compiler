@@ -77,20 +77,7 @@ namespace
         CtModuleInfo module;
     };
 
-    std::once_flag ct_symbols_once;
     std::atomic<int> ct_vtable_state_logged{0};
-
-    CT_NOINSTR void ct_ensure_symbols(void)
-    {
-        std::call_once(ct_symbols_once,
-                       []
-                       {
-                           HANDLE process = GetCurrentProcess();
-                           SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES |
-                                         SYMOPT_UNDNAME);
-                           (void)SymInitialize(process, nullptr, TRUE);
-                       });
-    }
 
     CT_NODISCARD CT_NOINSTR std::string ct_basename(std::string_view path)
     {
@@ -149,13 +136,13 @@ namespace
             return false;
         }
 
-        ct_ensure_symbols();
-
         char buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
         auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
         symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
         symbol->MaxNameLen = MAX_SYM_NAME;
 
+        std::lock_guard<std::mutex> dbghelp(ct_dbghelp_mutex());
+        ct_dbghelp_initialize_locked();
         DWORD64 displacement = 0;
         if (SymFromAddr(GetCurrentProcess(), reinterpret_cast<DWORD64>(addr), &displacement,
                         symbol) == FALSE)
