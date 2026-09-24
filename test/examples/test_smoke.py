@@ -154,6 +154,7 @@ def main() -> int:
     broken_src = FIXTURES / "broken.c"
     undefined_ref_src = FIXTURES / "undefined_ref.c"
     alloc_site_src = FIXTURES / "alloc_site.c"
+    new_delete_src = FIXTURES / "new_delete.cpp"
 
     def base_out_assertions(out_name: str):
         assertions = [
@@ -360,6 +361,26 @@ def main() -> int:
             # sites are file:line there and file:line:column elsewhere.
             assert_stdout_contains("alloc_site.c:5" if platform.os == OS.WINDOWS
                                    else "alloc_site.c:5:"),
+        ],
+    )
+    # The Windows C++ ABI mangles operator new/delete differently; cross-compiling to
+    # IR checks on every host that the alloc pass still rewrites them.
+    tc_instrument_cpp_microsoft_abi = TestCase(
+        name="compile_instrument_cpp_microsoft_abi",
+        plan=CompilePlan(
+            name="compile_instrument_cpp_microsoft_abi",
+            sources=[Path("new_delete.cpp")],
+            out=None,
+            extra_args=["--target=x86_64-pc-windows-msvc", "--instrument", "--ct-modules=alloc",
+                        "--in-mem", "-S", "-emit-llvm"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            # Calls, not the declarations the pass adds to every module.
+            assert_stdout_contains("call ptr @__ct_new("),
+            assert_stdout_contains("call ptr @__ct_new_array("),
+            assert_stdout_contains("call void @__ct_delete("),
+            assert_stdout_contains("call void @__ct_delete_array("),
         ],
     )
 
@@ -597,6 +618,21 @@ def main() -> int:
             assert_run_artifact("leak_app", 0, "ct: leaks detected"),
         ],
     )
+    tc_runtime_cpp_leak_report = TestCase(
+        name="runtime_cpp_leak_report_at_exit",
+        plan=CompilePlan(
+            name="runtime_cpp_leak_report_at_exit",
+            sources=[Path("new_delete.cpp")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=alloc", "-o", "new_delete_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("new_delete_app"),
+            # The deleted object and array are gone, only the leaked int remains.
+            assert_run_artifact("new_delete_app", 0, "ct: leaks detected count=1"),
+        ],
+    )
 
     # Runtime behaviour: bounds diagnostics must be reported even when the trace
     # module is not part of the build.
@@ -685,11 +721,13 @@ def main() -> int:
         tc_instrument_x_cxx,
         tc_instrument_o_eq_trailing,
         tc_instrument_g0_inmem,
+        tc_instrument_cpp_microsoft_abi,
         tc_instrument_emit_llvm,
         tc_instrument_emit_bc,
     ]
     runtime_cases = [
         tc_runtime_leak_report,
+        tc_runtime_cpp_leak_report,
         tc_runtime_bounds_without_trace,
     ]
     readme_cases = [
@@ -734,7 +772,7 @@ def main() -> int:
             ws = Path(d)
             copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src,
                                leak_src, overflow_src, broken_src, undefined_ref_src,
-                               alloc_site_src])
+                               alloc_site_src, new_delete_src])
             reports.append(case.run(runner, ws))
 
     rep = type("Tmp", (), {"name": suite.name, "reports": reports})()

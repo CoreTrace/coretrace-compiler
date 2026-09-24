@@ -57,7 +57,9 @@ namespace compilerlib
     CT_NODISCARD bool isBrkLikeName(llvm::StringRef name);
     CT_NODISCARD bool isSbrkLikeName(llvm::StringRef name);
 
-    // Itanium C++ ABI manglings of the global operator new/delete overloads.
+    // Global operator new/delete overloads, as mangled by the Itanium (Linux, macOS)
+    // and Microsoft (Windows) C++ ABIs. Aligned forms are excluded where rewriting
+    // them would release memory with the wrong function; see alloc_names.cpp.
     CT_NODISCARD bool isOperatorNewName(llvm::StringRef name, bool& isArray, OperatorNewKind& kind);
     CT_NODISCARD bool isOperatorDeleteName(llvm::StringRef name, bool& isArray,
                                            OperatorDeleteKind& kind);
