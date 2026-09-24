@@ -651,6 +651,21 @@ def main() -> int:
             assert_run_artifact("overflow_app", 0, "heap-buffer-overflow"),
         ],
     )
+    # A C function has no decorated name: the trace prints it once, not as "main, main".
+    tc_runtime_trace_c_function = TestCase(
+        name="runtime_trace_c_function_name",
+        plan=CompilePlan(
+            name="runtime_trace_c_function_name",
+            sources=[Path("hello.c")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=trace", "-o", "trace_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("trace_app"),
+            assert_run_artifact("trace_app", 0, "[ENTRY-FUNCTION]: -> main\n"),
+        ],
+    )
 
     # Failures must be reported through the exit code even on the non-instrumented
     # path, which delegates to the clang driver.
@@ -729,6 +744,7 @@ def main() -> int:
         tc_runtime_leak_report,
         tc_runtime_cpp_leak_report,
         tc_runtime_bounds_without_trace,
+        tc_runtime_trace_c_function,
     ]
     readme_cases = [
         tc_readme_emit_llvm,

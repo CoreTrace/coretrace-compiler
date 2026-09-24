@@ -24,6 +24,7 @@ coretrace_disable_rtti(compilerlib_unit_tests)
 # runtime installs its constructors and leak report in this process; every test
 # releases what it inserts.
 add_executable(runtime_unit_tests
+  runtime_demangle_test.cpp
   runtime_table_test.cpp
 )
 target_include_directories(runtime_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
