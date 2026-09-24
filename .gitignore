@@ -35,3 +35,7 @@
 __pycache__/
 *.py[cod]
 *.tmp
+
+# Build trees (build/ by default, build-win/ from scripts/build-windows.ps1)
+build/
+build-*/
