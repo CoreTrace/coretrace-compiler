@@ -56,11 +56,62 @@ namespace compilerlib
             return value;
         }
 
+        // The pointer an integer was computed from, when the integer is ptrtoint(P) plus or
+        // minus values that do not come from another pointer; nullptr otherwise. This is
+        // how container_of and offsetof code written with uintptr_t rebuilds a pointer, and
+        // the rebuilt pointer is meant to stay in P's allocation.
+        CT_NODISCARD llvm::Value* pointerBehindInteger(llvm::Value* value, unsigned depth = 0)
+        {
+            constexpr unsigned kMaxDepth = 8;
+            auto* op = llvm::dyn_cast<llvm::Operator>(value);
+            if (!op || depth > kMaxDepth)
+            {
+                return nullptr;
+            }
+            switch (op->getOpcode())
+            {
+            case llvm::Instruction::PtrToInt:
+                return op->getOperand(0);
+            case llvm::Instruction::Add:
+            {
+                llvm::Value* lhs = pointerBehindInteger(op->getOperand(0), depth + 1);
+                llvm::Value* rhs = pointerBehindInteger(op->getOperand(1), depth + 1);
+                if (lhs && rhs)
+                {
+                    return nullptr;
+                }
+                return lhs ? lhs : rhs;
+            }
+            case llvm::Instruction::Sub:
+                // offset - ptrtoint(P) does not point into P.
+                if (pointerBehindInteger(op->getOperand(1), depth + 1))
+                {
+                    return nullptr;
+                }
+                return pointerBehindInteger(op->getOperand(0), depth + 1);
+            default:
+                return nullptr;
+            }
+        }
+
         CT_NODISCARD llvm::Value* stripPointerCastsAndGEPs(llvm::Value* value)
         {
             llvm::Value* current = value;
             while (current)
             {
+                // Checked before the generic constant cast below, which would otherwise
+                // continue with inttoptr's integer operand.
+                if (llvm::Operator::getOpcode(current) == llvm::Instruction::IntToPtr)
+                {
+                    llvm::Value* source =
+                        pointerBehindInteger(llvm::cast<llvm::Operator>(current)->getOperand(0));
+                    if (!source)
+                    {
+                        break;
+                    }
+                    current = source;
+                    continue;
+                }
                 if (auto* cast = llvm::dyn_cast<llvm::BitCastInst>(current))
                 {
                     current = cast->getOperand(0);
