@@ -88,104 +88,112 @@ namespace compilerlib
                name.starts_with("_sbrk$") || name.starts_with("__sbrk$");
     }
 
+    namespace
+    {
+        struct OperatorNewName
+        {
+            llvm::StringRef name;
+            bool isArray;
+            OperatorNewKind kind;
+        };
+
+        struct OperatorDeleteName
+        {
+            llvm::StringRef name;
+            bool isArray;
+            OperatorDeleteKind kind;
+        };
+
+        // Global operator new/delete overloads the pass rewrites, as mangled by the
+        // Itanium C++ ABI (Linux, macOS) and the Microsoft C++ ABI (Windows x64 and
+        // ARM64 mangle them identically).
+        //
+        // Aligned operator new is never rewritten: the runtime allocates through the
+        // unaligned operator. Aligned operator delete is rewritten for Itanium only,
+        // where aligned blocks come from aligned_alloc and any operator delete may
+        // release them; the Microsoft CRT allocates them with _aligned_malloc, which
+        // only the aligned operator delete may release.
+        constexpr OperatorNewName kOperatorNewNames[] = {
+            {"_Znwm", false, OperatorNewKind::Normal},
+            {"_Znam", true, OperatorNewKind::Normal},
+            {"_ZnwmRKSt9nothrow_t", false, OperatorNewKind::Nothrow},
+            {"_ZnamRKSt9nothrow_t", true, OperatorNewKind::Nothrow},
+            {"??2@YAPEAX_K@Z", false, OperatorNewKind::Normal},
+            {"??_U@YAPEAX_K@Z", true, OperatorNewKind::Normal},
+            {"??2@YAPEAX_KAEBUnothrow_t@std@@@Z", false, OperatorNewKind::Nothrow},
+            {"??_U@YAPEAX_KAEBUnothrow_t@std@@@Z", true, OperatorNewKind::Nothrow},
+        };
+
+        constexpr OperatorDeleteName kOperatorDeleteNames[] = {
+            // Itanium: plain, sized (m), aligned (St11align_val_t) and their combinations.
+            {"_ZdlPv", false, OperatorDeleteKind::Normal},
+            {"_ZdlPvm", false, OperatorDeleteKind::Normal},
+            {"_ZdlPvSt11align_val_t", false, OperatorDeleteKind::Normal},
+            {"_ZdlPvmSt11align_val_t", false, OperatorDeleteKind::Normal},
+            {"_ZdlPvRKSt9nothrow_t", false, OperatorDeleteKind::Nothrow},
+            {"_ZdlPvmRKSt9nothrow_t", false, OperatorDeleteKind::Nothrow},
+            {"_ZdlPvSt11align_val_tRKSt9nothrow_t", false, OperatorDeleteKind::Nothrow},
+            {"_ZdlPvmSt11align_val_tRKSt9nothrow_t", false, OperatorDeleteKind::Nothrow},
+            {"_ZdlPvSt19destroying_delete_t", false, OperatorDeleteKind::Destroying},
+            {"_ZdaPv", true, OperatorDeleteKind::Normal},
+            {"_ZdaPvm", true, OperatorDeleteKind::Normal},
+            {"_ZdaPvSt11align_val_t", true, OperatorDeleteKind::Normal},
+            {"_ZdaPvmSt11align_val_t", true, OperatorDeleteKind::Normal},
+            {"_ZdaPvRKSt9nothrow_t", true, OperatorDeleteKind::Nothrow},
+            {"_ZdaPvmRKSt9nothrow_t", true, OperatorDeleteKind::Nothrow},
+            {"_ZdaPvSt11align_val_tRKSt9nothrow_t", true, OperatorDeleteKind::Nothrow},
+            {"_ZdaPvmSt11align_val_tRKSt9nothrow_t", true, OperatorDeleteKind::Nothrow},
+            {"_ZdaPvSt19destroying_delete_t", true, OperatorDeleteKind::Destroying},
+            // Microsoft: plain, sized (_K) and nothrow.
+            {"??3@YAXPEAX@Z", false, OperatorDeleteKind::Normal},
+            {"??3@YAXPEAX_K@Z", false, OperatorDeleteKind::Normal},
+            {"??3@YAXPEAXAEBUnothrow_t@std@@@Z", false, OperatorDeleteKind::Nothrow},
+            {"??_V@YAXPEAX@Z", true, OperatorDeleteKind::Normal},
+            {"??_V@YAXPEAX_K@Z", true, OperatorDeleteKind::Normal},
+            {"??_V@YAXPEAXAEBUnothrow_t@std@@@Z", true, OperatorDeleteKind::Nothrow},
+        };
+
+        template <typename Entry, size_t N>
+        const Entry* findOperatorName(const Entry (&table)[N], llvm::StringRef name)
+        {
+            // Some toolchains prefix Itanium names with an extra underscore.
+            if (name.starts_with("__Z"))
+            {
+                name = name.drop_front();
+            }
+            for (const Entry& entry : table)
+            {
+                if (entry.name == name)
+                {
+                    return &entry;
+                }
+            }
+            return nullptr;
+        }
+    } // namespace
+
     bool isOperatorNewName(llvm::StringRef name, bool& isArray, OperatorNewKind& kind)
     {
-        // Itanium C++ ABI manglings:
-        // new(size_t):                _Znwm
-        // new[](size_t):              _Znam
-        // nothrow new:                _ZnwmRKSt9nothrow_t / _ZnamRKSt9nothrow_t
-        if (name == "_Znwm" || name == "__Znwm")
+        const OperatorNewName* entry = findOperatorName(kOperatorNewNames, name);
+        if (!entry)
         {
-            isArray = false;
-            kind = OperatorNewKind::Normal;
-            return true;
+            return false;
         }
-        if (name == "_Znam" || name == "__Znam")
-        {
-            isArray = true;
-            kind = OperatorNewKind::Normal;
-            return true;
-        }
-        if (name == "_ZnwmRKSt9nothrow_t" || name == "__ZnwmRKSt9nothrow_t")
-        {
-            isArray = false;
-            kind = OperatorNewKind::Nothrow;
-            return true;
-        }
-        if (name == "_ZnamRKSt9nothrow_t" || name == "__ZnamRKSt9nothrow_t")
-        {
-            isArray = true;
-            kind = OperatorNewKind::Nothrow;
-            return true;
-        }
-        return false;
+        isArray = entry->isArray;
+        kind = entry->kind;
+        return true;
     }
 
     bool isOperatorDeleteName(llvm::StringRef name, bool& isArray, OperatorDeleteKind& kind)
     {
-        // Itanium C++ ABI manglings:
-        // delete(void*):               _ZdlPv
-        // delete[](void*):             _ZdaPv
-        // sized delete:                _ZdlPvm / _ZdaPvm
-        // aligned delete:              _ZdlPvSt11align_val_t / _ZdaPvSt11align_val_t
-        // sized + aligned delete:      _ZdlPvmSt11align_val_t / _ZdaPvmSt11align_val_t
-        // nothrow delete:              _ZdlPvRKSt9nothrow_t / _ZdaPvRKSt9nothrow_t
-        // aligned + nothrow delete:    _ZdlPvSt11align_val_tRKSt9nothrow_t / _ZdaPvSt11align_val_tRKSt9nothrow_t
-        // sized + nothrow delete:      _ZdlPvmRKSt9nothrow_t / _ZdaPvmRKSt9nothrow_t
-        // sized + aligned + nothrow:   _ZdlPvmSt11align_val_tRKSt9nothrow_t / _ZdaPvmSt11align_val_tRKSt9nothrow_t
-        // destroying delete (C++20):  _ZdlPvSt19destroying_delete_t
-        // Some toolchains prefix an extra underscore.
-        if (name == "_ZdlPv" || name == "__ZdlPv" || name == "_ZdlPvm" || name == "__ZdlPvm" ||
-            name == "_ZdlPvSt11align_val_t" || name == "__ZdlPvSt11align_val_t" ||
-            name == "_ZdlPvmSt11align_val_t" || name == "__ZdlPvmSt11align_val_t" ||
-            name == "_ZdlPvRKSt9nothrow_t" || name == "__ZdlPvRKSt9nothrow_t" ||
-            name == "_ZdlPvSt11align_val_tRKSt9nothrow_t" ||
-            name == "__ZdlPvSt11align_val_tRKSt9nothrow_t" || name == "_ZdlPvmRKSt9nothrow_t" ||
-            name == "__ZdlPvmRKSt9nothrow_t" || name == "_ZdlPvmSt11align_val_tRKSt9nothrow_t" ||
-            name == "__ZdlPvmSt11align_val_tRKSt9nothrow_t" ||
-            name == "_ZdlPvSt19destroying_delete_t" || name == "__ZdlPvSt19destroying_delete_t")
+        const OperatorDeleteName* entry = findOperatorName(kOperatorDeleteNames, name);
+        if (!entry)
         {
-            isArray = false;
-            if (name.contains("destroying_delete_t"))
-            {
-                kind = OperatorDeleteKind::Destroying;
-            }
-            else if (name.contains("nothrow_t"))
-            {
-                kind = OperatorDeleteKind::Nothrow;
-            }
-            else
-            {
-                kind = OperatorDeleteKind::Normal;
-            }
-            return true;
+            return false;
         }
-        if (name == "_ZdaPv" || name == "__ZdaPv" || name == "_ZdaPvm" || name == "__ZdaPvm" ||
-            name == "_ZdaPvSt11align_val_t" || name == "__ZdaPvSt11align_val_t" ||
-            name == "_ZdaPvmSt11align_val_t" || name == "__ZdaPvmSt11align_val_t" ||
-            name == "_ZdaPvRKSt9nothrow_t" || name == "__ZdaPvRKSt9nothrow_t" ||
-            name == "_ZdaPvSt11align_val_tRKSt9nothrow_t" ||
-            name == "__ZdaPvSt11align_val_tRKSt9nothrow_t" || name == "_ZdaPvmRKSt9nothrow_t" ||
-            name == "__ZdaPvmRKSt9nothrow_t" || name == "_ZdaPvmSt11align_val_tRKSt9nothrow_t" ||
-            name == "__ZdaPvmSt11align_val_tRKSt9nothrow_t" ||
-            name == "_ZdaPvSt19destroying_delete_t" || name == "__ZdaPvSt19destroying_delete_t")
-        {
-            isArray = true;
-            if (name.contains("destroying_delete_t"))
-            {
-                kind = OperatorDeleteKind::Destroying;
-            }
-            else if (name.contains("nothrow_t"))
-            {
-                kind = OperatorDeleteKind::Nothrow;
-            }
-            else
-            {
-                kind = OperatorDeleteKind::Normal;
-            }
-            return true;
-        }
-        return false;
+        isArray = entry->isArray;
+        kind = entry->kind;
+        return true;
     }
 
     bool isFreeLikeName(llvm::StringRef name)

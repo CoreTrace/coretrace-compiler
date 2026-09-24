@@ -118,6 +118,72 @@ namespace
         EXPECT_FALSE(compilerlib::isOperatorDeleteName("_Znwm", isArray, kind));
     }
 
+    // Names as clang emits them for x86_64- and aarch64-pc-windows-msvc.
+    TEST(OperatorNames, MicrosoftAbiNewVariants)
+    {
+        struct Case
+        {
+            const char* name;
+            bool isArray;
+            OperatorNewKind kind;
+        };
+        const Case cases[] = {
+            {"??2@YAPEAX_K@Z", false, OperatorNewKind::Normal},
+            {"??_U@YAPEAX_K@Z", true, OperatorNewKind::Normal},
+            {"??2@YAPEAX_KAEBUnothrow_t@std@@@Z", false, OperatorNewKind::Nothrow},
+            {"??_U@YAPEAX_KAEBUnothrow_t@std@@@Z", true, OperatorNewKind::Nothrow},
+        };
+        for (const Case& c : cases)
+        {
+            bool isArray = !c.isArray;
+            OperatorNewKind kind = c.kind == OperatorNewKind::Normal ? OperatorNewKind::Nothrow
+                                                                     : OperatorNewKind::Normal;
+            ASSERT_TRUE(compilerlib::isOperatorNewName(c.name, isArray, kind)) << c.name;
+            EXPECT_EQ(isArray, c.isArray) << c.name;
+            EXPECT_EQ(kind, c.kind) << c.name;
+        }
+    }
+
+    TEST(OperatorNames, MicrosoftAbiDeleteVariants)
+    {
+        struct Case
+        {
+            const char* name;
+            bool isArray;
+            OperatorDeleteKind kind;
+        };
+        const Case cases[] = {
+            {"??3@YAXPEAX@Z", false, OperatorDeleteKind::Normal},
+            {"??3@YAXPEAX_K@Z", false, OperatorDeleteKind::Normal},
+            {"??3@YAXPEAXAEBUnothrow_t@std@@@Z", false, OperatorDeleteKind::Nothrow},
+            {"??_V@YAXPEAX@Z", true, OperatorDeleteKind::Normal},
+            {"??_V@YAXPEAX_K@Z", true, OperatorDeleteKind::Normal},
+            {"??_V@YAXPEAXAEBUnothrow_t@std@@@Z", true, OperatorDeleteKind::Nothrow},
+        };
+        for (const Case& c : cases)
+        {
+            bool isArray = !c.isArray;
+            OperatorDeleteKind kind = OperatorDeleteKind::Destroying;
+            ASSERT_TRUE(compilerlib::isOperatorDeleteName(c.name, isArray, kind)) << c.name;
+            EXPECT_EQ(isArray, c.isArray) << c.name;
+            EXPECT_EQ(kind, c.kind) << c.name;
+        }
+    }
+
+    // The runtime allocates and releases through the unaligned operators, while the
+    // Microsoft CRT pairs the align_val_t ones with _aligned_malloc/_aligned_free:
+    // rewriting them would free aligned memory with the wrong function.
+    TEST(OperatorNames, MicrosoftAbiAlignedVariantsStayNative)
+    {
+        bool isArray = false;
+        OperatorNewKind newKind = OperatorNewKind::Normal;
+        OperatorDeleteKind deleteKind = OperatorDeleteKind::Normal;
+        EXPECT_FALSE(
+            compilerlib::isOperatorNewName("??2@YAPEAX_KW4align_val_t@std@@@Z", isArray, newKind));
+        EXPECT_FALSE(compilerlib::isOperatorDeleteName("??3@YAXPEAX_KW4align_val_t@std@@@Z",
+                                                       isArray, deleteKind));
+    }
+
     TEST(FreeLikeNames, CoversRuntimeReleaseEntryPoints)
     {
         EXPECT_TRUE(compilerlib::isFreeLikeName("free"));
