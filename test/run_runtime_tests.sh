@@ -22,6 +22,12 @@ mkdir -p "${OUT_DIR}"
 flags_for() {
   case "$1" in
     ct_shadow_pages.c) echo "--ct-modules=alloc,bounds --ct-shadow" ;;
+    # Valid accesses: built to abort on any bounds error, so a false positive fails.
+    ct_bounds_*_valid_shadow.c) echo "--ct-modules=alloc,bounds --ct-shadow-aggressive" ;;
+    ct_bounds_*_valid.c)        echo "--ct-modules=alloc,bounds" ;;
+    # Invalid accesses: reported and survived, so the program exits normally.
+    ct_bounds_*_shadow.c) echo "--ct-modules=alloc,bounds --ct-bounds-no-abort --ct-shadow-aggressive" ;;
+    ct_bounds_*.c)        echo "--ct-modules=alloc,bounds --ct-bounds-no-abort" ;;
     ct_vtable_*.cpp)   echo "--ct-modules=alloc,vtable --ct-vtable-diag" ;;
     *)                 echo "--ct-modules=alloc" ;;
   esac
@@ -46,6 +52,9 @@ expect_leaks() {
 expect_stderr() {
   case "$1" in
     ct_alloc_basic.c) echo "tracing-malloc-unreachable" ;;
+    ct_bounds_container_of_underflow.c) echo "heap-buffer-overflow" ;;
+    ct_bounds_container_of_underflow_shadow.c) echo "heap-buffer-overflow" ;;
+    ct_bounds_container_of_overflow.c) echo "heap-buffer-overflow" ;;
     ct_new_delete.cpp) echo "tracing-new-unreachable" ;;
     ct_vtable_diag_null.cpp) echo "null this pointer" ;;
     ct_vtable_diag_fake.cpp) echo "vtable resolve failed" ;;
@@ -67,7 +76,8 @@ expect_stdout() {
   esac
 }
 
-# Substring that must NOT appear on stderr for any fixture.
+# Substring that must NOT appear on stderr for any fixture, except the fixture whose
+# expect_stderr is that exact diagnostic.
 FORBIDDEN_STDERR=("heap-buffer-overflow" "mutex lock failed" "terminating due to")
 
 # Fixtures whose failure is a known, tracked defect. The suite still runs them and
@@ -93,6 +103,11 @@ skip_reason() {
 TESTS=(
   ct_alloc_basic.c
   ct_alloc_growth.c
+  ct_bounds_container_of_underflow.c
+  ct_bounds_container_of_underflow_shadow.c
+  ct_bounds_container_of_overflow.c
+  ct_bounds_container_of_valid.c
+  ct_bounds_container_of_valid_shadow.c
   ct_realloc_zero.c
   ct_new_delete.cpp
   ct_new_delete_sized.cpp
@@ -145,7 +160,12 @@ check_one() {
     return 1
   fi
 
+  local expected_stderr
+  expected_stderr="$(expect_stderr "${test_file}")"
   for needle in "${FORBIDDEN_STDERR[@]}"; do
+    if [[ "${needle}" == "${expected_stderr}" ]]; then
+      continue
+    fi
     if grep -q -- "${needle}" "${err_log}"; then
       echo "  stderr contains forbidden '${needle}' (see ${err_log})"
       return 1
