@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -24,7 +25,7 @@ def copy_fixtures(ws: Path, files: list[Path]) -> None:
 
 
 def main() -> int:
-    cc_bin = (ROOT / "build" / "cc").resolve()
+    cc_bin = Path(os.environ.get("CORETRACE_COMPILER_TEST_CC", ROOT / "build" / "cc")).resolve()
     runner = CompilerRunner(RunnerConfig(executable=cc_bin))
     if not cc_bin.exists():
         print(f"cc binary not found: {cc_bin}")

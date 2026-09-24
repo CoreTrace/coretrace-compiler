@@ -356,7 +356,10 @@ def main() -> int:
             assert_exit_code(0),
             assert_argv_contains(["--instrument", "-g0", "--in-mem", "-S", "-emit-llvm"]),
             assert_stdout_contains("__ct_malloc"),
-            assert_stdout_contains("alloc_site.c:5:"),
+            # Clang leaves columns out of CodeView (Windows) debug info by default, so
+            # sites are file:line there and file:line:column elsewhere.
+            assert_stdout_contains("alloc_site.c:5" if platform.os == OS.WINDOWS
+                                   else "alloc_site.c:5:"),
         ],
     )
 
@@ -651,7 +654,11 @@ def main() -> int:
         ),
         assertions=[
             assert_exit_code(1),
-            assert_stderr_contains("never_defined"),
+            # link.exe reports unresolved symbols on stdout, which cc passes through
+            # untouched; ld and ld64 report them on stderr.
+            assert_stdout_contains("never_defined")
+            if platform.os == OS.WINDOWS
+            else assert_stderr_contains("never_defined"),
         ],
     )
 
@@ -681,8 +688,6 @@ def main() -> int:
         tc_instrument_emit_llvm,
         tc_instrument_emit_bc,
     ]
-    # The Windows runtime has no leak report at exit yet, so the runtime cases are
-    # only part of the POSIX suites.
     runtime_cases = [
         tc_runtime_leak_report,
         tc_runtime_bounds_without_trace,
@@ -716,7 +721,8 @@ def main() -> int:
             tc_optnone_emit_llvm,
             tc_optnone_disable_o0,
         ]
-        cases = [tc_native, *common_cases, *instrument_cases, *windows_readme_cases]
+        cases = [tc_native, *common_cases, *instrument_cases, *runtime_cases,
+                 *windows_readme_cases]
 
     suite = TestSuite(name="compiler_smoke", cases=cases)
 
