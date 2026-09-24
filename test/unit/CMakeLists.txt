@@ -24,6 +24,7 @@ coretrace_disable_rtti(compilerlib_unit_tests)
 # runtime installs its constructors and leak report in this process; every test
 # releases what it inserts.
 add_executable(runtime_unit_tests
+  runtime_bounds_test.cpp
   runtime_demangle_test.cpp
   runtime_table_test.cpp
 )
