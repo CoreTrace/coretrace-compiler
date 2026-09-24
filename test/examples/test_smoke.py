@@ -166,6 +166,7 @@ def main() -> int:
     new_delete_src = FIXTURES / "new_delete.cpp"
     crash_src = FIXTURES / "crash.c"
     trace_threads_src = FIXTURES / "trace_threads.cpp"
+    trace_objc_src = FIXTURES / "trace_objc.m"
 
     def base_out_assertions(out_name: str):
         assertions = [
@@ -714,6 +715,23 @@ def main() -> int:
             assert_run_artifact("trace_threads_app", 0, "work(int)"),
         ],
     )
+    # clang names Objective-C methods with LLVM's asm-label marker, @"\01-[Greeter greet:]":
+    # the trace prints the method name without it.
+    tc_runtime_trace_objc_method = TestCase(
+        name="runtime_trace_objc_method_name",
+        plan=CompilePlan(
+            name="runtime_trace_objc_method_name",
+            sources=[Path("trace_objc.m")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=trace", "-framework", "Foundation",
+                        "-o", "trace_objc_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("trace_objc_app"),
+            assert_run_artifact("trace_objc_app", 0, "[ENTRY-FUNCTION]: -> -[Greeter greet:]\n"),
+        ],
+    )
 
     # Failures must be reported through the exit code even on the non-instrumented
     # path, which delegates to the clang driver.
@@ -810,7 +828,9 @@ def main() -> int:
         tc_optnone_disable_o0,
     ]
     if platform.os == OS.MACOS:
-        cases = [tc_macho, *common_cases, *instrument_cases, *runtime_cases, *readme_cases]
+        # Objective-C programs need the Apple runtime and Foundation.
+        cases = [tc_macho, *common_cases, *instrument_cases, *runtime_cases,
+                 tc_runtime_trace_objc_method, *readme_cases]
     elif platform.os == OS.LINUX:
         cases = [tc_elf, *common_cases, *instrument_cases, *runtime_cases, *readme_cases]
     else:
@@ -839,7 +859,7 @@ def main() -> int:
             copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src,
                                leak_src, overflow_src, broken_src, undefined_ref_src,
                                alloc_site_src, new_delete_src, crash_src,
-                               trace_threads_src])
+                               trace_threads_src, trace_objc_src])
             reports.append(case.run(runner, ws))
 
     rep = type("Tmp", (), {"name": suite.name, "reports": reports})()
