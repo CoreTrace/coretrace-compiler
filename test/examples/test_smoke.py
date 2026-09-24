@@ -167,6 +167,8 @@ def main() -> int:
     crash_src = FIXTURES / "crash.c"
     trace_threads_src = FIXTURES / "trace_threads.cpp"
     trace_objc_src = FIXTURES / "trace_objc.m"
+    leak_objc_src = FIXTURES / "leak_objc.m"
+    new_delete_objc_src = FIXTURES / "new_delete_objc.mm"
 
     def base_out_assertions(out_name: str):
         assertions = [
@@ -732,6 +734,38 @@ def main() -> int:
             assert_run_artifact("trace_objc_app", 0, "[ENTRY-FUNCTION]: -> -[Greeter greet:]\n"),
         ],
     )
+    # Allocations made in Objective-C and Objective-C++ methods, built with ARC, are
+    # tracked like any other: the freed ones are gone, only the leaked one is reported.
+    tc_runtime_objc_leak_report = TestCase(
+        name="runtime_objc_leak_report_at_exit",
+        plan=CompilePlan(
+            name="runtime_objc_leak_report_at_exit",
+            sources=[Path("leak_objc.m")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=alloc", "-fobjc-arc",
+                        "-framework", "Foundation", "-o", "leak_objc_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("leak_objc_app"),
+            assert_run_artifact("leak_objc_app", 0, "ct: leaks detected count=1"),
+        ],
+    )
+    tc_runtime_objcxx_leak_report = TestCase(
+        name="runtime_objcxx_leak_report_at_exit",
+        plan=CompilePlan(
+            name="runtime_objcxx_leak_report_at_exit",
+            sources=[Path("new_delete_objc.mm")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=alloc", "-fobjc-arc",
+                        "-framework", "Foundation", "-o", "new_delete_objc_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("new_delete_objc_app"),
+            assert_run_artifact("new_delete_objc_app", 0, "ct: leaks detected count=1"),
+        ],
+    )
 
     # Failures must be reported through the exit code even on the non-instrumented
     # path, which delegates to the clang driver.
@@ -814,6 +848,12 @@ def main() -> int:
         tc_runtime_backtrace,
         tc_runtime_trace_threads,
     ]
+    # Objective-C programs need the Apple runtime and Foundation.
+    objc_cases = [
+        tc_runtime_trace_objc_method,
+        tc_runtime_objc_leak_report,
+        tc_runtime_objcxx_leak_report,
+    ]
     readme_cases = [
         tc_readme_emit_llvm,
         tc_readme_asm,
@@ -828,9 +868,8 @@ def main() -> int:
         tc_optnone_disable_o0,
     ]
     if platform.os == OS.MACOS:
-        # Objective-C programs need the Apple runtime and Foundation.
-        cases = [tc_macho, *common_cases, *instrument_cases, *runtime_cases,
-                 tc_runtime_trace_objc_method, *readme_cases]
+        cases = [tc_macho, *common_cases, *instrument_cases, *runtime_cases, *objc_cases,
+                 *readme_cases]
     elif platform.os == OS.LINUX:
         cases = [tc_elf, *common_cases, *instrument_cases, *runtime_cases, *readme_cases]
     else:
@@ -859,7 +898,8 @@ def main() -> int:
             copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src,
                                leak_src, overflow_src, broken_src, undefined_ref_src,
                                alloc_site_src, new_delete_src, crash_src,
-                               trace_threads_src, trace_objc_src])
+                               trace_threads_src, trace_objc_src, leak_objc_src,
+                               new_delete_objc_src])
             reports.append(case.run(runner, ws))
 
     rep = type("Tmp", (), {"name": suite.name, "reports": reports})()
