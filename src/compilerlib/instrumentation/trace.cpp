@@ -62,7 +62,9 @@ namespace compilerlib
 
             llvm::BasicBlock& entry = func.getEntryBlock();
             llvm::IRBuilder<> entryBuilder(&*entry.getFirstInsertionPt());
-            llvm::Value* funcName = getStringLiteral(module, func.getName(), funcNameCache);
+            // Asm-labelled functions, such as Objective-C methods, carry LLVM's '\01' marker.
+            llvm::Value* funcName = getStringLiteral(
+                module, llvm::GlobalValue::dropLLVMManglingEscape(func.getName()), funcNameCache);
             entryBuilder.CreateCall(enterFn, {funcName});
 
             llvm::SmallVector<llvm::ReturnInst*, 8> returns;
