@@ -484,6 +484,8 @@ namespace
         ct_release_autofree_memory(ptr, kind);
     }
 
+    // Runs as a static destructor, possibly after the logger's own state is gone: only the
+    // lock-free writers, as in the POSIX leak report.
     struct CtLeakReporter
     {
         CT_NOINSTR ~CtLeakReporter()
@@ -506,7 +508,7 @@ namespace
             }
 
             ct_disable_logging();
-            ct_write_prefix(CTLevel::Error);
+            ct_write_prefix_nolock(CTLevel::Error);
             ct_write_cstr("ct: leaks detected count=");
             ct_write_dec(leaks.size());
             ct_write_cstr("\n");
@@ -514,7 +516,7 @@ namespace
             size_t reported = 0;
             for (const auto& [ptr, entry] : leaks)
             {
-                ct_write_prefix(CTLevel::Warn);
+                ct_write_prefix_nolock(CTLevel::Warn);
                 ct_write_cstr("ct: leak ptr=");
                 ct_write_hex(reinterpret_cast<uintptr_t>(ptr));
                 ct_write_cstr(" size=");
@@ -525,7 +527,7 @@ namespace
 
                 if (++reported >= 32)
                 {
-                    ct_write_prefix(CTLevel::Warn);
+                    ct_write_prefix_nolock(CTLevel::Warn);
                     ct_write_cstr("ct: leak list truncated\n");
                     break;
                 }
