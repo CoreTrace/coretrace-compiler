@@ -13,7 +13,11 @@
 
 inline bool ct_demangle(const char* name, std::string& out)
 {
-    if (!name || name[0] == '\0')
+    // UnDecorateSymbolName returns an undecorated name, such as a C function's, unchanged
+    // and reports success, which would present it as decoded. Microsoft C++ names start
+    // with '?', and RTTI type descriptor names, which the vtable diagnostics pass here,
+    // with ".?".
+    if (!name || (name[0] != '?' && !(name[0] == '.' && name[1] == '?')))
     {
         return false;
     }
