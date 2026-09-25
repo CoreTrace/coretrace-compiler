@@ -130,68 +130,92 @@ set(LIB_SOURCES
   src/compilerlib/instrumentation/vtable.cpp
 )
 
-set(CT_RUNTIME_PLATFORM_SOURCES
-  src/runtime/ct_runtime_alloc.cpp
-  src/runtime/ct_runtime_autofree_scan.cpp
-  src/runtime/ct_runtime_backtrace.cpp
-  src/runtime/ct_runtime_env.cpp
-  src/runtime/ct_runtime_vtable.cpp
-)
-if(WIN32)
+# The native instrumentation runtime and its logger, coretrace-log. A consumer that only
+# embeds compilerlib to produce IR can leave it out; --instrument then links a runtime
+# built elsewhere, found through CT_RUNTIME_LIB_DIR.
+option(CORETRACE_COMPILER_BUILD_RUNTIME "Build the native CoreTrace instrumentation runtime" ON)
+
+if(CORETRACE_COMPILER_BUILD_RUNTIME)
   set(CT_RUNTIME_PLATFORM_SOURCES
-    src/runtime/windows/ct_runtime_alloc.cpp
-    src/runtime/windows/ct_runtime_backtrace.cpp
-    src/runtime/windows/ct_runtime_env.cpp
-    src/runtime/windows/ct_runtime_vtable.cpp
+    src/runtime/ct_runtime_alloc.cpp
+    src/runtime/ct_runtime_autofree_scan.cpp
+    src/runtime/ct_runtime_backtrace.cpp
+    src/runtime/ct_runtime_env.cpp
+    src/runtime/ct_runtime_vtable.cpp
   )
+  if(WIN32)
+    set(CT_RUNTIME_PLATFORM_SOURCES
+      src/runtime/windows/ct_runtime_alloc.cpp
+      src/runtime/windows/ct_runtime_backtrace.cpp
+      src/runtime/windows/ct_runtime_env.cpp
+      src/runtime/windows/ct_runtime_vtable.cpp
+    )
+  endif()
+
+  set(CORETRACE_LOGGER_BUILD_EXAMPLES OFF CACHE BOOL "Disable logger examples" FORCE)
+  set(CORETRACE_LOGGER_BUILD_TESTS OFF CACHE BOOL "Disable logger tests" FORCE)
+
+  include(FetchContent)
+  # Pinned to an immutable commit so a push to coretrace-log cannot change this build.
+  # Keep CORETRACE_LOG_REF in .github/workflows/build.yml on the same commit.
+  set(CORETRACE_LOGGER_GIT_TAG "624688ad5e5d00a1d04fd72909d43fe6d948575b" CACHE STRING "coretrace-log commit or tag to build against")
+  FetchContent_Declare(coretrace_logger
+    GIT_REPOSITORY https://github.com/CoreTrace/coretrace-log.git
+    GIT_TAG        ${CORETRACE_LOGGER_GIT_TAG}
+    EXCLUDE_FROM_ALL
+  )
+
+  FetchContent_GetProperties(coretrace_logger)
+  if(NOT coretrace_logger_POPULATED)
+    FetchContent_Populate(coretrace_logger)
+  endif()
+
+  if(NOT TARGET coretrace_logger)
+    add_subdirectory("${coretrace_logger_SOURCE_DIR}" "${coretrace_logger_BINARY_DIR}" EXCLUDE_FROM_ALL)
+  endif()
+  coretrace_force_msvc_runtime(coretrace_logger)
+
+  add_library(ct_instrument_runtime STATIC
+    src/runtime/ct_instrument_runtime.cpp
+    src/runtime/ct_runtime_vtable_shared.cpp
+    src/runtime/ct_runtime_config.cpp
+    ${CT_RUNTIME_PLATFORM_SOURCES}
+    src/runtime/ct_runtime_bounds.cpp
+    src/runtime/ct_runtime_logging.cpp
+    src/runtime/ct_runtime_shadow.cpp
+    src/runtime/ct_runtime_state.cpp
+    src/runtime/ct_runtime_trace.cpp
+  )
+  if(APPLE)
+    target_sources(ct_instrument_runtime PRIVATE src/runtime/ct_runtime_objc.cpp)
+  endif()
+  target_include_directories(ct_instrument_runtime PRIVATE src/runtime)
+  target_link_libraries(ct_instrument_runtime PRIVATE coretrace_logger)
+  if(WIN32)
+    target_link_libraries(ct_instrument_runtime PRIVATE dbghelp)
+  endif()
+  set_target_properties(ct_instrument_runtime PROPERTIES OUTPUT_NAME "ct_instrument_runtime")
+  coretrace_force_msvc_runtime(ct_instrument_runtime)
+  if(ENABLE_DEBUG_ASAN)
+    target_compile_options(ct_instrument_runtime PRIVATE -fno-sanitize=address)
+  endif()
 endif()
 
-set(CORETRACE_LOGGER_BUILD_EXAMPLES OFF CACHE BOOL "Disable logger examples" FORCE)
-set(CORETRACE_LOGGER_BUILD_TESTS OFF CACHE BOOL "Disable logger tests" FORCE)
-
-include(FetchContent)
-# Pinned to an immutable commit so a push to coretrace-log cannot change this build.
-# Keep CORETRACE_LOG_REF in .github/workflows/build.yml on the same commit.
-set(CORETRACE_LOGGER_GIT_TAG "624688ad5e5d00a1d04fd72909d43fe6d948575b" CACHE STRING "coretrace-log commit or tag to build against")
-FetchContent_Declare(coretrace_logger
-  GIT_REPOSITORY https://github.com/CoreTrace/coretrace-log.git
-  GIT_TAG        ${CORETRACE_LOGGER_GIT_TAG}
-  EXCLUDE_FROM_ALL
-)
-
-FetchContent_GetProperties(coretrace_logger)
-if(NOT coretrace_logger_POPULATED)
-  FetchContent_Populate(coretrace_logger)
-endif()
-
-if(NOT TARGET coretrace_logger)
-  add_subdirectory("${coretrace_logger_SOURCE_DIR}" "${coretrace_logger_BINARY_DIR}" EXCLUDE_FROM_ALL)
-endif()
-coretrace_force_msvc_runtime(coretrace_logger)
-
-add_library(ct_instrument_runtime STATIC
-  src/runtime/ct_instrument_runtime.cpp
-  src/runtime/ct_runtime_vtable_shared.cpp
-  src/runtime/ct_runtime_config.cpp
-  ${CT_RUNTIME_PLATFORM_SOURCES}
-  src/runtime/ct_runtime_bounds.cpp
-  src/runtime/ct_runtime_logging.cpp
-  src/runtime/ct_runtime_shadow.cpp
-  src/runtime/ct_runtime_state.cpp
-  src/runtime/ct_runtime_trace.cpp
-)
-if(APPLE)
-  target_sources(ct_instrument_runtime PRIVATE src/runtime/ct_runtime_objc.cpp)
-endif()
-target_include_directories(ct_instrument_runtime PRIVATE src/runtime)
-target_link_libraries(ct_instrument_runtime PRIVATE coretrace_logger)
-if(WIN32)
-  target_link_libraries(ct_instrument_runtime PRIVATE dbghelp)
-endif()
-set_target_properties(ct_instrument_runtime PROPERTIES OUTPUT_NAME "ct_instrument_runtime")
-coretrace_force_msvc_runtime(ct_instrument_runtime)
-if(ENABLE_DEBUG_ASAN)
-  target_compile_options(ct_instrument_runtime PRIVATE -fno-sanitize=address)
+# What the driver needs to find the runtime archives (see resolveRuntimeArchives): their
+# file names, looked up in CT_RUNTIME_LIB_DIR and in an installed lib/ directory, and
+# their build-tree paths as a last resort when this build makes them.
+if(CORETRACE_COMPILER_BUILD_RUNTIME)
+  set(CT_RUNTIME_DEFINITIONS
+    CT_RUNTIME_LIB_NAME="$<TARGET_FILE_NAME:ct_instrument_runtime>"
+    CT_RUNTIME_LOGGER_LIB_NAME="$<TARGET_FILE_NAME:coretrace_logger>"
+    CT_RUNTIME_LIB_PATH="$<TARGET_FILE:ct_instrument_runtime>"
+    CT_RUNTIME_LOGGER_LIB_PATH="$<TARGET_FILE:coretrace_logger>"
+  )
+else()
+  set(CT_RUNTIME_DEFINITIONS
+    CT_RUNTIME_LIB_NAME="${CMAKE_STATIC_LIBRARY_PREFIX}ct_instrument_runtime${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    CT_RUNTIME_LOGGER_LIB_NAME="${CMAKE_STATIC_LIBRARY_PREFIX}coretrace_logger${CMAKE_STATIC_LIBRARY_SUFFIX}"
+  )
 endif()
 
 add_library(compilerlib_static STATIC ${LIB_SOURCES})
@@ -293,16 +317,10 @@ target_include_directories(compilerlib_static
 )
 add_library(cc::compilerlib_static ALIAS compilerlib_static)
 
-target_compile_definitions(compilerlib_static
-  PRIVATE
-    CT_RUNTIME_LIB_NAME="$<TARGET_FILE_NAME:ct_instrument_runtime>"
-    CT_RUNTIME_LOGGER_LIB_NAME="$<TARGET_FILE_NAME:coretrace_logger>"
-    # Build-tree locations, used only when no installed layout is found next to
-    # the executable (see resolveRuntimeArchives).
-    CT_RUNTIME_LIB_PATH="$<TARGET_FILE:ct_instrument_runtime>"
-    CT_RUNTIME_LOGGER_LIB_PATH="$<TARGET_FILE:coretrace_logger>"
-)
-add_dependencies(compilerlib_static ct_instrument_runtime)
+target_compile_definitions(compilerlib_static PRIVATE ${CT_RUNTIME_DEFINITIONS})
+if(CORETRACE_COMPILER_BUILD_RUNTIME)
+  add_dependencies(compilerlib_static ct_instrument_runtime)
+endif()
 coretrace_disable_rtti(compilerlib_static)
 target_link_libraries(compilerlib_static PUBLIC ${CT_CLANG_LINK_LIBS} ${CT_LLVM_LINK_LIBS})
 
@@ -317,16 +335,10 @@ target_include_directories(compilerlib_shared
 )
 add_library(cc::compilerlib_shared ALIAS compilerlib_shared)
 
-target_compile_definitions(compilerlib_shared
-  PRIVATE
-    CT_RUNTIME_LIB_NAME="$<TARGET_FILE_NAME:ct_instrument_runtime>"
-    CT_RUNTIME_LOGGER_LIB_NAME="$<TARGET_FILE_NAME:coretrace_logger>"
-    # Build-tree locations, used only when no installed layout is found next to
-    # the executable (see resolveRuntimeArchives).
-    CT_RUNTIME_LIB_PATH="$<TARGET_FILE:ct_instrument_runtime>"
-    CT_RUNTIME_LOGGER_LIB_PATH="$<TARGET_FILE:coretrace_logger>"
-)
-add_dependencies(compilerlib_shared ct_instrument_runtime)
+target_compile_definitions(compilerlib_shared PRIVATE ${CT_RUNTIME_DEFINITIONS})
+if(CORETRACE_COMPILER_BUILD_RUNTIME)
+  add_dependencies(compilerlib_shared ct_instrument_runtime)
+endif()
 coretrace_disable_rtti(compilerlib_shared)
 target_link_libraries(compilerlib_shared PRIVATE ${CT_CLANG_LINK_LIBS} ${CT_LLVM_LINK_LIBS})
 
@@ -359,14 +371,17 @@ endforeach()
 coretrace_disable_rtti(cc)
 target_link_libraries(cc PRIVATE compilerlib_static ${CT_CLANG_LINK_LIBS} ${CT_LLVM_LINK_LIBS})
 
-install(TARGETS compilerlib_static compilerlib_shared cc ct_instrument_runtime
+install(TARGETS compilerlib_static compilerlib_shared cc
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
-# The logger target lives in the fetched subdirectory; install its archive next to
-# the runtime so an installed cc can link instrumented programs.
-install(FILES $<TARGET_FILE:coretrace_logger> DESTINATION lib)
+if(CORETRACE_COMPILER_BUILD_RUNTIME)
+  install(TARGETS ct_instrument_runtime ARCHIVE DESTINATION lib)
+  # The logger target lives in the fetched subdirectory; install its archive next to
+  # the runtime so an installed cc can link instrumented programs.
+  install(FILES $<TARGET_FILE:coretrace_logger> DESTINATION lib)
+endif()
 install(DIRECTORY include/ DESTINATION include)
 
 set(USE_SHARED_LIB OFF CACHE BOOL "Link with shared compilerlib")
