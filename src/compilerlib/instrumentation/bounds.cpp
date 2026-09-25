@@ -5,16 +5,24 @@
 #include "runtime_abi.hpp"
 
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/SetVector.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/Analysis/CaptureTracking.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
+#include <llvm/IR/DebugInfo.h>
 #include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/InstIterator.h>
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Operator.h>
 #include <llvm/IR/Type.h>
 #include <llvm/Support/Casting.h>
+#include <llvm/Support/Path.h>
+
+#include <optional>
+#include <string>
 
 namespace compilerlib
 {
@@ -194,6 +202,124 @@ namespace compilerlib
             return resolved ? resolved : ptr;
         }
 
+        // Size of a stack object the runtime can register: allocated once per call, with a
+        // size known at compile time. Variable-length arrays are not.
+        CT_NODISCARD std::optional<uint64_t> stackObjectSize(const llvm::AllocaInst& object,
+                                                             const llvm::DataLayout& layout)
+        {
+            if (!object.isStaticAlloca() || object.isSwiftError() || object.isUsedWithInAlloca())
+            {
+                return std::nullopt;
+            }
+            std::optional<llvm::TypeSize> size = object.getAllocationSize(layout);
+            if (!size || size->isScalable())
+            {
+                return std::nullopt;
+            }
+            return size->getFixedValue();
+        }
+
+        // True when [ptr, ptr + accessSize) lies inside `object`, of `objectSize` bytes, at
+        // an offset known at compile time: a check could never fail.
+        CT_NODISCARD bool staysInside(const llvm::Value* ptr, uint64_t accessSize,
+                                      const llvm::AllocaInst& object, uint64_t objectSize,
+                                      const llvm::DataLayout& layout)
+        {
+            llvm::APInt offset(layout.getIndexTypeSizeInBits(ptr->getType()), 0);
+            const llvm::Value* origin =
+                ptr->stripAndAccumulateConstantOffsets(layout, offset, /*AllowNonInbounds=*/true);
+            if (origin != &object || offset.isNegative())
+            {
+                return false;
+            }
+            const uint64_t start = offset.getZExtValue();
+            return start <= objectSize && accessSize <= objectSize - start;
+        }
+
+        // Where a stack object comes from, as "file:line": its variable's declaration when
+        // the program has full debug information, its function's otherwise.
+        CT_NODISCARD llvm::Value* stackObjectSite(llvm::Module& module, llvm::AllocaInst& object,
+                                                  llvm::Constant*& unknown)
+        {
+            llvm::StringRef file;
+            unsigned line = 0;
+            llvm::TinyPtrVector<llvm::DbgVariableRecord*> records = llvm::findDVRDeclares(&object);
+            llvm::TinyPtrVector<llvm::DbgDeclareInst*> declares = llvm::findDbgDeclares(&object);
+            if (!records.empty())
+            {
+                file = records.front()->getVariable()->getFilename();
+                line = records.front()->getVariable()->getLine();
+            }
+            else if (!declares.empty())
+            {
+                file = declares.front()->getVariable()->getFilename();
+                line = declares.front()->getVariable()->getLine();
+            }
+            else if (const llvm::DISubprogram* subprogram = object.getFunction()->getSubprogram())
+            {
+                file = subprogram->getFilename();
+                line = subprogram->getLine();
+            }
+            if (file.empty())
+            {
+                if (!unknown)
+                    unknown = createSiteString(module, "<unknown>");
+                return unknown;
+            }
+            return createSiteString(module, llvm::sys::path::filename(file).str() + ":" +
+                                                std::to_string(line));
+        }
+
+        // Registers `objects` while `func` runs: pushed once the entry block has allocated
+        // them, popped before every return and resume. Every exit restores the depth the
+        // first push returned, which also drops objects that frames an exception or a
+        // longjmp left without returning had registered above it.
+        void registerStackObjects(llvm::Function& func, llvm::ArrayRef<llvm::AllocaInst*> objects,
+                                  const llvm::DataLayout& layout, llvm::Constant*& unknownSite)
+        {
+            if (objects.empty())
+            {
+                return;
+            }
+            // Nothing may run between a musttail call and its return.
+            for (llvm::Instruction& inst : llvm::instructions(func))
+            {
+                if (auto* call = llvm::dyn_cast<llvm::CallInst>(&inst);
+                    call && call->isMustTailCall())
+                {
+                    return;
+                }
+            }
+
+            llvm::Module& module = *func.getParent();
+            llvm::Type* sizeTy = layout.getIntPtrType(module.getContext());
+            llvm::FunctionCallee pushFn = CT_RUNTIME_CALLEE(module, __ct_stack_push);
+            llvm::FunctionCallee popFn = CT_RUNTIME_CALLEE(module, __ct_stack_pop);
+
+            llvm::BasicBlock& entry = func.getEntryBlock();
+            llvm::IRBuilder<> builder(&entry, entry.getFirstNonPHIOrDbgOrAlloca());
+            llvm::Value* depth = nullptr;
+            for (llvm::AllocaInst* object : objects)
+            {
+                llvm::Value* size =
+                    llvm::ConstantInt::get(sizeTy, *stackObjectSize(*object, layout));
+                llvm::Value* pushed = builder.CreateCall(
+                    pushFn, {object, size, stackObjectSite(module, *object, unknownSite)});
+                if (!depth)
+                {
+                    depth = pushed;
+                }
+            }
+            for (llvm::BasicBlock& bb : func)
+            {
+                llvm::Instruction* exit = bb.getTerminator();
+                if (llvm::isa<llvm::ReturnInst>(exit) || llvm::isa<llvm::ResumeInst>(exit))
+                {
+                    llvm::IRBuilder<>(exit).CreateCall(popFn, {depth});
+                }
+            }
+        }
+
         void emitBoundsCheck(llvm::IRBuilder<>& builder, llvm::FunctionCallee checkFn,
                              llvm::Value* base, llvm::Value* ptr, llvm::Value* sizeVal,
                              llvm::Value* site, bool isWrite, llvm::Type* voidPtrTy,
@@ -228,7 +354,6 @@ namespace compilerlib
 
         llvm::DenseMap<const llvm::DILocation*, llvm::Constant*> siteCache;
         llvm::Constant* unknownSite = nullptr;
-        llvm::SmallVector<llvm::Instruction*, 128> worklist;
 
         for (llvm::Function& func : module)
         {
@@ -236,99 +361,116 @@ namespace compilerlib
             {
                 continue;
             }
-            for (llvm::BasicBlock& bb : func)
+
+            // A stack object whose address escapes is registered: a callee may check
+            // accesses against it. Decided before the checks exist, since handing an
+            // object to the checker would count as an escape.
+            llvm::SetVector<llvm::AllocaInst*> stackObjects;
+            for (llvm::Instruction& inst : func.getEntryBlock())
             {
-                for (llvm::Instruction& inst : bb)
+                auto* object = llvm::dyn_cast<llvm::AllocaInst>(&inst);
+                if (object && stackObjectSize(*object, layout) &&
+                    llvm::PointerMayBeCaptured(object, /*ReturnCaptures=*/true,
+                                               /*StoreCaptures=*/true))
                 {
-                    if (llvm::isa<llvm::LoadInst>(&inst) || llvm::isa<llvm::StoreInst>(&inst) ||
-                        llvm::isa<llvm::AtomicRMWInst>(&inst) ||
-                        llvm::isa<llvm::AtomicCmpXchgInst>(&inst) ||
-                        llvm::isa<llvm::MemIntrinsic>(&inst))
-                    {
-                        worklist.push_back(&inst);
-                    }
+                    stackObjects.insert(object);
                 }
             }
-        }
 
-        for (llvm::Instruction* inst : worklist)
-        {
-            llvm::IRBuilder<> builder(inst);
-            llvm::Value* site = getSiteString(module, *inst, siteCache, unknownSite);
-
-            if (auto* load = llvm::dyn_cast<llvm::LoadInst>(inst))
+            llvm::SmallVector<llvm::Instruction*, 64> accesses;
+            for (llvm::Instruction& inst : llvm::instructions(func))
             {
-                llvm::Value* ptr = load->getPointerOperand();
-                llvm::Value* base = resolveBasePointer(ptr);
-                size_t size = layout.getTypeStoreSize(load->getType());
-                llvm::Value* sizeVal = llvm::ConstantInt::get(sizeTy, size);
-                emitBoundsCheck(builder, checkFn, base, ptr, sizeVal, site, false, voidPtrTy,
-                                intTy);
-                continue;
-            }
-            if (auto* store = llvm::dyn_cast<llvm::StoreInst>(inst))
-            {
-                llvm::Value* ptr = store->getPointerOperand();
-                llvm::Value* base = resolveBasePointer(ptr);
-                size_t size = layout.getTypeStoreSize(store->getValueOperand()->getType());
-                llvm::Value* sizeVal = llvm::ConstantInt::get(sizeTy, size);
-                emitBoundsCheck(builder, checkFn, base, ptr, sizeVal, site, true, voidPtrTy, intTy);
-                continue;
-            }
-            if (auto* atomic = llvm::dyn_cast<llvm::AtomicRMWInst>(inst))
-            {
-                llvm::Value* ptr = atomic->getPointerOperand();
-                llvm::Value* base = resolveBasePointer(ptr);
-                size_t size = layout.getTypeStoreSize(atomic->getValOperand()->getType());
-                llvm::Value* sizeVal = llvm::ConstantInt::get(sizeTy, size);
-                emitBoundsCheck(builder, checkFn, base, ptr, sizeVal, site, true, voidPtrTy, intTy);
-                continue;
-            }
-            if (auto* cmpx = llvm::dyn_cast<llvm::AtomicCmpXchgInst>(inst))
-            {
-                llvm::Value* ptr = cmpx->getPointerOperand();
-                llvm::Value* base = resolveBasePointer(ptr);
-                size_t size = layout.getTypeStoreSize(cmpx->getCompareOperand()->getType());
-                llvm::Value* sizeVal = llvm::ConstantInt::get(sizeTy, size);
-                emitBoundsCheck(builder, checkFn, base, ptr, sizeVal, site, true, voidPtrTy, intTy);
-                continue;
-            }
-            if (auto* mem = llvm::dyn_cast<llvm::MemIntrinsic>(inst))
-            {
-                llvm::Value* len = mem->getLength();
-                if (auto* constLen = llvm::dyn_cast<llvm::ConstantInt>(len))
+                if (llvm::isa<llvm::LoadInst>(&inst) || llvm::isa<llvm::StoreInst>(&inst) ||
+                    llvm::isa<llvm::AtomicRMWInst>(&inst) ||
+                    llvm::isa<llvm::AtomicCmpXchgInst>(&inst) ||
+                    llvm::isa<llvm::MemIntrinsic>(&inst))
                 {
-                    if (constLen->isZero())
+                    accesses.push_back(&inst);
+                }
+            }
+
+            for (llvm::Instruction* inst : accesses)
+            {
+                llvm::IRBuilder<> builder(inst);
+
+                // Checks one access, unless its base is a stack object it provably stays
+                // inside; a stack object that is the base of a check gets registered.
+                auto check = [&](llvm::Value* ptr, llvm::Value* sizeVal, bool isWrite)
+                {
+                    llvm::Value* base = resolveBasePointer(ptr);
+                    if (auto* object = llvm::dyn_cast<llvm::AllocaInst>(base))
                     {
+                        if (std::optional<uint64_t> objectSize = stackObjectSize(*object, layout))
+                        {
+                            auto* constantSize = llvm::dyn_cast<llvm::ConstantInt>(sizeVal);
+                            if (constantSize && staysInside(ptr, constantSize->getZExtValue(),
+                                                            *object, *objectSize, layout))
+                            {
+                                return;
+                            }
+                            stackObjects.insert(object);
+                        }
+                    }
+                    llvm::Value* site = getSiteString(module, *inst, siteCache, unknownSite);
+                    emitBoundsCheck(builder, checkFn, base, ptr, sizeVal, site, isWrite, voidPtrTy,
+                                    intTy);
+                };
+                auto storeSize = [&](llvm::Type* type)
+                { return llvm::ConstantInt::get(sizeTy, layout.getTypeStoreSize(type)); };
+
+                if (auto* load = llvm::dyn_cast<llvm::LoadInst>(inst))
+                {
+                    check(load->getPointerOperand(), storeSize(load->getType()), false);
+                    continue;
+                }
+                if (auto* store = llvm::dyn_cast<llvm::StoreInst>(inst))
+                {
+                    check(store->getPointerOperand(),
+                          storeSize(store->getValueOperand()->getType()), true);
+                    continue;
+                }
+                if (auto* atomic = llvm::dyn_cast<llvm::AtomicRMWInst>(inst))
+                {
+                    check(atomic->getPointerOperand(),
+                          storeSize(atomic->getValOperand()->getType()), true);
+                    continue;
+                }
+                if (auto* cmpx = llvm::dyn_cast<llvm::AtomicCmpXchgInst>(inst))
+                {
+                    check(cmpx->getPointerOperand(),
+                          storeSize(cmpx->getCompareOperand()->getType()), true);
+                    continue;
+                }
+                if (auto* mem = llvm::dyn_cast<llvm::MemIntrinsic>(inst))
+                {
+                    llvm::Value* len = mem->getLength();
+                    if (auto* constLen = llvm::dyn_cast<llvm::ConstantInt>(len))
+                    {
+                        if (constLen->isZero())
+                        {
+                            continue;
+                        }
+                    }
+                    if (len->getType() != sizeTy)
+                    {
+                        len = builder.CreateZExtOrTrunc(len, sizeTy);
+                    }
+
+                    if (auto* memSet = llvm::dyn_cast<llvm::MemSetInst>(mem))
+                    {
+                        check(memSet->getDest(), len, true);
+                        continue;
+                    }
+                    if (auto* memTransfer = llvm::dyn_cast<llvm::MemTransferInst>(mem))
+                    {
+                        check(memTransfer->getDest(), len, true);
+                        check(memTransfer->getSource(), len, false);
                         continue;
                     }
                 }
-                if (len->getType() != sizeTy)
-                {
-                    len = builder.CreateZExtOrTrunc(len, sizeTy);
-                }
-
-                if (auto* memSet = llvm::dyn_cast<llvm::MemSetInst>(mem))
-                {
-                    llvm::Value* ptr = memSet->getDest();
-                    llvm::Value* base = resolveBasePointer(ptr);
-                    emitBoundsCheck(builder, checkFn, base, ptr, len, site, true, voidPtrTy, intTy);
-                    continue;
-                }
-
-                if (auto* memTransfer = llvm::dyn_cast<llvm::MemTransferInst>(mem))
-                {
-                    llvm::Value* dest = memTransfer->getDest();
-                    llvm::Value* src = memTransfer->getSource();
-                    llvm::Value* destBase = resolveBasePointer(dest);
-                    llvm::Value* srcBase = resolveBasePointer(src);
-                    emitBoundsCheck(builder, checkFn, destBase, dest, len, site, true, voidPtrTy,
-                                    intTy);
-                    emitBoundsCheck(builder, checkFn, srcBase, src, len, site, false, voidPtrTy,
-                                    intTy);
-                    continue;
-                }
             }
+
+            registerStackObjects(func, stackObjects.getArrayRef(), layout, unknownSite);
         }
     }
 

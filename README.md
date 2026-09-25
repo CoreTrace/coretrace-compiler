@@ -126,6 +126,13 @@ Notes:
 - All other arguments are forwarded to clang (e.g. `-O2`, `-g`, `-I`, `-D`, `-L`, `-l`, `-std=...`).
 - Alloc instrumentation rewrites `malloc/free/calloc/realloc` and basic C++ `operator new/delete`
   (scalar/array). Sized/aligned new/delete overloads are not handled yet.
+- Bounds checks cover heap blocks and the stack objects of running frames, reported as
+  `stack-buffer-overflow`. A local array or struct is tracked while its function runs when its
+  address escapes, for instance to a callee, or when an access to it cannot be proven in bounds at
+  compile time; accesses proven in bounds are not checked at all. As for heap blocks, an access is
+  checked when its base is the start of the object, or any address inside it with
+  `--ct-shadow-aggressive`. Variable-length arrays are not tracked, nor objects beyond the 512
+  innermost ones each thread registers.
 - Vtable tooling requires C++ and an Itanium ABI (macOS/Linux).
 - Clang automatically adds `optnone` at `-O0`. Use `--ct-optnone` to force the attribute even when
   passing `-Xclang -disable-O0-optnone`.
