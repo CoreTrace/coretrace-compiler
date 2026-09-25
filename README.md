@@ -45,6 +45,12 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
   && cmake --build build -j"$(nproc)"
 ```
 
+Without the instrumentation runtime: a tool that only embeds `compilerlib` to produce LLVM IR can
+pass `-DCORETRACE_COMPILER_BUILD_RUNTIME=OFF`. The runtime and its logger, coretrace-log, are then
+neither fetched, built nor installed; `compilerlib`, `cc` and the compilerlib unit tests still build.
+`--instrument` then links a runtime built elsewhere, from the directory `CT_RUNTIME_LIB_DIR` names,
+and otherwise fails with "instrumentation runtime archives not found".
+
 ## Install
 
 ```zsh

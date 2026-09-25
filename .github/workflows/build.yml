@@ -115,6 +115,30 @@ jobs:
         docker buildx build --platform linux/amd64 -f test/docker/Dockerfile . --progress=plain --output=type=cacheonly
         docker buildx build --platform linux/arm64 -f test/docker/Dockerfile . --progress=plain --output=type=cacheonly
 
+  # Consumers that only embed compilerlib build it without the instrumentation runtime
+  # (CORETRACE_COMPILER_BUILD_RUNTIME=OFF): no coretrace-log fetch, and --instrument
+  # takes a runtime built elsewhere through CT_RUNTIME_LIB_DIR.
+  build-without-runtime:
+    name: Build without the runtime (ubuntu-latest)
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake
+        sudo bash scripts/ci/install-llvm-apt.sh 20 llvm-20 llvm-20-dev clang-20 libclang-20-dev
+
+    - name: Build and check without the runtime
+      run: |
+        bash scripts/ci/check-build-without-runtime.sh "${RUNNER_TEMP}/no-runtime" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm \
+          -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang \
+          -DUSE_SHARED_LIB=OFF
+
   build-windows:
     name: Build on Windows (pinned LLVM 20.1.0)
     runs-on: windows-2022
