@@ -57,8 +57,8 @@ int main(void)
     for (int i = 0; i < n; ++i)
         vla[i] = i;
 
-    volatile int total = sum(values, 16) + back->key + depth_sum(12) +
-                         first_positive(values, 16) + vla[n - 1];
+    volatile int total =
+        sum(values, 16) + back->key + depth_sum(12) + first_positive(values, 16) + vla[n - 1];
     (void)total;
     return 0;
 }
