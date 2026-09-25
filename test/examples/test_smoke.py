@@ -84,6 +84,14 @@ def assert_stdout_matches(pattern: str) -> Assertion:
                 f"stdout does not match /{pattern}/\nstdout:\n{out}")
     return Assertion(name=f"stdout_matches", check=_check)
 
+def assert_stdout_count(text: str, count: int) -> Assertion:
+    def _check(res) -> None:
+        out = res.run.stdout or ""
+        found = out.count(text)
+        require(found == count,
+                f"stdout contains '{text}' {found} times, expected {count}\nstdout:\n{out}")
+    return Assertion(name="stdout_count", check=_check)
+
 def _read_artifact_bytes(res, path: str) -> bytes:
     artifact = Path(path)
     if not artifact.is_absolute():
@@ -169,6 +177,10 @@ def main() -> int:
     trace_objc_src = FIXTURES / "trace_objc.m"
     leak_objc_src = FIXTURES / "leak_objc.m"
     new_delete_objc_src = FIXTURES / "new_delete_objc.mm"
+    objc_alloc_forms_src = FIXTURES / "objc_alloc_forms.m"
+    objc_objects_src = FIXTURES / "objc_objects.m"
+    objcxx_objects_src = FIXTURES / "objc_objects.mm"
+    objc_autofree_scan_src = FIXTURES / "objc_autofree_scan.m"
 
     def base_out_assertions(out_name: str):
         assertions = [
@@ -395,6 +407,41 @@ def main() -> int:
             assert_stdout_contains("call ptr @__ct_new_array("),
             assert_stdout_contains("call void @__ct_delete("),
             assert_stdout_contains("call void @__ct_delete_array("),
+        ],
+    )
+
+    # Every Objective-C allocation form clang emits for an Apple target is followed by a
+    # call recording the object, and no other message is. Cross-compiling to IR checks the
+    # pass on every host.
+    tc_instrument_objc_apple = TestCase(
+        name="compile_instrument_objc_allocations_apple",
+        plan=CompilePlan(
+            name="compile_instrument_objc_allocations_apple",
+            sources=[Path("objc_alloc_forms.m")],
+            out=None,
+            extra_args=["--target=arm64-apple-macosx15.0", "--instrument", "--ct-modules=alloc",
+                        "--in-mem", "-S", "-emit-llvm"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_stdout_count("call void @__ct_objc_track(", 5),
+        ],
+    )
+    # GNUstep 2.2 uses the same runtime functions, but the instrumentation runtime tracks
+    # objects with the Apple runtime only: a GNUstep program must not depend on it.
+    tc_instrument_objc_gnustep = TestCase(
+        name="compile_instrument_objc_allocations_gnustep",
+        plan=CompilePlan(
+            name="compile_instrument_objc_allocations_gnustep",
+            sources=[Path("objc_alloc_forms.m")],
+            out=None,
+            extra_args=["--target=x86_64-unknown-linux-gnu", "-fobjc-runtime=gnustep-2.2",
+                        "--instrument", "--ct-modules=alloc", "--in-mem", "-S", "-emit-llvm"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_stdout_contains("call ptr @objc_alloc("),
+            assert_stdout_count("call void @__ct_objc_track(", 0),
         ],
     )
 
@@ -766,6 +813,54 @@ def main() -> int:
             assert_run_artifact("new_delete_objc_app", 0, "ct: leaks detected count=1"),
         ],
     )
+    # Objective-C objects are tracked from their allocation to their deallocation by the
+    # Objective-C runtime: objc_objects.m keeps four objects alive at exit and releases
+    # the others.
+    def objc_objects_case(name: str, source: str, extra_args: list[str]) -> TestCase:
+        return TestCase(
+            name=name,
+            plan=CompilePlan(
+                name=name,
+                sources=[Path(source)],
+                out=None,
+                extra_args=["--instrument", *extra_args, "-framework", "Foundation", "-o", name],
+            ),
+            assertions=[
+                assert_exit_code(0),
+                assert_output_exists_at(name),
+                assert_run_artifact(name, 0, "ct: leaks detected count=4"),
+            ],
+        )
+    tc_runtime_objc_objects_arc = objc_objects_case(
+        "runtime_objc_object_leaks_arc", "objc_objects.m", ["--ct-modules=alloc", "-fobjc-arc"])
+    tc_runtime_objc_objects_mrc = objc_objects_case(
+        "runtime_objc_object_leaks_mrc", "objc_objects.m", ["--ct-modules=alloc"])
+    # In Objective-C++ the allocations are invokes. Bounds checks with shadow memory read
+    # the tracked objects' instance variables, which must stay valid until deallocation.
+    tc_runtime_objcxx_objects = objc_objects_case(
+        "runtime_objcxx_object_leaks_shadow_bounds", "objc_objects.mm",
+        ["--ct-modules=alloc,bounds", "--ct-shadow", "-fobjc-arc"])
+    # The conservative scan releases allocations nothing refers to, never an Objective-C
+    # object: the lost object is still reported at exit. The budget lets every scan finish.
+    tc_runtime_objc_object_autofree_scan = TestCase(
+        name="runtime_objc_object_survives_autofree_scan",
+        plan=CompilePlan(
+            name="runtime_objc_object_survives_autofree_scan",
+            sources=[Path("objc_autofree_scan.m")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=alloc", "--ct-autofree",
+                        "-framework", "Foundation", "-o", "objc_scan_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("objc_scan_app"),
+            assert_run_artifact("objc_scan_app", 0, "ct: leaks detected count=1",
+                                env={"CT_AUTOFREE_SCAN": "1", "CT_AUTOFREE_SCAN_START": "1",
+                                     "CT_AUTOFREE_SCAN_PERIOD_MS": "1",
+                                     "CT_AUTOFREE_SCAN_BUDGET_MS": "2000",
+                                     "CT_AUTOFREE_SCAN_GLOBALS": "0"}),
+        ],
+    )
 
     # Failures must be reported through the exit code even on the non-instrumented
     # path, which delegates to the clang driver.
@@ -837,6 +932,8 @@ def main() -> int:
         tc_instrument_o_eq_trailing,
         tc_instrument_g0_inmem,
         tc_instrument_cpp_microsoft_abi,
+        tc_instrument_objc_apple,
+        tc_instrument_objc_gnustep,
         tc_instrument_emit_llvm,
         tc_instrument_emit_bc,
     ]
@@ -853,6 +950,10 @@ def main() -> int:
         tc_runtime_trace_objc_method,
         tc_runtime_objc_leak_report,
         tc_runtime_objcxx_leak_report,
+        tc_runtime_objc_objects_arc,
+        tc_runtime_objc_objects_mrc,
+        tc_runtime_objcxx_objects,
+        tc_runtime_objc_object_autofree_scan,
     ]
     readme_cases = [
         tc_readme_emit_llvm,
@@ -899,7 +1000,8 @@ def main() -> int:
                                leak_src, overflow_src, broken_src, undefined_ref_src,
                                alloc_site_src, new_delete_src, crash_src,
                                trace_threads_src, trace_objc_src, leak_objc_src,
-                               new_delete_objc_src])
+                               new_delete_objc_src, objc_alloc_forms_src, objc_objects_src,
+                               objcxx_objects_src, objc_autofree_scan_src])
             reports.append(case.run(runner, ws))
 
     rep = type("Tmp", (), {"name": suite.name, "reports": reports})()
