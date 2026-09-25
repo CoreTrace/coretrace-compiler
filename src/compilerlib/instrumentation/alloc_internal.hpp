@@ -67,6 +67,12 @@ namespace compilerlib
     // Deallocation entry points, including the runtime's own after rewriting.
     CT_NODISCARD bool isFreeLikeName(llvm::StringRef name);
 
+    // Objective-C object allocations: the runtime functions clang emits for +alloc,
+    // +allocWithZone:nil and [[X alloc] init], and the selectors of the messages it
+    // sends through objc_msgSend instead, such as [X new].
+    CT_NODISCARD bool isObjcAllocFunctionName(llvm::StringRef name);
+    CT_NODISCARD bool isObjcAllocSelector(llvm::StringRef selector);
+
 } // namespace compilerlib
 
 #endif // COMPILERLIB_INSTRUMENTATION_ALLOC_INTERNAL_HPP

@@ -8,13 +8,14 @@
  *    prototypes below (src/compilerlib/instrumentation/runtime_abi.hpp);
  *  - the runtime includes it before defining the entry points, so a definition that
  *    drifts from its prototype is a compile error (C-linkage functions cannot be
- *    overloaded), and it takes the address of every listed entry point, so a
- *    prototype without a definition is a link error of the runtime's own tests.
+ *    overloaded), and it takes the address of every entry point of
+ *    CT_RUNTIME_ENTRY_POINTS, so a prototype without a definition is a link error of
+ *    the runtime's own tests.
  *
  * `site` arguments are interned "file:line:col" strings emitted by the compiler.
  *
- * CT_RUNTIME_ENTRY_POINTS(X) expands X(return type, name, parameter list) once per
- * entry point.
+ * CT_RUNTIME_ENTRY_POINTS(X) and CT_RUNTIME_OBJC_ENTRY_POINTS(X) expand X(return type,
+ * name, parameter list) once per entry point.
  */
 #ifndef CORETRACE_RUNTIME_ABI_H
 #define CORETRACE_RUNTIME_ABI_H
@@ -73,6 +74,14 @@
     X(void,  __ct_vcall_trace, (void* this_ptr, void* target, const char* site,                   \
                                 const char* static_type))
 
+/* Objective-C object tracking, with the Apple runtime only: the compiler emits these
+ * calls for Apple targets alone, and only the Apple build of the runtime defines them.
+ * They call into libobjc, so they stay out of the addresses the runtime always links:
+ * an instrumented C program must not depend on it. */
+#define CT_RUNTIME_OBJC_ENTRY_POINTS(X)                                                           \
+    /* `object` has just been returned by an allocation that `cls` received. */                  \
+    X(void,  __ct_objc_track, (void* object, const void* cls, const char* site))
+
 /* Configuration globals. The compiler emits every one of them into each instrumented
  * module (weak ODR, value 0 or 1); the runtime imports them weakly and reads them once
  * at initialisation. */
@@ -93,6 +102,7 @@ extern "C"
 
 #define CT_RUNTIME_DECLARE_ENTRY_POINT(ret, name, params) ret name params;
     CT_RUNTIME_ENTRY_POINTS(CT_RUNTIME_DECLARE_ENTRY_POINT)
+    CT_RUNTIME_OBJC_ENTRY_POINTS(CT_RUNTIME_DECLARE_ENTRY_POINT)
 #undef CT_RUNTIME_DECLARE_ENTRY_POINT
 
 #define CT_RUNTIME_DECLARE_CONFIG_GLOBAL(name) extern int name;

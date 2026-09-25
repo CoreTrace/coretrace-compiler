@@ -180,6 +180,9 @@ add_library(ct_instrument_runtime STATIC
   src/runtime/ct_runtime_state.cpp
   src/runtime/ct_runtime_trace.cpp
 )
+if(APPLE)
+  target_sources(ct_instrument_runtime PRIVATE src/runtime/ct_runtime_objc.cpp)
+endif()
 target_include_directories(ct_instrument_runtime PRIVATE src/runtime)
 target_link_libraries(ct_instrument_runtime PRIVATE coretrace_logger)
 if(WIN32)

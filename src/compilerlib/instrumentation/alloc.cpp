@@ -22,6 +22,8 @@
 #include <llvm/IR/Type.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/TargetParser/Triple.h>
+#include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 #include <cstdlib>
 #include <functional>
@@ -1343,6 +1345,53 @@ namespace compilerlib
             logAutofreeState("autofree-immediate", EscapeState::Unreachable, ptr, nullptr);
         }
 
+        // Selector an objc_msgSend call sends when it is a compile-time selector reference,
+        // a load of @OBJC_SELECTOR_REFERENCES_ initialised with the method name; empty
+        // otherwise.
+        CT_NODISCARD llvm::StringRef objcSelectorName(const llvm::CallBase& call)
+        {
+            if (call.arg_size() < 2)
+                return {};
+            auto* load = llvm::dyn_cast<llvm::LoadInst>(call.getArgOperand(1));
+            auto* selectorRef = load ? llvm::dyn_cast<llvm::GlobalVariable>(
+                                           load->getPointerOperand()->stripPointerCasts())
+                                     : nullptr;
+            if (!selectorRef || !selectorRef->hasInitializer())
+                return {};
+            auto* methodName = llvm::dyn_cast<llvm::GlobalVariable>(
+                selectorRef->getInitializer()->stripPointerCasts());
+            if (!methodName || !methodName->hasInitializer())
+                return {};
+            auto* bytes =
+                llvm::dyn_cast<llvm::ConstantDataSequential>(methodName->getInitializer());
+            return bytes && bytes->isCString() ? bytes->getAsCString() : llvm::StringRef();
+        }
+
+        // An Objective-C object allocation whose receiver, the class, is the first argument.
+        CT_NODISCARD bool isObjcAllocation(const llvm::CallBase& call, llvm::StringRef callee)
+        {
+            if (call.arg_size() == 0 || !call.getType()->isPointerTy())
+                return false;
+            if (isObjcAllocFunctionName(callee))
+                return true;
+            return callee == "objc_msgSend" && isObjcAllocSelector(objcSelectorName(call));
+        }
+
+        // First instruction to run once `call` has returned normally. An invoke's normal
+        // edge is split when its destination has other predecessors, so the result is
+        // available there.
+        CT_NODISCARD llvm::Instruction* insertionPointAfter(llvm::CallBase& call)
+        {
+            if (auto* invoke = llvm::dyn_cast<llvm::InvokeInst>(&call))
+            {
+                llvm::BasicBlock* normal = invoke->getNormalDest();
+                if (!normal->getSinglePredecessor())
+                    normal = llvm::SplitEdge(invoke->getParent(), normal);
+                return &*normal->getFirstInsertionPt();
+            }
+            return call.getNextNode();
+        }
+
         // How one family of allocator calls is rewritten.
         struct CallRewrite
         {
@@ -1470,6 +1519,10 @@ namespace compilerlib
         llvm::SmallVector<llvm::CallBase*, 16> deleteArrayNothrowCalls;
         llvm::SmallVector<llvm::CallBase*, 16> deleteDestroyingCalls;
         llvm::SmallVector<llvm::CallBase*, 16> deleteArrayDestroyingCalls;
+        // Objective-C objects are tracked with the Apple runtime only; GNUstep emits the
+        // same allocation calls, but the instrumentation runtime cannot track them there.
+        const bool trackObjcObjects = llvm::Triple(module.getTargetTriple()).isOSDarwin();
+        llvm::SmallVector<llvm::CallBase*, 16> objcAllocCalls;
         struct AllocSite
         {
             llvm::Value* value = nullptr;
@@ -1517,6 +1570,11 @@ namespace compilerlib
                     }
 
                     llvm::StringRef name = callee->getName();
+                    if (trackObjcObjects && isObjcAllocation(*call, name))
+                    {
+                        objcAllocCalls.push_back(call);
+                        continue;
+                    }
                     if (name == "malloc")
                     {
                         if (isMallocLike(*callee))
@@ -1928,6 +1986,22 @@ namespace compilerlib
         rewriteCalls(deleteArrayNothrowCalls, ctx, releaseOnly(ctDeleteArrayNothrow));
         rewriteCalls(deleteDestroyingCalls, ctx, releaseOnly(ctDeleteDestroying));
         rewriteCalls(deleteArrayDestroyingCalls, ctx, releaseOnly(ctDeleteArrayDestroying));
+
+        // An Objective-C object is recorded once allocated. Its memory and reference count
+        // stay with the Objective-C runtime, which tells the instrumentation runtime when
+        // it deallocates the object; nothing here releases it.
+        if (!objcAllocCalls.empty())
+        {
+            llvm::FunctionCallee ctObjcTrack = CT_RUNTIME_CALLEE(module, __ct_objc_track);
+            for (llvm::CallBase* call : objcAllocCalls)
+            {
+                llvm::IRBuilder<> builder(insertionPointAfter(*call));
+                builder.SetCurrentDebugLocation(call->getDebugLoc());
+                builder.CreateCall(ctObjcTrack,
+                                   {call, call->getArgOperand(0),
+                                    getSiteString(module, *call, siteCache, unknownSite)});
+            }
+        }
     }
 
 } // namespace compilerlib

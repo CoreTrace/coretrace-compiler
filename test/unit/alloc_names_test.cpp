@@ -192,4 +192,20 @@ namespace
         EXPECT_FALSE(compilerlib::isFreeLikeName("malloc"));
         EXPECT_FALSE(compilerlib::isFreeLikeName("__ct_malloc"));
     }
+
+    TEST(ObjcNames, AllocationFunctionsAndSelectors)
+    {
+        EXPECT_TRUE(compilerlib::isObjcAllocFunctionName("objc_alloc"));
+        EXPECT_TRUE(compilerlib::isObjcAllocFunctionName("objc_allocWithZone"));
+        EXPECT_TRUE(compilerlib::isObjcAllocFunctionName("objc_alloc_init"));
+        EXPECT_FALSE(compilerlib::isObjcAllocFunctionName("objc_msgSend"));
+        EXPECT_FALSE(compilerlib::isObjcAllocFunctionName("objc_retain"));
+
+        EXPECT_TRUE(compilerlib::isObjcAllocSelector("alloc"));
+        EXPECT_TRUE(compilerlib::isObjcAllocSelector("allocWithZone:"));
+        EXPECT_TRUE(compilerlib::isObjcAllocSelector("new"));
+        EXPECT_FALSE(compilerlib::isObjcAllocSelector("init"));
+        EXPECT_FALSE(compilerlib::isObjcAllocSelector("copy"));
+        EXPECT_FALSE(compilerlib::isObjcAllocSelector("newObject"));
+    }
 } // namespace

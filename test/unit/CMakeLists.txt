@@ -30,6 +30,11 @@ add_executable(runtime_unit_tests
 )
 target_include_directories(runtime_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
 target_link_libraries(runtime_unit_tests PRIVATE ct_instrument_runtime coretrace_logger GTest::gtest_main)
+if(APPLE)
+  # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
+  target_sources(runtime_unit_tests PRIVATE runtime_objc_test.cpp)
+  target_link_libraries(runtime_unit_tests PRIVATE objc)
+endif()
 coretrace_force_msvc_runtime(runtime_unit_tests)
 
 include(GoogleTest)

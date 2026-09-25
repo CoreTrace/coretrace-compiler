@@ -141,12 +141,16 @@ clang flags apply, such as `-fobjc-arc`, and Foundation programs link with `-fra
 ```
 
 - `trace` prints methods under their Objective-C name, such as `-[Greeter greet:]`.
-- `alloc` tracks `malloc`/`free` and C++ `new`/`delete` called from methods, and reports their
-  leaks at exit.
+- `alloc` tracks `malloc`/`free` and C++ `new`/`delete` called from methods, and the Objective-C
+  objects the program creates with `+alloc`, `+allocWithZone:`, `+new` or `[[X alloc] init]`,
+  with or without ARC, until the Objective-C runtime deallocates them. Objects still alive at
+  exit are reported with the other leaks. To see deallocations, the runtime replaces
+  `-[NSObject dealloc]` at start-up with a wrapper that calls the original.
 
 Limits:
-- Objective-C objects are not tracked yet: objects created with `+alloc`, `+new` or `-copy` are
-  allocated and released by the Objective-C runtime, so a leaked object is not reported.
+- Objects of Apple's system classes (Foundation, CoreFoundation, libobjc) and of classes outside
+  the `NSObject` hierarchy, such as `NSProxy` subclasses, are not tracked: some live for the
+  whole process or are released without `-[NSObject dealloc]`, and would read as leaks.
 - Only macOS with the Apple runtime is tested; Linux (GNUstep) and Windows are not.
 
 ## Auto-free GC Scan (Conservative)

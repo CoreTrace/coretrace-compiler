@@ -498,6 +498,38 @@ CT_NOINSTR static void ct_log_alloc_details(const char* label, const char* statu
     ct_log(lvl, "└-----------------------------------┘\n");
 }
 
+CT_NOINSTR void ct_track_allocation(void* ptr, size_t size, const char* site, unsigned char kind)
+{
+    ct_lock_acquire();
+    if (!ct_table_insert(ptr, size, size, site, kind))
+    {
+        ct_warn_alloc_table_full();
+    }
+    ct_lock_release();
+
+    ct_shadow_track_alloc(ptr, size, size);
+}
+
+CT_NODISCARD CT_NOINSTR size_t ct_forget_allocation(void* ptr, unsigned char kind)
+{
+    size_t size = 0;
+    ct_lock_acquire();
+    struct ct_alloc_entry* entry = ct_table_find_entry(ptr);
+    if (entry && entry->state == CT_ENTRY_USED && entry->kind == kind)
+    {
+        size = entry->size;
+        entry->state = CT_ENTRY_TOMB;
+        --ct_alloc_count;
+    }
+    ct_lock_release();
+
+    if (size && ct_is_enabled(CT_FEATURE_SHADOW))
+    {
+        ct_shadow_poison_range(ptr, size);
+    }
+    return size;
+}
+
 CT_NOINSTR static void ct_log_realloc_details(const char* label, const char* status,
                                               size_t old_req_size, size_t old_real_size,
                                               void* old_ptr, size_t new_req_size,
