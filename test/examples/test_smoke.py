@@ -181,6 +181,8 @@ def main() -> int:
     objc_objects_src = FIXTURES / "objc_objects.m"
     objcxx_objects_src = FIXTURES / "objc_objects.mm"
     objc_autofree_scan_src = FIXTURES / "objc_autofree_scan.m"
+    stack_overflow_src = FIXTURES / "stack_overflow.c"
+    stack_objects_src = FIXTURES / "stack_objects.c"
 
     def base_out_assertions(out_name: str):
         assertions = [
@@ -442,6 +444,24 @@ def main() -> int:
             assert_exit_code(0),
             assert_stdout_contains("call ptr @objc_alloc("),
             assert_stdout_count("call void @__ct_objc_track(", 0),
+        ],
+    )
+
+    # A frame registers the stack objects its bounds checks or its callees may need, and
+    # unregisters them on return; objects only accessed at constant offsets inside them
+    # cost nothing.
+    tc_instrument_bounds_stack_objects = TestCase(
+        name="compile_instrument_bounds_stack_objects",
+        plan=CompilePlan(
+            name="compile_instrument_bounds_stack_objects",
+            sources=[Path("stack_objects.c")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=bounds", "--in-mem", "-S", "-emit-llvm"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_stdout_count("call i64 @__ct_stack_push(", 2),
+            assert_stdout_count("call void @__ct_stack_pop(", 1),
         ],
     )
 
@@ -712,6 +732,22 @@ def main() -> int:
             assert_run_artifact("overflow_app", 0, "heap-buffer-overflow"),
         ],
     )
+    # A local array read past its end by the function it is passed to.
+    tc_runtime_bounds_stack = TestCase(
+        name="runtime_bounds_stack_overflow",
+        plan=CompilePlan(
+            name="runtime_bounds_stack_overflow",
+            sources=[Path("stack_overflow.c")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=bounds", "--ct-bounds-no-abort",
+                        "-o", "stack_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("stack_app"),
+            assert_run_artifact("stack_app", 0, "stack-buffer-overflow"),
+        ],
+    )
     # A C function has no decorated name: the trace prints it once, not as "main, main".
     tc_runtime_trace_c_function = TestCase(
         name="runtime_trace_c_function_name",
@@ -934,6 +970,7 @@ def main() -> int:
         tc_instrument_cpp_microsoft_abi,
         tc_instrument_objc_apple,
         tc_instrument_objc_gnustep,
+        tc_instrument_bounds_stack_objects,
         tc_instrument_emit_llvm,
         tc_instrument_emit_bc,
     ]
@@ -941,6 +978,7 @@ def main() -> int:
         tc_runtime_leak_report,
         tc_runtime_cpp_leak_report,
         tc_runtime_bounds_without_trace,
+        tc_runtime_bounds_stack,
         tc_runtime_trace_c_function,
         tc_runtime_backtrace,
         tc_runtime_trace_threads,
@@ -1001,7 +1039,8 @@ def main() -> int:
                                alloc_site_src, new_delete_src, crash_src,
                                trace_threads_src, trace_objc_src, leak_objc_src,
                                new_delete_objc_src, objc_alloc_forms_src, objc_objects_src,
-                               objcxx_objects_src, objc_autofree_scan_src])
+                               objcxx_objects_src, objc_autofree_scan_src,
+                               stack_overflow_src, stack_objects_src])
             reports.append(case.run(runner, ws))
 
     rep = type("Tmp", (), {"name": suite.name, "reports": reports})()
