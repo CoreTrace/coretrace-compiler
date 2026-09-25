@@ -130,6 +130,25 @@ Notes:
 - Clang automatically adds `optnone` at `-O0`. Use `--ct-optnone` to force the attribute even when
   passing `-Xclang -disable-O0-optnone`.
 
+## Objective-C and Objective-C++
+
+On macOS, `.m` and `.mm` files (or `-x objective-c` and `-x objective-c++`) are compiled against the
+Apple Objective-C runtime; Objective-C++ sources also link the C++ standard library. The usual
+clang flags apply, such as `-fobjc-arc`, and Foundation programs link with `-framework Foundation`:
+
+```zsh
+./cc --instrument --ct-modules=alloc -fobjc-arc -framework Foundation -o app main.m
+```
+
+- `trace` prints methods under their Objective-C name, such as `-[Greeter greet:]`.
+- `alloc` tracks `malloc`/`free` and C++ `new`/`delete` called from methods, and reports their
+  leaks at exit.
+
+Limits:
+- Objective-C objects are not tracked yet: objects created with `+alloc`, `+new` or `-copy` are
+  allocated and released by the Objective-C runtime, so a leaked object is not reported.
+- Only macOS with the Apple runtime is tested; Linux (GNUstep) and Windows are not.
+
 ## Auto-free GC Scan (Conservative)
 
 The runtime can run a conservative root scan (stack/regs/globals) to decide whether an
