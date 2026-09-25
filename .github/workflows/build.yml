@@ -139,6 +139,48 @@ jobs:
           -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang \
           -DUSE_SHARED_LIB=OFF
 
+  # compilerlib and cc also build against LLVM 16, the newest LLVM that tools such as
+  # KLEE 3.x support, on the Ubuntu 22.04 they run on. Its libstdc++ 11 lacks <format>,
+  # which the runtime's logger needs, so the runtime is left out. The instrumented IR
+  # exercises the passes on LLVM 16, stack object registration with debug info included.
+  build-llvm16:
+    name: Build with LLVM 16 (ubuntu-22.04)
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake
+        sudo bash scripts/ci/install-llvm-apt.sh 16 llvm-16 llvm-16-dev clang-16 libclang-16-dev
+
+    - name: Build compilerlib and cc
+      run: |
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_COMPILER=clang-16 -DCMAKE_CXX_COMPILER=clang++-16 \
+          -DLLVM_DIR=/usr/lib/llvm-16/lib/cmake/llvm \
+          -DClang_DIR=/usr/lib/llvm-16/lib/cmake/clang \
+          -DUSE_SHARED_LIB=OFF \
+          -DCORETRACE_COMPILER_BUILD_RUNTIME=OFF
+        cmake --build build --target compilerlib_static compilerlib_shared cc compilerlib_unit_tests \
+          --parallel
+
+    - name: Test compilerlib and cc
+      run: |
+        ctest --test-dir build --output-on-failure
+        ./build/cc --instrument --ct-modules=all --in-mem -S -emit-llvm -g \
+          test/examples/fixtures/stack_objects.c > stack_objects.ll
+        grep -c "call i64 @__ct_stack_push(" stack_objects.ll | grep -qx 2
+        ./build/cc --instrument --ct-modules=alloc,bounds --in-mem -S -emit-llvm \
+          test/examples/fixtures/overflow.c > overflow.ll
+        grep -q "call ptr @__ct_malloc(" overflow.ll
+        grep -q "call void @__ct_check_bounds(" overflow.ll
+        ./build/cc --instrument --ct-modules=vtable --ct-vcall-trace --in-mem -S -emit-llvm \
+          test/ct_vtable_basic.cpp > vtable.ll
+        grep -q "call void @__ct_vcall_trace(" vtable.ll
+
   build-windows:
     name: Build on Windows (pinned LLVM 20.1.0)
     runs-on: windows-2022
