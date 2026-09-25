@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// __ct_check_bounds against fake allocations: nothing is dereferenced. Shadow memory is
+// __ct_check_bounds against fake allocations and registered stack buffers: nothing is
+// dereferenced. Shadow memory is
 // an allow-list (bytes are valid only once unpoisoned), so shadow-mode tests mark bytes
 // valid exactly as the allocator does for live allocations. The runtime state touched
 // here (features, abort mode, table entries, shadow bytes) is restored by every test.
@@ -116,6 +117,74 @@ namespace
         markValid(block - 16, 16);
         markValid(block, kRequested);
         EXPECT_NE(check(block, block - 4, 4).find("heap-buffer-overflow"), std::string::npos);
+    }
+
+    // Stack objects are registered by their frame for as long as it runs.
+    TEST_F(BoundsCheck, ReportsAnAccessPastARegisteredStackObject)
+    {
+        char buffer[16] = {};
+        const size_t depth = __ct_stack_push(buffer, sizeof(buffer), "test:stack");
+        const std::string report = check(buffer, buffer + 16, 1);
+        __ct_stack_pop(depth);
+        EXPECT_NE(report.find("stack-buffer-overflow"), std::string::npos) << report;
+    }
+
+    TEST_F(BoundsCheck, AcceptsAnAccessInsideARegisteredStackObject)
+    {
+        char buffer[16] = {};
+        const size_t depth = __ct_stack_push(buffer, sizeof(buffer), "test:stack");
+        const std::string report = check(buffer, buffer + 12, 4);
+        __ct_stack_pop(depth);
+        EXPECT_EQ(report, "");
+    }
+
+    TEST_F(BoundsCheck, IgnoresAStackObjectOnceItsFrameReturned)
+    {
+        char buffer[16] = {};
+        __ct_stack_pop(__ct_stack_push(buffer, sizeof(buffer), "test:stack"));
+        EXPECT_EQ(check(buffer, buffer + 16, 1), "");
+    }
+
+    // An inner frame registered later wins over an object an unwound frame left behind
+    // at the same address.
+    TEST_F(BoundsCheck, ChecksAgainstTheNewestStackObjectAtAnAddress)
+    {
+        char buffer[16] = {};
+        const size_t depth = __ct_stack_push(buffer, 4, "test:stale");
+        (void)__ct_stack_push(buffer, sizeof(buffer), "test:stack");
+        const std::string report = check(buffer, buffer + 8, 8);
+        __ct_stack_pop(depth);
+        EXPECT_EQ(report, "");
+    }
+
+    // Shadow memory describes heap blocks only: a stack object is checked against its
+    // own bounds.
+    TEST_F(BoundsCheck, ShadowModeChecksAStackObjectAgainstItsBounds)
+    {
+        ct_set_enabled(CT_FEATURE_SHADOW, 1);
+        char buffer[16] = {};
+        const size_t depth = __ct_stack_push(buffer, sizeof(buffer), "test:stack");
+        const std::string inside = check(buffer, buffer + 8, 8);
+        const std::string past = check(buffer, buffer + 16, 1);
+        __ct_stack_pop(depth);
+        EXPECT_EQ(inside, "");
+        EXPECT_NE(past.find("stack-buffer-overflow"), std::string::npos) << past;
+    }
+
+    // As for heap blocks, only aggressive mode looks for the object containing an
+    // interior base.
+    TEST_F(BoundsCheck, AggressiveModeFindsTheStackObjectContainingAnInteriorBase)
+    {
+        char buffer[16] = {};
+        const size_t depth = __ct_stack_push(buffer, sizeof(buffer), "test:stack");
+        const std::string defaultMode = check(buffer + 4, buffer + 16, 1);
+        ct_set_enabled(CT_FEATURE_SHADOW, 1);
+        ct_set_enabled(CT_FEATURE_SHADOW_AGGR, 1);
+        const std::string aggressiveMode = check(buffer + 4, buffer + 16, 1);
+        __ct_stack_pop(depth);
+        EXPECT_EQ(defaultMode, "");
+        EXPECT_NE(aggressiveMode.find("stack-buffer-overflow"), std::string::npos)
+            << aggressiveMode;
     }
 
     TEST_F(BoundsCheck, ShadowModeAcceptsAnAccessInsideAKnownAllocation)

@@ -69,6 +69,10 @@
     /* Bounds checking. */                                                                        \
     X(void,  __ct_check_bounds, (const void* base, const void* ptr, size_t access_size,           \
                                  const char* site, int is_write))                                 \
+    /* Stack objects the checks may use as a base, registered by their frame while it runs. */  \
+    /* __ct_stack_push returns the depth __ct_stack_pop restores when the frame exits.      */  \
+    X(size_t, __ct_stack_push, (const void* base, size_t size, const char* site))                \
+    X(void,  __ct_stack_pop,   (size_t depth))                                                    \
     /* Vtable diagnostics (Itanium ABI on POSIX, MSVC ABI on Windows). */                         \
     X(void,  __ct_vtable_dump, (void* this_ptr, const char* site, const char* static_type))       \
     X(void,  __ct_vcall_trace, (void* this_ptr, void* target, const char* site,                   \

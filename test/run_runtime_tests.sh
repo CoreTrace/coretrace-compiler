@@ -24,7 +24,7 @@ flags_for() {
     ct_shadow_pages.c) echo "--ct-modules=alloc,bounds --ct-shadow" ;;
     # Valid accesses: built to abort on any bounds error, so a false positive fails.
     ct_bounds_*_valid_shadow.c) echo "--ct-modules=alloc,bounds --ct-shadow-aggressive" ;;
-    ct_bounds_*_valid.c)        echo "--ct-modules=alloc,bounds" ;;
+    ct_bounds_*_valid.c|ct_bounds_*_valid.cpp) echo "--ct-modules=alloc,bounds" ;;
     # Invalid accesses: reported and survived, so the program exits normally.
     ct_bounds_*_shadow.c) echo "--ct-modules=alloc,bounds --ct-bounds-no-abort --ct-shadow-aggressive" ;;
     ct_bounds_*.c)        echo "--ct-modules=alloc,bounds --ct-bounds-no-abort" ;;
@@ -55,6 +55,8 @@ expect_stderr() {
     ct_bounds_container_of_underflow.c) echo "heap-buffer-overflow" ;;
     ct_bounds_container_of_underflow_shadow.c) echo "heap-buffer-overflow" ;;
     ct_bounds_container_of_overflow.c) echo "heap-buffer-overflow" ;;
+    ct_bounds_stack_overflow.c|ct_bounds_stack_callee.c|ct_bounds_stack_container_of.c)
+      echo "stack-buffer-overflow" ;;
     ct_new_delete.cpp) echo "tracing-new-unreachable" ;;
     ct_vtable_diag_null.cpp) echo "null this pointer" ;;
     ct_vtable_diag_fake.cpp) echo "vtable resolve failed" ;;
@@ -78,7 +80,8 @@ expect_stdout() {
 
 # Substring that must NOT appear on stderr for any fixture, except the fixture whose
 # expect_stderr is that exact diagnostic.
-FORBIDDEN_STDERR=("heap-buffer-overflow" "mutex lock failed" "terminating due to")
+FORBIDDEN_STDERR=("heap-buffer-overflow" "stack-buffer-overflow" "mutex lock failed"
+                  "terminating due to")
 
 # Fixtures whose failure is a known, tracked defect. The suite still runs them and
 # reports XFAIL; an unexpected pass is reported as XPASS and fails the suite so the
@@ -108,6 +111,11 @@ TESTS=(
   ct_bounds_container_of_overflow.c
   ct_bounds_container_of_valid.c
   ct_bounds_container_of_valid_shadow.c
+  ct_bounds_stack_overflow.c
+  ct_bounds_stack_callee.c
+  ct_bounds_stack_container_of.c
+  ct_bounds_stack_valid.c
+  ct_bounds_stack_unwind_valid.cpp
   ct_realloc_zero.c
   ct_new_delete.cpp
   ct_new_delete_sized.cpp
