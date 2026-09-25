@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_output.hpp"
+#include "llvm_compat.hpp"
 
+#include <clang/Basic/TargetOptions.h>
 #include <clang/Frontend/CompilerInstance.h>
 
 #include <llvm/Bitcode/BitcodeWriter.h>
@@ -20,20 +22,20 @@ namespace compilerlib::emit
 {
     namespace
     {
-        CT_NODISCARD llvm::CodeGenOptLevel toCodeGenOptLevel(unsigned level)
+        CT_NODISCARD llvm_compat::CodeGenOptLevel toCodeGenOptLevel(unsigned level)
         {
             switch (level)
             {
             case 0:
-                return llvm::CodeGenOptLevel::None;
+                return llvm_compat::kCodeGenOptNone;
             case 1:
-                return llvm::CodeGenOptLevel::Less;
+                return llvm_compat::kCodeGenOptLess;
             case 2:
-                return llvm::CodeGenOptLevel::Default;
+                return llvm_compat::kCodeGenOptDefault;
             case 3:
-                return llvm::CodeGenOptLevel::Aggressive;
+                return llvm_compat::kCodeGenOptAggressive;
             default:
-                return llvm::CodeGenOptLevel::Default;
+                return llvm_compat::kCodeGenOptDefault;
             }
         }
 
@@ -126,8 +128,8 @@ namespace compilerlib::emit
                                [&](llvm::raw_fd_ostream& dest) -> bool
                                {
                                    llvm::legacy::PassManager pass;
-                                   if (targetMachine->addPassesToEmitFile(
-                                           pass, dest, nullptr, llvm::CodeGenFileType::ObjectFile))
+                                   if (targetMachine->addPassesToEmitFile(pass, dest, nullptr,
+                                                                          llvm_compat::kObjectFile))
                                    {
                                        error = "target does not support object emission";
                                        return false;

@@ -6,6 +6,9 @@ an in-memory mode for tooling pipelines.
 
 ## Build
 
+Requirements: CMake, a C++20 compiler and LLVM/Clang 16 to 20. CI builds everything with LLVM 20
+on Linux, macOS and Windows, and `compilerlib` and `cc` with LLVM 16 on Ubuntu 22.04.
+
 Quick build:
 
 ```zsh
