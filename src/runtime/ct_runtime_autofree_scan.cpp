@@ -942,6 +942,13 @@ struct ct_autofree_scan_guard
     ct_autofree_scan_guard& operator=(const ct_autofree_scan_guard&) = delete;
 };
 
+// An allocation the scan found no reference to, which it may release. It never releases
+// an Objective-C object: the Objective-C runtime owns its memory and reference count.
+CT_NODISCARD CT_NOINSTR static bool ct_autofree_scan_may_release(const struct ct_alloc_entry& entry)
+{
+    return entry.state == CT_ENTRY_USED && entry.mark == 0 && entry.kind != CT_ALLOC_KIND_OBJC;
+}
+
 CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
 {
     ct_init_env_once();
@@ -1013,7 +1020,7 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
     {
         for (size_t i = 0; i < ct_alloc_table_size; ++i)
         {
-            if (ct_alloc_table[i].state == CT_ENTRY_USED && ct_alloc_table[i].mark == 0)
+            if (ct_autofree_scan_may_release(ct_alloc_table[i]))
             {
                 ++to_free_count;
             }
@@ -1034,7 +1041,7 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
         for (size_t i = 0; i < ct_alloc_table_size && idx < to_free_count; ++i)
         {
             struct ct_alloc_entry* entry = &ct_alloc_table[i];
-            if (entry->state == CT_ENTRY_USED && entry->mark == 0)
+            if (ct_autofree_scan_may_release(*entry))
             {
                 items[idx].ptr = entry->ptr;
                 items[idx].size = entry->size;

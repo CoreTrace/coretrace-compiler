@@ -33,6 +33,8 @@ namespace
 
 // Every entry point the ABI declares must be defined by this runtime: taking their
 // addresses turns a missing definition into a link error of the runtime's own tests.
+// CT_RUNTIME_OBJC_ENTRY_POINTS stays out: listing them here would make every
+// instrumented program link libobjc.
 namespace
 {
 #if defined(_MSC_VER)

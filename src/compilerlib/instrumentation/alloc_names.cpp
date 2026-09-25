@@ -209,4 +209,14 @@ namespace compilerlib
                name == CT_RUNTIME_SYMBOL(__ct_autofree_munmap);
     }
 
+    bool isObjcAllocFunctionName(llvm::StringRef name)
+    {
+        return name == "objc_alloc" || name == "objc_allocWithZone" || name == "objc_alloc_init";
+    }
+
+    bool isObjcAllocSelector(llvm::StringRef selector)
+    {
+        return selector == "alloc" || selector == "allocWithZone:" || selector == "new";
+    }
+
 } // namespace compilerlib
