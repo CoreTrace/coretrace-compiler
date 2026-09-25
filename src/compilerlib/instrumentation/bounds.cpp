@@ -8,6 +8,7 @@
 #include <llvm/ADT/SetVector.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/CaptureTracking.h>
+#include <llvm/Config/llvm-config.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DebugInfo.h>
@@ -236,6 +237,27 @@ namespace compilerlib
             return start <= objectSize && accessSize <= objectSize - start;
         }
 
+        // The variable a stack object holds, from its debug declaration; null without full
+        // debug information. LLVM 19 moved declarations from intrinsics to records, and
+        // LLVM 18 renamed the intrinsic lookup.
+        CT_NODISCARD const llvm::DILocalVariable* declaredVariable(llvm::AllocaInst& object)
+        {
+#if LLVM_VERSION_MAJOR >= 19
+            if (llvm::TinyPtrVector<llvm::DbgVariableRecord*> records =
+                    llvm::findDVRDeclares(&object);
+                !records.empty())
+            {
+                return records.front()->getVariable();
+            }
+#endif
+#if LLVM_VERSION_MAJOR >= 18
+            llvm::TinyPtrVector<llvm::DbgDeclareInst*> declares = llvm::findDbgDeclares(&object);
+#else
+            llvm::TinyPtrVector<llvm::DbgDeclareInst*> declares = llvm::FindDbgDeclareUses(&object);
+#endif
+            return declares.empty() ? nullptr : declares.front()->getVariable();
+        }
+
         // Where a stack object comes from, as "file:line": its variable's declaration when
         // the program has full debug information, its function's otherwise.
         CT_NODISCARD llvm::Value* stackObjectSite(llvm::Module& module, llvm::AllocaInst& object,
@@ -243,17 +265,10 @@ namespace compilerlib
         {
             llvm::StringRef file;
             unsigned line = 0;
-            llvm::TinyPtrVector<llvm::DbgVariableRecord*> records = llvm::findDVRDeclares(&object);
-            llvm::TinyPtrVector<llvm::DbgDeclareInst*> declares = llvm::findDbgDeclares(&object);
-            if (!records.empty())
+            if (const llvm::DILocalVariable* variable = declaredVariable(object))
             {
-                file = records.front()->getVariable()->getFilename();
-                line = records.front()->getVariable()->getLine();
-            }
-            else if (!declares.empty())
-            {
-                file = declares.front()->getVariable()->getFilename();
-                line = declares.front()->getVariable()->getLine();
+                file = variable->getFilename();
+                line = variable->getLine();
             }
             else if (const llvm::DISubprogram* subprogram = object.getFunction()->getSubprogram())
             {

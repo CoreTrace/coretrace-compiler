@@ -137,9 +137,12 @@ namespace compilerlib
 
             std::string typeName;
 #if LLVM_VERSION_MAJOR < 17
-            if (auto* ptrTy = llvm::dyn_cast<llvm::PointerType>(thisPtr->getType()))
+            // Only a typed pointer names the object's type; clang emits opaque pointers
+            // by default since LLVM 15, and those have no element type.
+            auto* ptrTy = llvm::dyn_cast<llvm::PointerType>(thisPtr->getType());
+            if (ptrTy && !ptrTy->isOpaque())
             {
-                llvm::Type* elemTy = ptrTy->getPointerElementType();
+                llvm::Type* elemTy = ptrTy->getNonOpaquePointerElementType();
                 if (auto* structTy = llvm::dyn_cast<llvm::StructType>(elemTy))
                 {
                     if (structTy->hasName())
