@@ -21,6 +21,7 @@
 #include <clang/CodeGen/CodeGenAction.h>
 
 #include <llvm/ADT/SmallString.h>
+#include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/IntrusiveRefCntPtr.h>
 #include <llvm/Config/llvm-config.h>
@@ -483,6 +484,14 @@ namespace compilerlib
                     return result;
                 }
 
+                if (ctx_.mode == OutputMode::ToMemoryBitcode &&
+                    ci->getFrontendOpts().ProgramAction != clang::frontend::EmitBC)
+                {
+                    result.diagnostics =
+                        "in-memory bitcode needs a bitcode compilation: pass -emit-llvm -c";
+                    return result;
+                }
+
                 switch (ci->getFrontendOpts().ProgramAction)
                 {
                 case clang::frontend::EmitObj:
@@ -499,6 +508,19 @@ namespace compilerlib
                 }
                 case clang::frontend::EmitBC:
                 {
+                    if (ctx_.mode == OutputMode::ToMemoryBitcode)
+                    {
+                        std::string actionError;
+                        if (emitBitcodeToMemory(*ci, result.llvmBitcode, actionError))
+                            break;
+                        if (actionError.empty())
+                            return fail("compilation failed");
+                        result.diagnostics =
+                            includeDriverDiags
+                                ? mergeDiagnostics(ctx_.driver_diagnostics, std::move(actionError))
+                                : std::move(actionError);
+                        return result;
+                    }
                     if (!runFrontendAction<clang::EmitBCAction>(*ci))
                         return fail("compilation failed");
                     break;
@@ -667,6 +689,44 @@ namespace compilerlib
                 return false;
             }
 
+            // The bitcode a bitcode compilation would write to its output file, held in memory
+            // instead: the same action writes to a stream, so the bytes are the file's. With
+            // instrumentation, the module is instrumented and written as runInstrumented writes
+            // it. Nothing else is created in place of the output; other outputs the arguments
+            // ask for, such as a dependency file, are written as usual.
+            CT_NODISCARD bool emitBitcodeToMemory(clang::CompilerInstance& ci, std::string& bitcode,
+                                                  std::string& error)
+            {
+                llvm::SmallString<0> buffer;
+                if (ctx_.instrument)
+                {
+                    auto handleModule = [&](std::unique_ptr<llvm::Module> module) -> bool
+                    {
+                        if (!instrument(*module, error))
+                            return false;
+                        llvm::raw_svector_ostream stream(buffer);
+                        llvm::WriteBitcodeToFile(*module, stream);
+                        return true;
+                    };
+                    const bool ok = ctx_.runtimeConfig.optnone_enabled
+                                        ? runCodegenWithModule<
+                                              frontend::OptNoneAction<clang::EmitLLVMOnlyAction>>(
+                                              ci, handleModule, error)
+                                        : runCodegenWithModule<clang::EmitLLVMOnlyAction>(
+                                              ci, handleModule, error);
+                    if (!ok)
+                        return false;
+                }
+                else
+                {
+                    ci.setOutputStream(std::make_unique<llvm::raw_svector_ostream>(buffer));
+                    if (!runFrontendAction<clang::EmitBCAction>(ci))
+                        return false;
+                }
+                bitcode.assign(buffer.begin(), buffer.end());
+                return true;
+            }
+
             template <typename Action>
             CT_NODISCARD bool runFrontendAction(clang::CompilerInstance& ci)
             {
@@ -832,7 +892,7 @@ namespace compilerlib
 
         CT_NODISCARD bool validateJobPlan(const JobPlan& plan, OutputMode mode, std::string& error)
         {
-            if (mode == OutputMode::ToMemory)
+            if (mode == OutputMode::ToMemory || mode == OutputMode::ToMemoryBitcode)
             {
                 if (plan.cc1Jobs.size() != 1 || !plan.otherJobs.empty())
                 {
@@ -947,7 +1007,7 @@ namespace compilerlib
         }
 
         Cc1Runner cc1(ctx, *diags);
-        if (mode == OutputMode::ToMemory)
+        if (mode == OutputMode::ToMemory || mode == OutputMode::ToMemoryBitcode)
             return cc1.runSingle(*plan.cc1Jobs.front());
 
         if (plan.cc1Jobs.empty())
