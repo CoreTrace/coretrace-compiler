@@ -17,6 +17,7 @@
 #include <llvm/Config/llvm-config.h>
 
 #include <cstdlib>
+#include <mutex>
 #include <system_error>
 
 namespace compilerlib
@@ -381,13 +382,20 @@ namespace compilerlib
         }
 
         // Spawning xcrun is by far the most expensive step of driver configuration
-        // and the SDK path does not change while the process runs, so the answer is
-        // computed once per process. (The clang path is deliberately not cached: it
-        // honours the CT_CLANG environment variable, which a library user may change
+        // and the SDK path does not change while the process runs, so a detection that
+        // succeeded is kept for the process. One that failed is not: its cause, a temporary
+        // directory that could not be written or an xcrun that failed once, may be gone by
+        // the next compilation, and keeping the failure would compile every later unit of
+        // the process without a sysroot (#98). (The clang path is deliberately not cached:
+        // it honours the CT_CLANG environment variable, which a library user may change
         // between calls, and probing it only costs a few stat calls.)
-        CT_NODISCARD const std::string& detectMacSysroot()
+        CT_NODISCARD std::string detectMacSysroot()
         {
-            static const std::string sysroot = queryMacSysroot();
+            static std::mutex mutex;
+            static std::string sysroot;
+            const std::lock_guard<std::mutex> lock(mutex);
+            if (sysroot.empty())
+                sysroot = queryMacSysroot();
             return sysroot;
         }
 
