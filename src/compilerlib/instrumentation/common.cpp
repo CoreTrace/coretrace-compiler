@@ -38,9 +38,10 @@ namespace compilerlib
         if (!di)
             return "<unknown>";
 
-        llvm::StringRef filename = di->getFilename();
-        llvm::StringRef base = llvm::sys::path::filename(filename);
-        std::string site = base.str();
+        // The path the compiler was given, often relative, so that files with the same
+        // name stay apart. Not joined with the compilation directory: binaries built in
+        // different directories stay identical.
+        std::string site = di->getFilename().str();
         if (site.empty())
             site = "<unknown>";
 
