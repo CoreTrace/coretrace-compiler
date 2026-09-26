@@ -14,8 +14,12 @@ FetchContent_MakeAvailable(googletest)
 add_executable(compilerlib_unit_tests
   alloc_names_test.cpp
   args_test.cpp
+  compile_test.cpp
 )
 target_include_directories(compilerlib_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+# Fixtures that compile_test.cpp compiles in process.
+target_compile_definitions(compilerlib_unit_tests PRIVATE
+  CT_TEST_SOURCE_DIR="${CMAKE_SOURCE_DIR}/test")
 target_link_libraries(compilerlib_unit_tests PRIVATE compilerlib_static GTest::gtest_main)
 coretrace_force_msvc_runtime(compilerlib_unit_tests)
 coretrace_disable_rtti(compilerlib_unit_tests)

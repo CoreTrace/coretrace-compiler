@@ -26,6 +26,7 @@
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Verifier.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/FileUtilities.h>
@@ -424,24 +425,8 @@ namespace compilerlib
 
                 auto handleModule = [&](std::unique_ptr<llvm::Module> module) -> bool
                 {
-                    if (ctx_.runtimeConfig.trace_enabled)
-                    {
-                        instrumentModule(*module);
-                    }
-                    if (ctx_.runtimeConfig.alloc_enabled)
-                    {
-                        wrapAllocCalls(*module);
-                    }
-                    if (ctx_.runtimeConfig.bounds_enabled)
-                    {
-                        instrumentMemoryAccesses(*module);
-                    }
-                    if (ctx_.runtimeConfig.vtable_enabled || ctx_.runtimeConfig.vcall_trace_enabled)
-                    {
-                        instrumentVirtualCalls(*module, ctx_.runtimeConfig.vcall_trace_enabled,
-                                               ctx_.runtimeConfig.vtable_enabled);
-                    }
-                    emitRuntimeConfigGlobals(*module, ctx_.runtimeConfig);
+                    if (!instrument(*module, error))
+                        return false;
 
                     const char* outputPath = findArgValue(ccArgs, "-o");
                     if (!outputPath)
@@ -530,21 +515,8 @@ namespace compilerlib
                         std::string actionError;
                         auto handleModule = [&](std::unique_ptr<llvm::Module> module) -> bool
                         {
-                            if (ctx_.instrument)
-                            {
-                                if (ctx_.runtimeConfig.trace_enabled)
-                                    instrumentModule(*module);
-                                if (ctx_.runtimeConfig.alloc_enabled)
-                                    wrapAllocCalls(*module);
-                                if (ctx_.runtimeConfig.bounds_enabled)
-                                    instrumentMemoryAccesses(*module);
-                                if (ctx_.runtimeConfig.vtable_enabled ||
-                                    ctx_.runtimeConfig.vcall_trace_enabled)
-                                    instrumentVirtualCalls(*module,
-                                                           ctx_.runtimeConfig.vcall_trace_enabled,
-                                                           ctx_.runtimeConfig.vtable_enabled);
-                                emitRuntimeConfigGlobals(*module, ctx_.runtimeConfig);
-                            }
+                            if (ctx_.instrument && !instrument(*module, actionError))
+                                return false;
                             std::string llvmIR;
                             llvm::raw_string_ostream rso(llvmIR);
                             module->print(rso, nullptr);
@@ -640,6 +612,34 @@ namespace compilerlib
             {
                 ctx_.dc.message.clear();
                 ctx_.dc.os.flush();
+            }
+
+            // Runs the enabled instrumentation passes, then verifies the module: invalid IR
+            // must fail the compilation rather than reach code generation or the output.
+            CT_NODISCARD bool instrument(llvm::Module& module, std::string& error)
+            {
+                const RuntimeConfig& config = ctx_.runtimeConfig;
+                if (config.trace_enabled)
+                    instrumentModule(module);
+                if (config.alloc_enabled)
+                    wrapAllocCalls(module);
+                if (config.bounds_enabled)
+                    instrumentMemoryAccesses(module);
+                if (config.vtable_enabled || config.vcall_trace_enabled)
+                    instrumentVirtualCalls(module, config.vcall_trace_enabled,
+                                           config.vtable_enabled);
+                emitRuntimeConfigGlobals(module, config);
+
+                std::string problems;
+                llvm::raw_string_ostream stream(problems);
+                if (llvm::verifyModule(module, &stream))
+                {
+                    error = "error: ct: instrumentation produced invalid LLVM IR, which is a "
+                            "CoreTrace bug:\n" +
+                            stream.str();
+                    return false;
+                }
+                return true;
             }
 
             template <typename Action, typename Handler>
