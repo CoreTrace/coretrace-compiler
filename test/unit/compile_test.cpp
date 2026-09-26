@@ -11,11 +11,18 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cerrno>
+#include <csignal>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
+
+#ifndef _WIN32
+#include <sys/resource.h>
+#endif
 
 namespace
 {
@@ -158,5 +165,58 @@ int main(void)
         EXPECT_NE(result.llvmIR.find("sub/dir/sites.c:8"), std::string::npos) << result.llvmIR;
         EXPECT_NE(result.llvmIR.find("sub/dir/sites.c:6\\00"), std::string::npos) << result.llvmIR;
     }
+
+    // Like clang, a failed compilation leaves no output behind: neither a partial object
+    // nor an earlier one that would look up to date.
+    class FailedCompilationTest : public CompileTest,
+                                  public ::testing::WithParamInterface<const char*>
+    {
+    };
+
+    TEST_P(FailedCompilationTest, LeavesNoOutput)
+    {
+        const std::string output = path("out.o");
+        std::ofstream(output) << "previous";
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-c", std::string(CT_TEST_SOURCE_DIR "/examples/fixtures/") + GetParam(), "-o",
+             output},
+            compilerlib::OutputMode::ToFile, /*instrument=*/true);
+        EXPECT_FALSE(result.success);
+        EXPECT_FALSE(fs::exists(output)) << result.diagnostics;
+    }
+
+    // A code-generation error, and a frontend error.
+    INSTANTIATE_TEST_SUITE_P(Errors, FailedCompilationTest,
+                             ::testing::Values("codegen_error.c", "broken.c"),
+                             [](const ::testing::TestParamInfo<const char*>& info)
+                             {
+                                 std::string name = info.param;
+                                 return name.substr(0, name.find('.'));
+                             });
+
+#ifndef _WIN32
+    // A write error, here the file size limit, fails compile(): left in the output stream,
+    // it ended the process when the stream was destroyed.
+    TEST_F(CompileTest, OutputWriteErrorFailsCompile)
+    {
+        struct rlimit saved;
+        ASSERT_EQ(getrlimit(RLIMIT_FSIZE, &saved), 0);
+        struct rlimit limited = saved;
+        limited.rlim_cur = 512;
+        // Without a handler, exceeding the limit raises SIGXFSZ instead of failing the write.
+        auto previousHandler = std::signal(SIGXFSZ, SIG_IGN);
+        ASSERT_EQ(setrlimit(RLIMIT_FSIZE, &limited), 0);
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-c", CT_TEST_SOURCE_DIR "/examples/fixtures/hello.c", "-o", path("hello.o")},
+            compilerlib::OutputMode::ToFile, /*instrument=*/true);
+        setrlimit(RLIMIT_FSIZE, &saved);
+        std::signal(SIGXFSZ, previousHandler);
+
+        EXPECT_FALSE(result.success);
+        EXPECT_NE(result.diagnostics.find(std::strerror(EFBIG)), std::string::npos)
+            << result.diagnostics;
+        EXPECT_FALSE(fs::exists(path("hello.o")));
+    }
+#endif
 
 } // namespace

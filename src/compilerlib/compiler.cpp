@@ -851,6 +851,16 @@ namespace compilerlib
             return true;
         }
 
+        // Like clang, a failed compilation leaves no output behind: neither a partial file
+        // nor an earlier one that would look up to date. Only a regular file is removed,
+        // never stdout or a device such as /dev/null.
+        void removeFailedOutput(const clang::driver::Command& job)
+        {
+            const char* output = findArgValue(job.getArguments(), "-o");
+            if (output && llvm::sys::fs::is_regular_file(output))
+                (void)llvm::sys::fs::remove(output);
+        }
+
         CT_NODISCARD CompileResult runInstrumentedToFile(CompileContext& ctx, Cc1Runner& cc1,
                                                          const JobPlan& plan, std::string& error)
         {
@@ -860,10 +870,13 @@ namespace compilerlib
             for (const auto* job : plan.cc1Jobs)
             {
                 if (!cc1.runInstrumented(*job, error))
+                {
+                    removeFailedOutput(*job);
                     return {false,
                             mergeDiagnostics(ctx.driver_diagnostics,
                                              mergeDiagnostics(cc1_diags, error)),
                             {}};
+                }
                 appendDiagnostics(cc1_diags, ctx.dc.message);
                 ctx.dc.message.clear();
                 ctx.dc.os.flush();
