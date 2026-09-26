@@ -319,7 +319,7 @@ namespace
                                                       size_t* size_out, const char** site_out,
                                                       unsigned char* kind_out);
 
-    CT_NOINSTR void ct_release_tracked_pointer(void* ptr, CtReleaseApi api)
+    CT_NOINSTR void ct_release_tracked_pointer(void* ptr, CtReleaseApi api, const char* site)
     {
         ct_init_env_once();
 
@@ -339,15 +339,16 @@ namespace
         }
 
         size_t size = 0;
-        const char* site = nullptr;
+        const char* alloc_site = nullptr;
 
         ct_lock_acquire();
-        const int found = ct_remove_for_release(ptr, CT_ENTRY_FREED, &size, &site, &kind);
+        const int found = ct_remove_for_release(ptr, CT_ENTRY_FREED, &size, &alloc_site, &kind);
         ct_lock_release();
 
         if (found == -1)
         {
-            ct_log_skip_event(action, ptr, "already freed");
+            ct_log(CTLevel::Warn, "ct: {} skipped ptr={:p} (already freed) site={} alloc_site={}\n",
+                   action, ptr, ct_site_name(site), ct_site_name(alloc_site));
             return;
         }
         if (found == 0)
@@ -358,10 +359,10 @@ namespace
         }
 
         ct_track_shadow_free(ptr, size);
-        ct_log_alloc_event(action, ptr, size, site, kind);
+        ct_log_alloc_event(action, ptr, size, alloc_site, kind);
         if (!ct_release_api_matches_kind(api, kind))
         {
-            ct_log_deallocator_mismatch(action, ptr, kind, ct_expected_kind_label(api), site);
+            ct_log_deallocator_mismatch(action, ptr, kind, ct_expected_kind_label(api), alloc_site);
         }
         ct_release_by_called_api(ptr, api, kind);
     }
@@ -521,7 +522,7 @@ namespace
                 ct_write_hex(reinterpret_cast<uintptr_t>(ptr));
                 ct_write_cstr(" size=");
                 ct_write_dec(entry.size);
-                ct_write_cstr(" site=");
+                ct_write_cstr(" alloc_site=");
                 ct_write_cstr(ct_site_name(entry.site));
                 ct_write_cstr("\n");
 
@@ -670,7 +671,7 @@ CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void* ptr, void** b
 
 extern "C"
 {
-    CT_NOINSTR void __ct_free(void* ptr);
+    CT_NOINSTR void __ct_free(void* ptr, const char* site);
 
     CT_NODISCARD CT_NOINSTR void* __ct_malloc(size_t size, const char* site)
     {
@@ -779,7 +780,7 @@ extern "C"
         }
         if (size == 0)
         {
-            __ct_free(ptr);
+            __ct_free(ptr, site);
             return nullptr;
         }
 
@@ -932,38 +933,38 @@ extern "C"
         ct_autofree_impl(ptr);
     }
 
-    CT_NOINSTR void __ct_free(void* ptr)
+    CT_NOINSTR void __ct_free(void* ptr, const char* site)
     {
-        ct_release_tracked_pointer(ptr, CtReleaseApi::Free);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::Free, site);
     }
 
-    CT_NOINSTR void __ct_delete(void* ptr)
+    CT_NOINSTR void __ct_delete(void* ptr, const char* site)
     {
-        ct_release_tracked_pointer(ptr, CtReleaseApi::Delete);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::Delete, site);
     }
 
-    CT_NOINSTR void __ct_delete_array(void* ptr)
+    CT_NOINSTR void __ct_delete_array(void* ptr, const char* site)
     {
-        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArray);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArray, site);
     }
 
-    CT_NOINSTR void __ct_delete_nothrow(void* ptr)
+    CT_NOINSTR void __ct_delete_nothrow(void* ptr, const char* site)
     {
-        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteNothrow);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteNothrow, site);
     }
 
-    CT_NOINSTR void __ct_delete_array_nothrow(void* ptr)
+    CT_NOINSTR void __ct_delete_array_nothrow(void* ptr, const char* site)
     {
-        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayNothrow);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayNothrow, site);
     }
 
-    CT_NOINSTR void __ct_delete_destroying(void* ptr)
+    CT_NOINSTR void __ct_delete_destroying(void* ptr, const char* site)
     {
-        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteDestroying);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteDestroying, site);
     }
 
-    CT_NOINSTR void __ct_delete_array_destroying(void* ptr)
+    CT_NOINSTR void __ct_delete_array_destroying(void* ptr, const char* site)
     {
-        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayDestroying);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayDestroying, site);
     }
 }

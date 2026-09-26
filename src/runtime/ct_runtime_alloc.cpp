@@ -868,7 +868,7 @@ CT_NOINSTR static void ct_release_by_api(void* ptr, CtReleaseApi api)
     }
 }
 
-CT_NOINSTR static void ct_release_tracked_pointer(void* ptr, CtReleaseApi api)
+CT_NOINSTR static void ct_release_tracked_pointer(void* ptr, CtReleaseApi api, const char* site)
 {
     const int is_array = ct_release_api_is_array(api);
 
@@ -881,13 +881,13 @@ CT_NOINSTR static void ct_release_tracked_pointer(void* ptr, CtReleaseApi api)
 
     size_t size = 0;
     size_t req_size = 0;
-    const char* site = nullptr;
+    const char* alloc_site = nullptr;
     int found = 0;
     (void)req_size;
 
     ct_lock_acquire();
     if (ptr)
-        found = ct_table_remove(ptr, &size, &req_size, &site);
+        found = ct_table_remove(ptr, &size, &req_size, &alloc_site);
 
     ct_lock_release();
 
@@ -902,7 +902,8 @@ CT_NOINSTR static void ct_release_tracked_pointer(void* ptr, CtReleaseApi api)
     }
     if (found == -1)
     {
-        ct_log(CTLevel::Warn, "{}{} ptr={:p} (double free){}\n", ct_color(CTColor::Red), label, ptr,
+        ct_log(CTLevel::Warn, "{}{} ptr={:p} (double free) site={} alloc_site={}{}\n",
+               ct_color(CTColor::Red), label, ptr, ct_site_name(site), ct_site_name(alloc_site),
                ct_color(CTColor::Reset));
         return;
     }
@@ -1358,7 +1359,7 @@ extern "C"
         ct_autofree_tracked(ptr, CtAutoFreeApi::DeleteArray);
     }
 
-    CT_NOINSTR void __ct_free(void* ptr)
+    CT_NOINSTR void __ct_free(void* ptr, const char* site)
     {
         ct_init_env_once();
         if (!ct_is_enabled(CT_FEATURE_ALLOC))
@@ -1369,14 +1370,14 @@ extern "C"
 
         size_t size = 0;
         size_t req_size = 0;
-        const char* site = nullptr;
+        const char* alloc_site = nullptr;
         int found = 0;
         (void)req_size;
 
         ct_lock_acquire();
         if (ptr)
         {
-            found = ct_table_remove(ptr, &size, &req_size, &site);
+            found = ct_table_remove(ptr, &size, &req_size, &alloc_site);
         }
         ct_lock_release();
 
@@ -1389,8 +1390,9 @@ extern "C"
         }
         if (found == -1)
         {
-            ct_log(CTLevel::Warn, "{}tracing-free ptr={:p} (double free){}\n",
-                   ct_color(CTColor::Red), ptr, ct_color(CTColor::Reset));
+            ct_log(CTLevel::Warn, "{}tracing-free ptr={:p} (double free) site={} alloc_site={}{}\n",
+                   ct_color(CTColor::Red), ptr, ct_site_name(site), ct_site_name(alloc_site),
+                   ct_color(CTColor::Reset));
             return;
         }
         if (found == 0)
@@ -1414,41 +1416,41 @@ extern "C"
         free(ptr);
     }
 
-    CT_NOINSTR void __ct_delete(void* ptr)
+    CT_NOINSTR void __ct_delete(void* ptr, const char* site)
     {
-        ct_release_tracked_pointer(ptr, CtReleaseApi::Delete);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::Delete, site);
     }
 
-    CT_NOINSTR void __ct_delete_array(void* ptr)
+    CT_NOINSTR void __ct_delete_array(void* ptr, const char* site)
     {
-        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArray);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArray, site);
     }
 
-    CT_NOINSTR void __ct_delete_nothrow(void* ptr)
+    CT_NOINSTR void __ct_delete_nothrow(void* ptr, const char* site)
     {
-        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteNothrow);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteNothrow, site);
     }
 
-    CT_NOINSTR void __ct_delete_array_nothrow(void* ptr)
+    CT_NOINSTR void __ct_delete_array_nothrow(void* ptr, const char* site)
     {
-        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayNothrow);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayNothrow, site);
     }
 
-    CT_NOINSTR void __ct_delete_destroying(void* ptr)
+    CT_NOINSTR void __ct_delete_destroying(void* ptr, const char* site)
     {
 #if defined(__cpp_lib_destroying_delete) && __cpp_lib_destroying_delete >= 201806L
-        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteDestroying);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteDestroying, site);
 #else
-        ct_release_tracked_pointer(ptr, CtReleaseApi::Delete);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::Delete, site);
 #endif
     }
 
-    CT_NOINSTR void __ct_delete_array_destroying(void* ptr)
+    CT_NOINSTR void __ct_delete_array_destroying(void* ptr, const char* site)
     {
 #if defined(__cpp_lib_destroying_delete) && __cpp_lib_destroying_delete >= 201806L
-        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayDestroying);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayDestroying, site);
 #else
-        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArray);
+        ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArray, site);
 #endif
     }
 
@@ -1487,6 +1489,8 @@ CT_NOINSTR __attribute__((destructor)) static void ct_report_leaks(void)
         ct_write_hex(reinterpret_cast<uintptr_t>(ct_alloc_table[i].ptr));
         ct_write_cstr(" size=");
         ct_write_dec(ct_alloc_table[i].size);
+        ct_write_cstr(" alloc_site=");
+        ct_write_cstr(ct_site_name(ct_alloc_table[i].site));
         ct_write_str(ct_color(CTColor::Reset));
         ct_write_cstr("\n");
 

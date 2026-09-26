@@ -45,12 +45,13 @@ expect_exit() {
 expect_leaks() {
   case "$1" in
     ct_alloc_basic.c|ct_new_delete.cpp) echo 1 ;;   # deliberate unreachable allocation
+    ct_leak_site.c) echo 1 ;;
     ct_realloc_zero.c) echo any ;;                  # realloc(p, 0) may allocate or free per libc
     *) echo none ;;
   esac
 }
 
-# Substring that must appear on stderr.
+# Substring that must appear on stderr, as a grep basic regular expression.
 expect_stderr() {
   case "$1" in
     ct_alloc_basic.c) echo "tracing-malloc-unreachable" ;;
@@ -61,6 +62,13 @@ expect_stderr() {
     ct_bounds_stack_default_modules.c)
       echo "stack-buffer-overflow" ;;
     ct_new_delete.cpp) echo "tracing-new-unreachable" ;;
+    # Leaks and double frees name where the memory came from; a double free also names
+    # where it happens.
+    ct_leak_site.c) echo 'ct: leak ptr=.* alloc_site=[^ ]*ct_leak_site\.c:8:' ;;
+    ct_double_free_site.c)
+      echo 'tracing-free ptr=.* (double free) site=[^ ]*ct_double_free_site\.c:10:5 alloc_site=[^ ]*ct_double_free_site\.c:8:' ;;
+    ct_double_delete_site.cpp)
+      echo 'tracing-delete-array ptr=.* (double free) site=[^ ]*ct_double_delete_site\.cpp:8:5 alloc_site=[^ ]*ct_double_delete_site\.cpp:6:' ;;
     ct_vtable_diag_null.cpp) echo "null this pointer" ;;
     ct_vtable_diag_fake.cpp) echo "vtable resolve failed" ;;
     ct_vtable_diag_freed.cpp) echo "vptr on freed object" ;;
@@ -109,6 +117,8 @@ skip_reason() {
 TESTS=(
   ct_alloc_basic.c
   ct_alloc_growth.c
+  ct_leak_site.c
+  ct_double_free_site.c
   ct_bounds_container_of_underflow.c
   ct_bounds_container_of_underflow_shadow.c
   ct_bounds_container_of_overflow.c
@@ -124,6 +134,7 @@ TESTS=(
   ct_new_delete.cpp
   ct_new_delete_sized.cpp
   ct_new_delete_variants.cpp
+  ct_double_delete_site.cpp
   ct_shadow_pages.c
   ct_vtable_basic.cpp
   ct_vtable_interface.cpp

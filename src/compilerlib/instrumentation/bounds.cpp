@@ -21,7 +21,6 @@
 #include <llvm/IR/Operator.h>
 #include <llvm/IR/Type.h>
 #include <llvm/Support/Casting.h>
-#include <llvm/Support/Path.h>
 
 #include <optional>
 #include <string>
@@ -282,8 +281,7 @@ namespace compilerlib
                     unknown = createSiteString(module, "<unknown>");
                 return unknown;
             }
-            return createSiteString(module, llvm::sys::path::filename(file).str() + ":" +
-                                                std::to_string(line));
+            return createSiteString(module, file.str() + ":" + std::to_string(line));
         }
 
         // Registers `objects` while `func` runs: each is pushed right after its alloca, so

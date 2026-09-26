@@ -1402,7 +1402,6 @@ namespace compilerlib
             // Resolved lazily so the module's declaration order does not depend on
             // which families are present.
             std::function<llvm::FunctionCallee()> release;
-            bool appendSite = true;
             bool signExtendIntegers = false;
         };
 
@@ -1430,17 +1429,13 @@ namespace compilerlib
                 llvm::FunctionCallee target = unused && rewrite.unreachableTarget.getCallee()
                                                   ? rewrite.unreachableTarget
                                                   : rewrite.target;
+                // Each target takes the site of the call as its last parameter.
                 llvm::FunctionType& targetType = *target.getFunctionType();
-                const unsigned forwarded =
-                    targetType.getNumParams() - (rewrite.appendSite ? 1u : 0u);
+                const unsigned forwarded = targetType.getNumParams() - 1u;
                 llvm::IRBuilder<> builder(call);
                 llvm::SmallVector<llvm::Value*, 8> args = coerceArguments(
                     builder, *call, targetType, forwarded, rewrite.signExtendIntegers);
-                if (rewrite.appendSite)
-                {
-                    args.push_back(
-                        getSiteString(ctx.module, *call, ctx.siteCache, ctx.unknownSite));
-                }
+                args.push_back(getSiteString(ctx.module, *call, ctx.siteCache, ctx.unknownSite));
                 llvm::CallBase* newCall = replaceCall(call, target, args);
                 if (unused && newCall)
                 {
@@ -1959,7 +1954,6 @@ namespace compilerlib
                      {ctSbrk,
                       {},
                       [&module]() { return CT_RUNTIME_CALLEE(module, __ct_autofree_sbrk); },
-                      /*appendSite=*/true,
                       /*signExtendIntegers=*/true});
         rewriteCalls(brkCalls, ctx, {ctBrk});
 
@@ -1972,20 +1966,13 @@ namespace compilerlib
             newArrayNothrowCalls, ctx,
             {ctNewArrayNothrow, ctNewArrayNothrowUnreachable, release(ctAutoFreeDeleteArray)});
 
-        // Deallocations take the pointer only, no site.
-        auto releaseOnly = [](llvm::FunctionCallee callee)
-        {
-            CallRewrite rewrite{callee};
-            rewrite.appendSite = false;
-            return rewrite;
-        };
-        rewriteCalls(freeCalls, ctx, releaseOnly(ctFree));
-        rewriteCalls(deleteCalls, ctx, releaseOnly(ctDelete));
-        rewriteCalls(deleteArrayCalls, ctx, releaseOnly(ctDeleteArray));
-        rewriteCalls(deleteNothrowCalls, ctx, releaseOnly(ctDeleteNothrow));
-        rewriteCalls(deleteArrayNothrowCalls, ctx, releaseOnly(ctDeleteArrayNothrow));
-        rewriteCalls(deleteDestroyingCalls, ctx, releaseOnly(ctDeleteDestroying));
-        rewriteCalls(deleteArrayDestroyingCalls, ctx, releaseOnly(ctDeleteArrayDestroying));
+        rewriteCalls(freeCalls, ctx, {ctFree});
+        rewriteCalls(deleteCalls, ctx, {ctDelete});
+        rewriteCalls(deleteArrayCalls, ctx, {ctDeleteArray});
+        rewriteCalls(deleteNothrowCalls, ctx, {ctDeleteNothrow});
+        rewriteCalls(deleteArrayNothrowCalls, ctx, {ctDeleteArrayNothrow});
+        rewriteCalls(deleteDestroyingCalls, ctx, {ctDeleteDestroying});
+        rewriteCalls(deleteArrayDestroyingCalls, ctx, {ctDeleteArrayDestroying});
 
         // An Objective-C object is recorded once allocated. Its memory and reference count
         // stay with the Objective-C runtime, which tells the instrumentation runtime when

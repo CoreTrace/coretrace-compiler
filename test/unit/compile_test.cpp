@@ -50,6 +50,7 @@ namespace
 
         std::string writeSource(const char* name, const char* text) const
         {
+            fs::create_directories(fs::path(path(name)).parent_path());
             std::ofstream(path(name)) << text;
             return path(name);
         }
@@ -129,6 +130,33 @@ int main(void)
         EXPECT_NE(result.diagnostics.find("frontend warning before a code-generation error"),
                   std::string::npos)
             << result.diagnostics;
+    }
+
+    // A heap allocation and a registered stack object, in a source under two directories.
+    constexpr const char* kSites = R"(void* malloc(__SIZE_TYPE__ size);
+void use(int* values);
+
+int main(void)
+{
+    int values[4] = {0};
+    use(values);
+    return malloc(4) != 0;
+}
+)";
+
+    // Sites keep the path the compiler was given, so that files with the same name in
+    // different directories stay apart.
+    TEST_F(CompileTest, SitesKeepTheSourcePath)
+    {
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-g", "-S", "-emit-llvm", "--ct-modules=alloc,bounds",
+                                  writeSource("sub/dir/sites.c", kSites)},
+                                 compilerlib::OutputMode::ToMemory, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        // The allocation's call, whose column CodeView, the debug format of Windows targets,
+        // does not record, and the stack object's declaration.
+        EXPECT_NE(result.llvmIR.find("sub/dir/sites.c:8"), std::string::npos) << result.llvmIR;
+        EXPECT_NE(result.llvmIR.find("sub/dir/sites.c:6\\00"), std::string::npos) << result.llvmIR;
     }
 
 } // namespace
