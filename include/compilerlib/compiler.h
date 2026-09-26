@@ -13,7 +13,12 @@ namespace compilerlib
     enum class OutputMode
     {
         ToFile,
+        /// Textual LLVM IR in `CompileResult::llvmIR`, for `-S -emit-llvm`.
         ToMemory,
+        /// The bitcode `-emit-llvm -c` would write to its output file, in
+        /// `CompileResult::llvmBitcode` instead; the output file is not written. Other outputs
+        /// the arguments ask for, such as a dependency file, still are.
+        ToMemoryBitcode,
     };
 
     struct CompileResult
@@ -21,6 +26,7 @@ namespace compilerlib
         bool success;
         std::string diagnostics;
         std::string llvmIR;
+        std::string llvmBitcode;
     };
 
     // std::pair<bool, std::string> compile(const std::vector<std::string>& args);
