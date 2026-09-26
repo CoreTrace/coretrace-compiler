@@ -334,4 +334,42 @@ int main(void)
     }
 #endif
 
+#ifdef __APPLE__
+    // Compiles once while the sysroot detection cannot work, then once it can: the second
+    // compilation must find the system headers. Exits with 0 when it does.
+    [[noreturn]] void compileAfterAFailedSysrootDetection(const std::string& headerFree,
+                                                          const std::string& withHeader)
+    {
+        const char* previous = std::getenv("TMPDIR");
+        const std::string saved = previous != nullptr ? previous : "";
+        // The detection runs xcrun through temporary files, which cannot be created here; the
+        // source needs no system header, so this compilation succeeds without a sysroot.
+        setenv("TMPDIR", "/dev/null", 1);
+        const compilerlib::CompileResult first = compilerlib::compile(
+            {"-S", "-emit-llvm", headerFree}, compilerlib::OutputMode::ToMemory);
+        if (previous != nullptr)
+            setenv("TMPDIR", saved.c_str(), 1);
+        else
+            unsetenv("TMPDIR");
+
+        const compilerlib::CompileResult second = compilerlib::compile(
+            {"-S", "-emit-llvm", withHeader}, compilerlib::OutputMode::ToMemory);
+        std::exit(first.success && second.success ? 0 : 1);
+    }
+
+    // A failed sysroot detection is not kept for the process: once its cause is gone, the next
+    // compilation detects the sysroot again and finds the system headers (#98). Runs in a fresh
+    // process, since an earlier test of this binary has already detected the sysroot, and a
+    // detection that succeeded is rightly kept, which would leave no failure to recover from.
+    TEST_F(CompileTest, FailedSysrootDetectionIsRetried)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        const std::string headerFree = writeSource("plain.c", "int main(void) { return 0; }\n");
+        const std::string withHeader = writeSource(
+            "hello.c", "#include <stdio.h>\nint main(void) { return puts(\"hi\") < 0; }\n");
+        EXPECT_EXIT(compileAfterAFailedSysrootDetection(headerFree, withHeader),
+                    ::testing::ExitedWithCode(0), "");
+    }
+#endif
+
 } // namespace
