@@ -53,13 +53,14 @@
     X(void*, __ct_new_nothrow_unreachable,      (size_t size, const char* site))                  \
     X(void*, __ct_new_array_nothrow,            (size_t size, const char* site))                  \
     X(void*, __ct_new_array_nothrow_unreachable,(size_t size, const char* site))                  \
-    X(void,  __ct_free,                   (void* ptr))                                            \
-    X(void,  __ct_delete,                 (void* ptr))                                            \
-    X(void,  __ct_delete_array,           (void* ptr))                                            \
-    X(void,  __ct_delete_nothrow,         (void* ptr))                                            \
-    X(void,  __ct_delete_array_nothrow,   (void* ptr))                                            \
-    X(void,  __ct_delete_destroying,      (void* ptr))                                            \
-    X(void,  __ct_delete_array_destroying,(void* ptr))                                            \
+    /* Releases receive the site of their call, which a double free reports. */                \
+    X(void,  __ct_free,                   (void* ptr, const char* site))                          \
+    X(void,  __ct_delete,                 (void* ptr, const char* site))                          \
+    X(void,  __ct_delete_array,           (void* ptr, const char* site))                          \
+    X(void,  __ct_delete_nothrow,         (void* ptr, const char* site))                          \
+    X(void,  __ct_delete_array_nothrow,   (void* ptr, const char* site))                          \
+    X(void,  __ct_delete_destroying,      (void* ptr, const char* site))                          \
+    X(void,  __ct_delete_array_destroying,(void* ptr, const char* site))                          \
     /* Compile-time proven unreachable allocations, released at function exit. */                \
     X(void,  __ct_autofree,              (void* ptr))                                             \
     X(void,  __ct_autofree_delete,       (void* ptr))                                             \

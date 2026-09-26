@@ -62,12 +62,13 @@ expect_stderr() {
     ct_bounds_stack_default_modules.c)
       echo "stack-buffer-overflow" ;;
     ct_new_delete.cpp) echo "tracing-new-unreachable" ;;
-    # Leaks and double frees name where the memory came from.
+    # Leaks and double frees name where the memory came from; a double free also names
+    # where it happens.
     ct_leak_site.c) echo 'ct: leak ptr=.* alloc_site=[^ ]*ct_leak_site\.c:8:' ;;
     ct_double_free_site.c)
-      echo 'tracing-free ptr=.* (double free) alloc_site=[^ ]*ct_double_free_site\.c:8:' ;;
+      echo 'tracing-free ptr=.* (double free) site=[^ ]*ct_double_free_site\.c:10:5 alloc_site=[^ ]*ct_double_free_site\.c:8:' ;;
     ct_double_delete_site.cpp)
-      echo 'tracing-delete-array ptr=.* (double free) alloc_site=[^ ]*ct_double_delete_site\.cpp:6:' ;;
+      echo 'tracing-delete-array ptr=.* (double free) site=[^ ]*ct_double_delete_site\.cpp:8:5 alloc_site=[^ ]*ct_double_delete_site\.cpp:6:' ;;
     ct_vtable_diag_null.cpp) echo "null this pointer" ;;
     ct_vtable_diag_fake.cpp) echo "vtable resolve failed" ;;
     ct_vtable_diag_freed.cpp) echo "vptr on freed object" ;;
