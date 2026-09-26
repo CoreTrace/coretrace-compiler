@@ -66,6 +66,8 @@ namespace compilerlib::emit
             }
         }
 
+        // Runs `writer` on `outputPath`. An error of the stream itself, from writing or
+        // from closing, fails the output here: a stream destroyed with one ends the process.
         template <typename Writer>
         CT_NODISCARD bool writeOutputFile(llvm::StringRef outputPath, std::string& error,
                                           Writer&& writer)
@@ -78,16 +80,23 @@ namespace compilerlib::emit
                 return false;
             }
 
-            if (!writer(dest))
+            const bool written = writer(dest);
+            // Closing reports the last write errors; "-" is stdout, which stays open.
+            if (outputPath == "-")
+                dest.flush();
+            else
+                dest.close();
+            if (dest.has_error())
+            {
+                error =
+                    "error: ct: cannot write " + outputPath.str() + ": " + dest.error().message();
+                dest.clear_error();
+                return false;
+            }
+            if (!written)
             {
                 if (error.empty())
                     error = "failed to write file";
-                return false;
-            }
-            dest.flush();
-            if (dest.has_error())
-            {
-                error = "failed to write file";
                 return false;
             }
             return true;
@@ -185,7 +194,7 @@ namespace compilerlib::emit
                                [&](llvm::raw_fd_ostream& dest) -> bool
                                {
                                    module.print(dest, nullptr);
-                                   return !dest.has_error();
+                                   return true;
                                });
     }
 
@@ -195,7 +204,7 @@ namespace compilerlib::emit
                                [&](llvm::raw_fd_ostream& dest) -> bool
                                {
                                    llvm::WriteBitcodeToFile(module, dest);
-                                   return !dest.has_error();
+                                   return true;
                                });
     }
 } // namespace compilerlib::emit
