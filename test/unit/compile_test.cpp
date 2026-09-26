@@ -153,9 +153,9 @@ int main(void)
                                   writeSource("sub/dir/sites.c", kSites)},
                                  compilerlib::OutputMode::ToMemory, /*instrument=*/true);
         ASSERT_TRUE(result.success) << result.diagnostics;
-        // The allocation's call, and the stack object's declaration.
-        EXPECT_NE(result.llvmIR.find("sub/dir/sites.c:8:12\\00"), std::string::npos)
-            << result.llvmIR;
+        // The allocation's call, whose column CodeView, the debug format of Windows targets,
+        // does not record, and the stack object's declaration.
+        EXPECT_NE(result.llvmIR.find("sub/dir/sites.c:8"), std::string::npos) << result.llvmIR;
         EXPECT_NE(result.llvmIR.find("sub/dir/sites.c:6\\00"), std::string::npos) << result.llvmIR;
     }
 
