@@ -347,7 +347,8 @@ namespace
 
         if (found == -1)
         {
-            ct_log_skip_event(action, ptr, "already freed");
+            ct_log(CTLevel::Warn, "ct: {} skipped ptr={:p} (already freed) alloc_site={}\n", action,
+                   ptr, ct_site_name(site));
             return;
         }
         if (found == 0)
@@ -521,7 +522,7 @@ namespace
                 ct_write_hex(reinterpret_cast<uintptr_t>(ptr));
                 ct_write_cstr(" size=");
                 ct_write_dec(entry.size);
-                ct_write_cstr(" site=");
+                ct_write_cstr(" alloc_site=");
                 ct_write_cstr(ct_site_name(entry.site));
                 ct_write_cstr("\n");
 

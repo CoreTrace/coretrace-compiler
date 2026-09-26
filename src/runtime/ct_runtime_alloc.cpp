@@ -902,8 +902,8 @@ CT_NOINSTR static void ct_release_tracked_pointer(void* ptr, CtReleaseApi api)
     }
     if (found == -1)
     {
-        ct_log(CTLevel::Warn, "{}{} ptr={:p} (double free){}\n", ct_color(CTColor::Red), label, ptr,
-               ct_color(CTColor::Reset));
+        ct_log(CTLevel::Warn, "{}{} ptr={:p} (double free) alloc_site={}{}\n",
+               ct_color(CTColor::Red), label, ptr, ct_site_name(site), ct_color(CTColor::Reset));
         return;
     }
     if (found == 0)
@@ -1389,8 +1389,8 @@ extern "C"
         }
         if (found == -1)
         {
-            ct_log(CTLevel::Warn, "{}tracing-free ptr={:p} (double free){}\n",
-                   ct_color(CTColor::Red), ptr, ct_color(CTColor::Reset));
+            ct_log(CTLevel::Warn, "{}tracing-free ptr={:p} (double free) alloc_site={}{}\n",
+                   ct_color(CTColor::Red), ptr, ct_site_name(site), ct_color(CTColor::Reset));
             return;
         }
         if (found == 0)
@@ -1487,6 +1487,8 @@ CT_NOINSTR __attribute__((destructor)) static void ct_report_leaks(void)
         ct_write_hex(reinterpret_cast<uintptr_t>(ct_alloc_table[i].ptr));
         ct_write_cstr(" size=");
         ct_write_dec(ct_alloc_table[i].size);
+        ct_write_cstr(" alloc_site=");
+        ct_write_cstr(ct_site_name(ct_alloc_table[i].site));
         ct_write_str(ct_color(CTColor::Reset));
         ct_write_cstr("\n");
 
