@@ -6,6 +6,10 @@
 #include <clang/Frontend/CompilerInstance.h>
 
 #include <llvm/Bitcode/BitcodeWriter.h>
+#include <llvm/IR/DiagnosticHandler.h>
+#include <llvm/IR/DiagnosticInfo.h>
+#include <llvm/IR/DiagnosticPrinter.h>
+#include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/MC/TargetRegistry.h>
@@ -22,6 +26,29 @@ namespace compilerlib::emit
 {
     namespace
     {
+        // Keeps the errors code generation reports, which LLVM prints before ending the
+        // process when no handler takes them. Other diagnostics are left to LLVM.
+        class CodeGenErrorCollector : public llvm::DiagnosticHandler
+        {
+          public:
+            explicit CodeGenErrorCollector(std::string& errors) : errors_(errors) {}
+
+            bool handleDiagnostics(const llvm::DiagnosticInfo& info) override
+            {
+                if (info.getSeverity() != llvm::DS_Error)
+                    return false;
+                llvm::raw_string_ostream stream(errors_);
+                llvm::DiagnosticPrinterRawOStream printer(stream);
+                stream << "error: ";
+                info.print(printer);
+                stream << '\n';
+                return true;
+            }
+
+          private:
+            std::string& errors_;
+        };
+
         CT_NODISCARD llvm_compat::CodeGenOptLevel toCodeGenOptLevel(unsigned level)
         {
             switch (level)
@@ -135,7 +162,19 @@ namespace compilerlib::emit
                                        return false;
                                    }
 
+                                   llvm::LLVMContext& context = module.getContext();
+                                   std::string codegenErrors;
+                                   std::unique_ptr<llvm::DiagnosticHandler> previous =
+                                       context.getDiagnosticHandler();
+                                   context.setDiagnosticHandler(
+                                       std::make_unique<CodeGenErrorCollector>(codegenErrors));
                                    pass.run(module);
+                                   context.setDiagnosticHandler(std::move(previous));
+                                   if (!codegenErrors.empty())
+                                   {
+                                       error = std::move(codegenErrors);
+                                       return false;
+                                   }
                                    return true;
                                });
     }

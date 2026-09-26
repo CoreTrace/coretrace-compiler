@@ -5,6 +5,7 @@
 #include "runtime_abi.hpp"
 
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SetVector.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/CaptureTracking.h>
@@ -285,9 +286,10 @@ namespace compilerlib
                                                 std::to_string(line));
         }
 
-        // Registers `objects` while `func` runs: pushed once the entry block has allocated
-        // them, popped before every return and resume. Every exit restores the depth the
-        // first push returned, which also drops objects that frames an exception or a
+        // Registers `objects` while `func` runs: each is pushed right after its alloca, so
+        // before anything can access it, wherever other passes put code in the entry
+        // block, and popped before every return and resume. Every exit restores the depth
+        // the first push returned, which also drops objects that frames an exception or a
         // longjmp left without returning had registered above it.
         void registerStackObjects(llvm::Function& func, llvm::ArrayRef<llvm::AllocaInst*> objects,
                                   const llvm::DataLayout& layout, llvm::Constant*& unknownSite)
@@ -311,11 +313,15 @@ namespace compilerlib
             llvm::FunctionCallee pushFn = CT_RUNTIME_CALLEE(module, __ct_stack_push);
             llvm::FunctionCallee popFn = CT_RUNTIME_CALLEE(module, __ct_stack_pop);
 
-            llvm::BasicBlock& entry = func.getEntryBlock();
-            llvm::IRBuilder<> builder(&entry, entry.getFirstNonPHIOrDbgOrAlloca());
+            // Registered objects are static allocas, all in the entry block: in block order,
+            // the first push is the first to run.
+            llvm::SmallVector<llvm::AllocaInst*, 8> ordered(objects.begin(), objects.end());
+            llvm::sort(ordered, [](const llvm::AllocaInst* lhs, const llvm::AllocaInst* rhs)
+                       { return lhs->comesBefore(rhs); });
             llvm::Value* depth = nullptr;
-            for (llvm::AllocaInst* object : objects)
+            for (llvm::AllocaInst* object : ordered)
             {
+                llvm::IRBuilder<> builder(object->getNextNode());
                 llvm::Value* size =
                     llvm::ConstantInt::get(sizeTy, *stackObjectSize(*object, layout));
                 llvm::Value* pushed = builder.CreateCall(

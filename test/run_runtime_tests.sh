@@ -27,6 +27,8 @@ flags_for() {
     ct_bounds_*_valid.c|ct_bounds_*_valid.cpp) echo "--ct-modules=alloc,bounds" ;;
     # Invalid accesses: reported and survived, so the program exits normally.
     ct_bounds_*_shadow.c) echo "--ct-modules=alloc,bounds --ct-bounds-no-abort --ct-shadow-aggressive" ;;
+    # The default modules, trace included.
+    ct_bounds_stack_default_modules.c) echo "--ct-bounds-no-abort" ;;
     ct_bounds_*.c)        echo "--ct-modules=alloc,bounds --ct-bounds-no-abort" ;;
     ct_vtable_*.cpp)   echo "--ct-modules=alloc,vtable --ct-vtable-diag" ;;
     *)                 echo "--ct-modules=alloc" ;;
@@ -55,7 +57,8 @@ expect_stderr() {
     ct_bounds_container_of_underflow.c) echo "heap-buffer-overflow" ;;
     ct_bounds_container_of_underflow_shadow.c) echo "heap-buffer-overflow" ;;
     ct_bounds_container_of_overflow.c) echo "heap-buffer-overflow" ;;
-    ct_bounds_stack_overflow.c|ct_bounds_stack_callee.c|ct_bounds_stack_container_of.c)
+    ct_bounds_stack_overflow.c|ct_bounds_stack_callee.c|ct_bounds_stack_container_of.c|\
+    ct_bounds_stack_default_modules.c)
       echo "stack-buffer-overflow" ;;
     ct_new_delete.cpp) echo "tracing-new-unreachable" ;;
     ct_vtable_diag_null.cpp) echo "null this pointer" ;;
@@ -112,6 +115,7 @@ TESTS=(
   ct_bounds_container_of_valid.c
   ct_bounds_container_of_valid_shadow.c
   ct_bounds_stack_overflow.c
+  ct_bounds_stack_default_modules.c
   ct_bounds_stack_callee.c
   ct_bounds_stack_container_of.c
   ct_bounds_stack_valid.c
