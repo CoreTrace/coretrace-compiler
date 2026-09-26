@@ -13,9 +13,11 @@
 #include <algorithm>
 #include <cerrno>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -65,6 +67,12 @@ namespace
       private:
         fs::path dir_;
     };
+
+    std::string readFile(const std::string& path)
+    {
+        std::ifstream in(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
 
     // A local array whose address escapes, so the bounds module registers it.
     constexpr const char* kEscapingArray = R"(void use(int* values);
@@ -164,6 +172,113 @@ int main(void)
         // does not record, and the stack object's declaration.
         EXPECT_NE(result.llvmIR.find("sub/dir/sites.c:8"), std::string::npos) << result.llvmIR;
         EXPECT_NE(result.llvmIR.find("sub/dir/sites.c:6\\00"), std::string::npos) << result.llvmIR;
+    }
+
+    // A unit compiled the way an analyser compiles it: unoptimised, with debug information.
+    constexpr const char* kBitcodeUnit = R"(int shared;
+
+static int twice(int value)
+{
+    return value * 2;
+}
+
+int main(void)
+{
+    shared = twice(21);
+    return shared;
+}
+)";
+
+    // In-memory bitcode is the file the same arguments write, byte for byte, and the file is
+    // not written.
+    void expectBitcodeMatchesFile(const std::vector<std::string>& args,
+                                  const std::string& outputPath, bool instrument)
+    {
+        compilerlib::CompileResult file =
+            compilerlib::compile(args, compilerlib::OutputMode::ToFile, instrument);
+        ASSERT_TRUE(file.success) << file.diagnostics;
+        const std::string written = readFile(outputPath);
+        ASSERT_FALSE(written.empty());
+        fs::remove(outputPath);
+
+        compilerlib::CompileResult memory =
+            compilerlib::compile(args, compilerlib::OutputMode::ToMemoryBitcode, instrument);
+        ASSERT_TRUE(memory.success) << memory.diagnostics;
+        EXPECT_EQ(memory.llvmBitcode, written);
+        EXPECT_TRUE(memory.llvmIR.empty());
+        EXPECT_FALSE(fs::exists(outputPath));
+    }
+
+    TEST_F(CompileTest, InMemoryBitcodeIsTheFileOutput)
+    {
+        expectBitcodeMatchesFile({"-O0", "-g", "-emit-llvm", "-c",
+                                  writeSource("unit.c", kBitcodeUnit), "-o", path("unit.bc")},
+                                 path("unit.bc"), /*instrument=*/false);
+    }
+
+    TEST_F(CompileTest, InstrumentedInMemoryBitcodeIsTheFileOutput)
+    {
+        expectBitcodeMatchesFile({"-O0", "-g", "-emit-llvm", "-c",
+                                  writeSource("unit.c", kBitcodeUnit), "-o", path("unit.bc")},
+                                 path("unit.bc"), /*instrument=*/true);
+    }
+
+#ifndef _WIN32
+    // No temporary file stands in for the output: the temporary directory stays empty.
+    TEST_F(CompileTest, InMemoryBitcodeCreatesNoTemporaryFile)
+    {
+        const std::string source = writeSource("unit.c", kBitcodeUnit);
+        const fs::path temporary = path("tmp");
+        fs::create_directories(temporary);
+        const char* previous = std::getenv("TMPDIR");
+        const std::string saved = previous != nullptr ? previous : "";
+        setenv("TMPDIR", temporary.c_str(), 1);
+
+        compilerlib::CompileResult memory =
+            compilerlib::compile({"-O0", "-g", "-emit-llvm", "-c", source, "-o", path("unit.bc")},
+                                 compilerlib::OutputMode::ToMemoryBitcode);
+
+        if (previous != nullptr)
+            setenv("TMPDIR", saved.c_str(), 1);
+        else
+            unsetenv("TMPDIR");
+        ASSERT_TRUE(memory.success) << memory.diagnostics;
+        EXPECT_TRUE(fs::is_empty(temporary));
+    }
+#endif
+
+    // An output the caller asks for besides the bitcode is still written.
+    TEST_F(CompileTest, InMemoryBitcodeKeepsTheRequestedDependencyFile)
+    {
+        compilerlib::CompileResult memory =
+            compilerlib::compile({"-O0", "-emit-llvm", "-c", writeSource("unit.c", kBitcodeUnit),
+                                  "-MD", "-MF", path("unit.d")},
+                                 compilerlib::OutputMode::ToMemoryBitcode);
+        ASSERT_TRUE(memory.success) << memory.diagnostics;
+        EXPECT_FALSE(memory.llvmBitcode.empty());
+        EXPECT_NE(readFile(path("unit.d")).find("unit.c"), std::string::npos);
+    }
+
+    // Only a bitcode compilation has bitcode to hold.
+    TEST_F(CompileTest, InMemoryBitcodeNeedsABitcodeCompilation)
+    {
+        compilerlib::CompileResult memory =
+            compilerlib::compile({"-S", "-emit-llvm", writeSource("unit.c", kBitcodeUnit)},
+                                 compilerlib::OutputMode::ToMemoryBitcode);
+        EXPECT_FALSE(memory.success);
+        EXPECT_TRUE(memory.llvmBitcode.empty());
+        EXPECT_NE(memory.diagnostics.find("-emit-llvm -c"), std::string::npos)
+            << memory.diagnostics;
+    }
+
+    TEST_F(CompileTest, InMemoryBitcodeReportsCompileErrors)
+    {
+        compilerlib::CompileResult memory = compilerlib::compile(
+            {"-emit-llvm", "-c", writeSource("broken.c", "int main(void) { return missing; }\n")},
+            compilerlib::OutputMode::ToMemoryBitcode);
+        EXPECT_FALSE(memory.success);
+        EXPECT_TRUE(memory.llvmBitcode.empty());
+        EXPECT_NE(memory.diagnostics.find("missing"), std::string::npos) << memory.diagnostics;
     }
 
     // Like clang, a failed compilation leaves no output behind: neither a partial object
