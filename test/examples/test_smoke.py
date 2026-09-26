@@ -169,6 +169,7 @@ def main() -> int:
     leak_src = FIXTURES / "leak.c"
     overflow_src = FIXTURES / "overflow.c"
     broken_src = FIXTURES / "broken.c"
+    codegen_error_src = FIXTURES / "codegen_error.c"
     undefined_ref_src = FIXTURES / "undefined_ref.c"
     alloc_site_src = FIXTURES / "alloc_site.c"
     new_delete_src = FIXTURES / "new_delete.cpp"
@@ -913,6 +914,22 @@ def main() -> int:
             assert_stderr_contains("undeclared_symbol"),
         ],
     )
+    # The instrumented path generates code in process: an error there must reach cc's
+    # own report, with the frontend's warning, instead of LLVM ending the process.
+    tc_instrument_fail_codegen = TestCase(
+        name="instrument_codegen_error_exits_nonzero",
+        plan=CompilePlan(
+            name="instrument_codegen_error_exits_nonzero",
+            sources=[Path("codegen_error.c")],
+            out=None,
+            extra_args=["--instrument", "-c"],
+        ),
+        assertions=[
+            assert_exit_code(1),
+            assert_stderr_contains("ct_not_an_instruction"),
+            assert_stderr_contains("frontend warning before a code-generation error"),
+        ],
+    )
     tc_fail_missing_input = TestCase(
         name="plain_missing_input_exits_nonzero",
         plan=CompilePlan(
@@ -973,6 +990,7 @@ def main() -> int:
         tc_instrument_bounds_stack_objects,
         tc_instrument_emit_llvm,
         tc_instrument_emit_bc,
+        tc_instrument_fail_codegen,
     ]
     runtime_cases = [
         tc_runtime_leak_report,
@@ -1035,7 +1053,8 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix=f"{case.name}_", dir=str(WORK)) as d:
             ws = Path(d)
             copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src,
-                               leak_src, overflow_src, broken_src, undefined_ref_src,
+                               leak_src, overflow_src, broken_src, codegen_error_src,
+                               undefined_ref_src,
                                alloc_site_src, new_delete_src, crash_src,
                                trace_threads_src, trace_objc_src, leak_objc_src,
                                new_delete_objc_src, objc_alloc_forms_src, objc_objects_src,

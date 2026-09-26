@@ -115,4 +115,20 @@ int main(void)
         EXPECT_TRUE(result.success) << result.diagnostics;
     }
 
+    // LLVM ends the process on a code-generation error that no diagnostic handler takes:
+    // compile() must return the failure instead, with the frontend's diagnostics.
+    TEST_F(CompileTest, CodeGenerationErrorFailsCompile)
+    {
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-c", CT_TEST_SOURCE_DIR "/examples/fixtures/codegen_error.c",
+                                  "-o", path("codegen_error.o")},
+                                 compilerlib::OutputMode::ToFile, /*instrument=*/true);
+        EXPECT_FALSE(result.success);
+        EXPECT_NE(result.diagnostics.find("ct_not_an_instruction"), std::string::npos)
+            << result.diagnostics;
+        EXPECT_NE(result.diagnostics.find("frontend warning before a code-generation error"),
+                  std::string::npos)
+            << result.diagnostics;
+    }
+
 } // namespace

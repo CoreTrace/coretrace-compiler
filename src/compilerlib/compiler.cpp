@@ -659,7 +659,12 @@ namespace compilerlib
                     error = "failed to generate LLVM module";
                     return false;
                 }
-                return handler(std::move(module));
+                if (handler(std::move(module)))
+                    return true;
+                // The frontend's diagnostics, its warnings included, precede the failure.
+                error = mergeDiagnostics(ctx_.dc.message, error);
+                resetDiagnostics();
+                return false;
             }
 
             template <typename Action>
