@@ -139,6 +139,20 @@ jobs:
           -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang \
           -DUSE_SHARED_LIB=OFF
 
+  # install-llvm-apt.sh must recover from an apt.llvm.org outage, which the other jobs
+  # only meet by chance: stubs replay one, in the Ubuntu 22.04 image, which lacks gpg.
+  check-install-llvm-apt:
+    name: Check install-llvm-apt.sh retries
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Replay an apt.llvm.org outage
+      run: |
+        docker run --rm -v "${PWD}:/src:ro" ubuntu:22.04 \
+          bash /src/scripts/ci/check-install-llvm-apt.sh
+
   # compilerlib and cc also build against LLVM 16, the newest LLVM that tools such as
   # KLEE 3.x support, on the Ubuntu 22.04 they run on. Its libstdc++ 11 lacks <format>,
   # which the runtime's logger needs, so the runtime is left out. The instrumented IR
