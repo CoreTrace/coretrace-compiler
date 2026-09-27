@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install LLVM/Clang toolchain (vendored signing key, apt retries the mirror)
+# Install LLVM/Clang toolchain (vendored signing key; the script retries the mirror)
 COPY scripts/ci/install-llvm-apt.sh scripts/ci/apt.llvm.org.asc /tmp/ci/
 RUN bash /tmp/ci/install-llvm-apt.sh ${LLVM_VERSION} libclang-${LLVM_VERSION}-dev \
     && rm -rf /tmp/ci /var/lib/apt/lists/*

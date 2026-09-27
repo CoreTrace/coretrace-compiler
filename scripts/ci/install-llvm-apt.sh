@@ -8,7 +8,12 @@
 # single download failed repeatedly on the CI runners (native and QEMU-emulated),
 # taking the Build workflow down with it. The signing key is vendored next to this
 # script (scripts/ci/apt.llvm.org.asc, fingerprint
-# 6084F3CF814B57C1CF12EFD515CF4D18AF4F7421) and apt itself retries the mirror.
+# 6084F3CF814B57C1CF12EFD515CF4D18AF4F7421).
+#
+# apt retries a dropped connection itself (Acquire::Retries). An index it cannot fetch at
+# all, when the mirror is down or its name does not resolve, only makes `apt-get update`
+# warn and exit 0, so every install attempt refreshes the index first: a retry then sees
+# the mirror once it is back.
 #
 # usage: install-llvm-apt.sh <llvm major> [extra apt packages...]
 # Must run as root (or via sudo).
@@ -42,13 +47,17 @@ retry() {
 export DEBIAN_FRONTEND=noninteractive
 APT_OPTS=(-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
 
+update_and_install() {
+  apt-get "${APT_OPTS[@]}" update &&
+    apt-get "${APT_OPTS[@]}" install -y --no-install-recommends "$@"
+}
+
 # shellcheck disable=SC1091
 . /etc/os-release
 CODENAME="${VERSION_CODENAME:?/etc/os-release has no VERSION_CODENAME}"
 
 if ! command -v gpg >/dev/null 2>&1; then
-  retry apt-get "${APT_OPTS[@]}" update
-  retry apt-get "${APT_OPTS[@]}" install -y --no-install-recommends gnupg ca-certificates
+  retry update_and_install gnupg ca-certificates
 fi
 
 install -d -m 0755 /etc/apt/keyrings
@@ -56,7 +65,6 @@ gpg --dearmor --yes -o "${KEYRING}" "${KEY_FILE}"
 echo "deb [signed-by=${KEYRING}] https://apt.llvm.org/${CODENAME}/ llvm-toolchain-${CODENAME}-${LLVM_VERSION} main" \
   > "${SOURCES}"
 
-retry apt-get "${APT_OPTS[@]}" update
 # clang, llvm and the LLVM CMake package (llvm-<v>-dev provides LLVMConfig.cmake).
-retry apt-get "${APT_OPTS[@]}" install -y --no-install-recommends \
+retry update_and_install \
   "clang-${LLVM_VERSION}" "llvm-${LLVM_VERSION}" "llvm-${LLVM_VERSION}-dev" "${EXTRA_PACKAGES[@]}"
