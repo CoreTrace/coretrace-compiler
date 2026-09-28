@@ -5,6 +5,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CC_BIN="${CC_BIN:-${ROOT_DIR}/build/cc}"
 OUT_DIR="${1:-/tmp/ct_autofree_tests}"
+# Optimization flag the fixtures are built with, for instance -O2. Empty keeps the
+# driver's default, -O0.
+CT_TEST_OPT="${CT_TEST_OPT:-}"
 
 if command -v rg >/dev/null 2>&1; then
   MATCH_TOOL="rg"
@@ -113,7 +116,7 @@ run_one() {
 
   echo "==> ${test_file}"
 
-  "${CC_BIN}" --instrument --ct-modules=trace,alloc --ct-autofree \
+  "${CC_BIN}" --instrument ${CT_TEST_OPT:+"${CT_TEST_OPT}"} --ct-modules=trace,alloc --ct-autofree \
     "${test_path}" -o "${bin}" >"${compile_log}" 2>&1 || {
       echo "  FAIL: compile (see ${compile_log})"
       return 1
