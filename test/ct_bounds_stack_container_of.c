@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // container_of applied to an array that is not inside a struct node: the rebuilt
-// pointer starts before the array, and reading its first field reads before it.
+// pointer starts before the array, and reading its first field reads before it. The
+// value read is stored in a volatile so that an optimized build keeps the read.
 #include <stddef.h>
 #include <stdint.h>
 
@@ -16,7 +17,7 @@ int main(void)
 {
     int values[2] = {1, 2};
     struct node* wrong = container_of(&values[0], struct node, value);
-    int key = wrong->key;
+    volatile int key = wrong->key;
     (void)key;
     return 0;
 }

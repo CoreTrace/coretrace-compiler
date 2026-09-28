@@ -108,6 +108,18 @@ jobs:
       run: |
         bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
         bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
+        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests"
+
+    # The passes instrument the optimized IR: the same suites, built at -O2, check that
+    # the diagnostics survive the optimizer and that instrumented code still behaves.
+    - name: Run runtime fixture suites at -O2 (Linux/macOS)
+      if: runner.os == 'Linux' || runner.os == 'macOS'
+      env:
+        CT_TEST_OPT: -O2
+      run: |
+        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests_O2"
+        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests_O2"
+        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests_O2"
 
     - name: Docker tests (multi-arch, Linux)
       if: runner.os == 'Linux' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch')

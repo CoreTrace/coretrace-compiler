@@ -9,6 +9,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CC_BIN="${CC_BIN:-${ROOT_DIR}/build/cc}"
 OUT_DIR="${1:-/tmp/ct_runtime_tests}"
+# Optimization flag the fixtures are built with, for instance -O2. Empty keeps the
+# driver's default, -O0.
+CT_TEST_OPT="${CT_TEST_OPT:-}"
 
 if [[ ! -x "${CC_BIN}" ]]; then
   echo "ERROR: ${CC_BIN} not found or not executable."
@@ -165,7 +168,8 @@ check_one() {
   flags="$(flags_for "${test_file}")"
 
   # shellcheck disable=SC2086
-  "${CC_BIN}" --instrument ${flags} "${ROOT_DIR}/test/${test_file}" -o "${bin}" \
+  "${CC_BIN}" --instrument ${CT_TEST_OPT:+"${CT_TEST_OPT}"} ${flags} \
+    "${ROOT_DIR}/test/${test_file}" -o "${bin}" \
     >"${compile_log}" 2>&1 || {
       echo "  compile failed (see ${compile_log})"
       return 1
