@@ -57,9 +57,6 @@ TESTS=(
 # entry gets removed once the defect is fixed.
 known_failure() {
   case "$1:$(uname -s)-$(uname -m):${CT_TEST_OPT:--O0}" in
-    # #106: libc++ allocations inlined into user code are tracked, their releases
-    # left in libc++ functions are not, so they are reported as leaks.
-    differential/containers.cpp:Darwin-*:-O[123s]) return 0 ;;
   esac
   return 1
 }

@@ -353,7 +353,12 @@ namespace
         }
         if (found == 0)
         {
-            ct_log_skip_event(action, ptr, "unknown");
+            // A block the runtime did not track, such as one the C++ library allocated: its
+            // release is traced like any other, not reported.
+            if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
+            {
+                ct_log(CTLevel::Info, "ct: {} ptr={:p} (unknown)\n", action, ptr);
+            }
             ct_release_by_called_api(ptr, api, kind);
             return;
         }
