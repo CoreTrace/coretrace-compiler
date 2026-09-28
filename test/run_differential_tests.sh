@@ -51,17 +51,19 @@ TESTS=(
   ct_vtable_virtual_base.cpp
 )
 
-# Known defects, each tracked by an issue, matched as <test>:<system>:<optimization>. The
-# program still runs and its failure is reported as XFAIL; an unexpected pass is reported
-# as XPASS and fails the suite, so the entry gets removed once the defect is fixed.
+# Known defects, each tracked by an issue, matched as
+# <test>:<system>-<machine>:<optimization>. The program still runs and its failure is
+# reported as XFAIL; an unexpected pass is reported as XPASS and fails the suite, so the
+# entry gets removed once the defect is fixed.
 known_failure() {
-  case "$1:$(uname -s):${CT_TEST_OPT:--O0}" in
+  case "$1:$(uname -s)-$(uname -m):${CT_TEST_OPT:--O0}" in
     # #106: libc++ allocations inlined into user code are tracked, their releases
     # left in libc++ functions are not, so they are reported as leaks.
-    differential/containers.cpp:Darwin:-O[123s]) return 0 ;;
+    differential/containers.cpp:Darwin-*:-O[123s]) return 0 ;;
     # #107: a slot stored with a pointer vector gives a vector base to the bounds
-    # check, and the instrumented module fails verification.
-    differential/containers.cpp:Linux:-O[23]) return 0 ;;
+    # check, and the instrumented module fails verification. Only the arm64 vectorizer
+    # stores this program's std::shared_ptr as one pointer vector.
+    differential/containers.cpp:Linux-aarch64:-O[23]) return 0 ;;
   esac
   return 1
 }
