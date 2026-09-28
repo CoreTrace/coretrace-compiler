@@ -154,21 +154,25 @@ namespace compilerlib
             return current;
         }
 
+        // The only value a slot ever holds: the slot is used by loads and by exactly one
+        // store, all made to the slot itself. Any other use, such as a field address, a
+        // copy or a call that receives the slot's address, may write it.
         CT_NODISCARD llvm::Value* findSingleStoredValue(llvm::AllocaInst* alloca)
         {
             llvm::Value* stored = nullptr;
             for (llvm::User* user : alloca->users())
             {
+                if (llvm::isa<llvm::LoadInst>(user))
+                {
+                    continue;
+                }
+                auto* intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(user);
+                if (intrinsic && intrinsic->isLifetimeStartOrEnd())
+                {
+                    continue;
+                }
                 auto* store = llvm::dyn_cast<llvm::StoreInst>(user);
-                if (!store)
-                {
-                    continue;
-                }
-                if (store->getPointerOperand() != alloca)
-                {
-                    continue;
-                }
-                if (stored)
+                if (!store || store->getPointerOperand() != alloca || stored)
                 {
                     return nullptr;
                 }
@@ -186,15 +190,17 @@ namespace compilerlib
                 return base ? base : ptr;
             }
 
-            llvm::Value* loadSrc = stripPointerCastsAndGEPs(load->getPointerOperand());
-            auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(loadSrc);
+            // The stored value is the loaded pointer only when the store wrote exactly what
+            // the load reads: the whole slot, and a value of the loaded type, not a vector
+            // that copies several fields at once.
+            auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(load->getPointerOperand());
             if (!alloca)
             {
                 return base ? base : ptr;
             }
 
             llvm::Value* stored = findSingleStoredValue(alloca);
-            if (!stored)
+            if (!stored || stored->getType() != load->getType())
             {
                 return base ? base : ptr;
             }
