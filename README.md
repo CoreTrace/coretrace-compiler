@@ -75,10 +75,11 @@ ctest --test-dir build --output-on-failure # unit tests (GoogleTest 1.17.0, fetc
 python3 test/examples/test_smoke.py        # compiler smoke tests (needs coretrace-testkit)
 bash test/run_autofree_tests.sh            # auto-free fixtures under test/
 bash test/run_runtime_tests.sh             # alloc, new/delete, shadow and vtable fixtures
+bash test/run_differential_tests.sh        # instrumented vs plain builds of bug-free programs
 ```
 
-Both shell runners accept an output directory as first argument, `CC_BIN` to point at
-another compiler binary, and `CT_TEST_OPT` to build the fixtures with an optimization flag
+The shell runners accept an output directory as first argument, `CC_BIN` to point at
+another compiler binary, and `CT_TEST_OPT` to build the programs with an optimization flag
 (for instance `CT_TEST_OPT=-O2`; the default is `-O0`). CI runs all of them on Linux and
 macOS, and runs the shell runners a second time at `-O2`. Unit tests are built only
 when this project is the top-level CMake project; pass `-DCORETRACE_BUILD_UNIT_TESTS=OFF`
