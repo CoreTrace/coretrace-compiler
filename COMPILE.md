@@ -125,13 +125,17 @@ La compilation à plusieurs niveaux doit être gérée.
   - Propagation de `CT_CLANG_EXECUTABLE` (clang trouvé à la configuration).
 
 ## Stratégie de détection toolchain / stdlib
-1. **clang path** :
+1. **clang path** (jamais exécuté pour compiler, il situe l'installation pour le driver) :
    - `CT_CLANG` (env) →
-   - `CT_CLANG_EXECUTABLE` (détecté par CMake) →
+   - `CT_LLVM_BIN_DIR` et `CT_CLANG_EXECUTABLE` (détectés par CMake) →
    - `clang-${LLVM_VERSION_MAJOR}` →
    - `clang` / `clang++`.
+   - Sans aucun clang, le chemin est déduit du resource dir selon la disposition standard de
+     LLVM (`<prefix>/lib/clang/<version>` → `<prefix>/bin/clang`, qui n'a pas besoin d'exister) ;
+     erreur seulement si le resource dir est lui aussi introuvable (#116).
 2. **resource dir** :
-   - calcul via `clang::driver::Driver::GetResourcesPath(clang_path)` si dispo,
+   - `-resource-dir` dans les arguments, sinon `CT_CLANG_RESOURCE_DIR` (env),
+   - sinon calcul via `clang::driver::Driver::GetResourcesPath(clang_path)` si un clang est trouvé,
    - sinon fallback `CLANG_RESOURCE_DIR` (CMake).
 3. **mode C++** :
    - détecté via `-x c++`, extensions `.cpp/.cc/.cxx/.mm`, `-stdlib=`, `-lstdc++`/`-lc++`,
