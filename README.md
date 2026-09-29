@@ -142,11 +142,11 @@ Notes:
 - All other arguments are forwarded to clang (e.g. `-O2`, `-g`, `-I`, `-D`, `-L`, `-l`, `-std=...`).
 - Alloc instrumentation rewrites `malloc/free/calloc/realloc/aligned_alloc/posix_memalign`,
   `mmap/munmap` and `sbrk/brk`, the global C++ `operator new` (scalar and array, plain and
-  `nothrow`), and the global
-  `operator delete` in its scalar, array, sized, `nothrow` and destroying forms. Aligned
-  `operator new` (`std::align_val_t`) is not rewritten, so its blocks are not tracked. Aligned
-  `operator delete` is rewritten on Itanium targets (Linux, macOS) only: the Microsoft CRT
-  allocates aligned blocks with `_aligned_malloc`, which only the aligned delete may release.
+  `nothrow`), and the global `operator delete` in its scalar, array, sized, `nothrow` and
+  destroying forms. Aligned `operator new` (`std::align_val_t`) is not rewritten, so its blocks
+  are not tracked. Aligned `operator delete` is rewritten on Itanium targets (Linux, macOS) only:
+  the Microsoft CRT allocates aligned blocks with `_aligned_malloc`, which only the aligned
+  delete may release.
 - Allocations are tracked where user code makes them: an allocation made by system-header code,
   such as a standard container's, stays untracked, even once inlined into user code. Releases go
   through the runtime everywhere, system headers included, since library code such as
