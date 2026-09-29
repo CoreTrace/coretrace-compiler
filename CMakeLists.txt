@@ -186,6 +186,7 @@ if(CORETRACE_COMPILER_BUILD_RUNTIME)
     ${CT_RUNTIME_PLATFORM_SOURCES}
     src/runtime/ct_runtime_bounds.cpp
     src/runtime/ct_runtime_logging.cpp
+    src/runtime/ct_runtime_quarantine.cpp
     src/runtime/ct_runtime_shadow.cpp
     src/runtime/ct_runtime_state.cpp
     src/runtime/ct_runtime_trace.cpp

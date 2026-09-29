@@ -61,6 +61,7 @@ expect_stderr() {
     ct_bounds_container_of_underflow.c) echo "heap-buffer-overflow" ;;
     ct_bounds_container_of_underflow_shadow.c) echo "heap-buffer-overflow" ;;
     ct_bounds_container_of_overflow.c) echo "heap-buffer-overflow" ;;
+    ct_bounds_heap_use_after_free.c) echo "heap-use-after-free" ;;
     ct_bounds_stack_overflow.c|ct_bounds_stack_callee.c|ct_bounds_stack_container_of.c|\
     ct_bounds_stack_default_modules.c)
       echo "stack-buffer-overflow" ;;
@@ -89,14 +90,15 @@ expect_stdout() {
     ct_vtable_multi.cpp) echo "Derived 42" ;;
     ct_vtable_virtual_base.cpp) echo "value=99" ;;
     ct_new_delete_library.cpp) echo "owned=7 array=4 pointers=16 counts=5 shared=64" ;;
+    ct_bounds_freed_address_reuse.c) echo "sum=" ;;
     *) echo "" ;;
   esac
 }
 
 # Substring that must NOT appear on stderr for any fixture, except the fixture whose
 # expect_stderr is that exact diagnostic.
-FORBIDDEN_STDERR=("heap-buffer-overflow" "stack-buffer-overflow" "mutex lock failed"
-                  "terminating due to")
+FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-overflow"
+                  "mutex lock failed" "terminating due to")
 
 # Fixtures whose failure is a known, tracked defect. The suite still runs them and
 # reports XFAIL; an unexpected pass is reported as XPASS and fails the suite so the
@@ -134,6 +136,8 @@ TESTS=(
   ct_bounds_stack_container_of.c
   ct_bounds_stack_valid.c
   ct_bounds_stack_unwind_valid.cpp
+  ct_bounds_freed_address_reuse.c
+  ct_bounds_heap_use_after_free.c
   ct_realloc_zero.c
   ct_new_delete.cpp
   ct_new_delete_sized.cpp

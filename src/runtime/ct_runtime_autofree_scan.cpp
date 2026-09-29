@@ -8,6 +8,7 @@
 // so it only exists where that is possible; elsewhere the entry points below are
 // no-ops and every auto-free decision rests on the compile-time analysis alone.
 #include "ct_runtime_alloc_internal.h"
+#include "ct_runtime_quarantine.h"
 
 #include <atomic>
 #include <chrono>
@@ -854,7 +855,8 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
         ct_log(CTLevel::Warn, "{}auto-free(scan) kind={} ptr={:p} size={} site={}{}\n",
                ct_color(CTColor::BgBrightYellow), ct_alloc_kind_label(item.kind), item.ptr,
                item.size, ct_site_name(item.site), ct_color(CTColor::Reset));
-        ::operator delete(item.ptr);
+        ct_quarantine_push(
+            {item.ptr, item.size, static_cast<unsigned char>(CtReleaseApi::Delete), item.kind});
         break;
     case CT_ALLOC_KIND_NEW_ARRAY:
         if (ct_is_enabled(CT_FEATURE_SHADOW))
@@ -864,16 +866,14 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
         ct_log(CTLevel::Warn, "{}auto-free(scan) kind={} ptr={:p} size={} site={}{}\n",
                ct_color(CTColor::BgBrightYellow), ct_alloc_kind_label(item.kind), item.ptr,
                item.size, ct_site_name(item.site), ct_color(CTColor::Reset));
-        ::operator delete[](item.ptr);
+        ct_quarantine_push({item.ptr, item.size,
+                            static_cast<unsigned char>(CtReleaseApi::DeleteArray), item.kind});
         break;
     case CT_ALLOC_KIND_MMAP:
-        if (ct_is_enabled(CT_FEATURE_SHADOW))
-        {
-            ct_shadow_poison_range(item.ptr, item.size);
-        }
         ct_log(CTLevel::Warn, "{}auto-free(scan) kind={} ptr={:p} size={} site={}{}\n",
                ct_color(CTColor::BgBrightYellow), ct_alloc_kind_label(item.kind), item.ptr,
                item.size, ct_site_name(item.site), ct_color(CTColor::Reset));
+        ct_forget_returned_block(item.ptr, item.size);
         (void)munmap(item.ptr, item.size);
         break;
     case CT_ALLOC_KIND_SBRK:
@@ -886,10 +886,7 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
             static_cast<char*>(item.ptr) + static_cast<ptrdiff_t>(item.size) == current)
         {
             (void)sbrk(-static_cast<intptr_t>(item.size));
-            if (ct_is_enabled(CT_FEATURE_SHADOW))
-            {
-                ct_shadow_poison_range(item.ptr, item.size);
-            }
+            ct_forget_returned_block(item.ptr, item.size);
             ct_log(CTLevel::Warn, "{}auto-free(scan) kind={} ptr={:p} size={} site={}{}\n",
                    ct_color(CTColor::BgBrightYellow), ct_alloc_kind_label(item.kind), item.ptr,
                    item.size, ct_site_name(item.site), ct_color(CTColor::Reset));
@@ -914,7 +911,8 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
         ct_log(CTLevel::Warn, "{}auto-free(scan) kind={} ptr={:p} size={} site={}{}\n",
                ct_color(CTColor::BgBrightYellow), ct_alloc_kind_label(item.kind), item.ptr,
                item.size, ct_site_name(item.site), ct_color(CTColor::Reset));
-        free(item.ptr);
+        ct_quarantine_push(
+            {item.ptr, item.size, static_cast<unsigned char>(CtReleaseApi::Free), item.kind});
         break;
     }
 }

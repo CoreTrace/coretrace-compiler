@@ -61,17 +61,6 @@ known_failure() {
   return 1
 }
 
-# Known defects whose failure depends on the addresses the allocator hands out, so a run
-# may pass: a failure is reported as XFAIL, a pass as OK.
-allocator_dependent_failure() {
-  case "$1" in
-    # #105: a string strdup allocates at the address of a freed block is reported as
-    # a use-after-free.
-    differential/hash_table.c) return 0 ;;
-  esac
-  return 1
-}
-
 PASS=0
 FAIL=0
 XFAIL=0
@@ -144,9 +133,6 @@ for t in "${TESTS[@]}"; do
   if check_one "${t}"; then
     echo "  OK"
     PASS=$((PASS + 1))
-  elif allocator_dependent_failure "${t}"; then
-    echo "  XFAIL"
-    XFAIL=$((XFAIL + 1))
   else
     echo "  FAIL"
     FAIL=$((FAIL + 1))

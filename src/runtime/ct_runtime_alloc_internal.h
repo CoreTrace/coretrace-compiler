@@ -37,6 +37,19 @@ enum
     CT_ALLOC_KIND_OBJC = 5
 };
 
+// The function a block is released with, in the program's call or once it leaves the
+// quarantine (ct_runtime_quarantine.h), where it is stored as ct_quarantine_item::api.
+enum class CtReleaseApi : unsigned char
+{
+    Free,
+    Delete,
+    DeleteArray,
+    DeleteNothrow,
+    DeleteArrayNothrow,
+    DeleteDestroying,
+    DeleteArrayDestroying
+};
+
 // One allocation the scan proved unreachable and is about to release.
 struct ct_autofree_free_item
 {
@@ -66,6 +79,11 @@ CT_NODISCARD CT_NOINSTR struct ct_alloc_entry* ct_table_find_entry(const void* p
 // reuses that memory without telling the runtime.
 CT_NOINSTR void ct_track_allocation(void* ptr, size_t size, const char* site, unsigned char kind);
 CT_NODISCARD CT_NOINSTR size_t ct_forget_allocation(void* ptr, unsigned char kind);
+
+// For blocks that go back to the system at once instead of to the quarantine (munmap, a
+// shrinking sbrk): drops the freed record of `ptr` and restores its shadow, so that a
+// later mapping at that address is not reported. ct_alloc_lock not held.
+CT_NOINSTR void ct_forget_returned_block(void* ptr, size_t size);
 
 // Conservative auto-free scan. A no-op build is provided where the platform has
 // no thread-suspension support, so callers never need a guard.

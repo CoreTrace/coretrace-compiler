@@ -143,6 +143,12 @@ Notes:
   through the runtime everywhere, system headers included, since library code such as
   `std::unique_ptr` releases blocks user code allocated. The release of an untracked block is only
   traced, marked `(unknown)`.
+- Released blocks go to a quarantine instead of back to the allocator, as with AddressSanitizer:
+  while a block is there, no other allocation receives its address, so an access through a
+  dangling pointer is reported as `heap-use-after-free`. `realloc` of a tracked block moves it to
+  a new block and quarantines the old one. The quarantine holds up to `CT_QUARANTINE_MB` megabytes
+  (256 by default); past that, the oldest blocks are released for real, and a use-after-free or
+  double free of them is no longer reported. Unmapped memory (`munmap`) is not quarantined.
 - Bounds checks cover heap blocks and the stack objects of running frames, reported as
   `stack-buffer-overflow`. A local array or struct is tracked while its function runs when its
   address escapes, for instance to a callee, or when an access to it cannot be proven in bounds at
