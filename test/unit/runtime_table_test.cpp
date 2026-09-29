@@ -3,6 +3,10 @@
 // The allocation table is process-global; every test releases what it inserts so
 // the leak report at exit stays empty and tests do not observe each other.
 #include "ct_runtime_internal.h"
+#include "ct_runtime_quarantine.h"
+#if !defined(_WIN32)
+#include "ct_runtime_alloc_internal.h"
+#endif
 
 #include <gtest/gtest.h>
 
@@ -129,6 +133,42 @@ namespace
         EXPECT_STREQ(site, "second");
         ASSERT_EQ(ct_table_remove(ptr, nullptr, nullptr, nullptr), 1);
     }
+
+#if !defined(_WIN32)
+    // The POSIX table is open-addressed; the Windows one is keyed by address, so no insert
+    // can land on another address's record there.
+    //
+    // A block recorded as freed is in the quarantine, still allocated: an insert for another
+    // address probing through its slot must not take it, or an access to the block would
+    // no longer be reported as a use-after-free.
+    TEST(AllocTable, InsertKeepsTheRecordOfAFreedBlock)
+    {
+        TableLock lock;
+        void* freed = fakeAddress(1, 0x50000000u);
+        const size_t home = ct_hash_ptr(freed, ct_alloc_table_mask);
+        void* other = nullptr;
+        for (uintptr_t i = 2; !other && i < 1000000; ++i)
+        {
+            if (ct_hash_ptr(fakeAddress(i, 0x50000000u), ct_alloc_table_mask) == home)
+            {
+                other = fakeAddress(i, 0x50000000u);
+            }
+        }
+        ASSERT_NE(other, nullptr);
+
+        ASSERT_EQ(ct_table_insert(freed, 16, 16, "freed", kKindMalloc), 1);
+        ASSERT_EQ(ct_table_remove(freed, nullptr, nullptr, nullptr), 1);
+        ASSERT_EQ(ct_table_insert(other, 16, 16, "other", kKindMalloc), 1);
+
+        unsigned char state = 0;
+        EXPECT_EQ(ct_table_lookup(freed, nullptr, nullptr, nullptr, &state), 1);
+        EXPECT_EQ(state, CT_ENTRY_FREED);
+
+        ASSERT_EQ(ct_table_remove(other, nullptr, nullptr, nullptr), 1);
+        ct_table_forget_freed(other);
+        ct_table_forget_freed(freed);
+    }
+#endif
 
     TEST(AllocTable, GrowsPastTheInitialCapacityAndKeepsEveryEntry)
     {
