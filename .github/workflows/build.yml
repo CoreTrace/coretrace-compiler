@@ -225,6 +225,51 @@ jobs:
         bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests_O2"
         bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests_O2"
 
+  # compilerlib, cc and the tests built with AddressSanitizer and LeakSanitizer
+  # (ENABLE_DEBUG_ASAN). The runtime and its logger are built without them, since
+  # instrumented programs link them without the sanitizer's runtime.
+  build-asan:
+    name: Build with AddressSanitizer (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake ninja-build python3-venv
+        sudo bash scripts/ci/install-llvm-apt.sh 20 llvm-20 llvm-20-dev clang-20 libclang-20-dev \
+          libclang-rt-20-dev
+
+    - name: Build
+      run: |
+        cmake -S . -B build -G Ninja -DENABLE_DEBUG_ASAN=ON \
+          -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+          -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm \
+          -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang \
+          -DUSE_SHARED_LIB=OFF
+        cmake --build build
+
+    - name: Run unit tests
+      run: ctest --test-dir build --output-on-failure
+
+    - name: Run Python smoke tests
+      run: |
+        python3 -m venv .venv
+        source .venv/bin/activate
+        python -m pip install --upgrade pip
+        python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git
+        python test/examples/test_smoke.py
+        python test/examples/test_extern_project.py
+        python test/examples/test_help_smoke.py
+
+    - name: Run runtime fixture suites
+      run: |
+        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
+        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
+        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests"
+
   build-windows:
     name: Build on Windows (pinned LLVM 20.1.0)
     runs-on: windows-2022
