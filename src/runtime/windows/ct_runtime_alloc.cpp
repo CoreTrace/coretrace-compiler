@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "ct_runtime_internal.h"
+#include "ct_runtime_quarantine.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -319,6 +320,32 @@ namespace
                                                       size_t* size_out, const char** site_out,
                                                       unsigned char* kind_out);
 
+    // The release function matching an allocation kind, for blocks the runtime releases
+    // itself (auto-free).
+    CT_NODISCARD CT_NOINSTR CtReleaseApi ct_release_api_for_kind(unsigned char kind)
+    {
+        switch (kind)
+        {
+        case CT_ALLOC_KIND_NEW:
+            return CtReleaseApi::Delete;
+        case CT_ALLOC_KIND_NEW_ARRAY:
+            return CtReleaseApi::DeleteArray;
+        default:
+            return CtReleaseApi::Free;
+        }
+    }
+
+    // For mappings, which go back to the system at once instead of to the quarantine: drops
+    // the freed record of `ptr` and restores its shadow, so that a later mapping at that
+    // address is not reported. ct_alloc_lock not held.
+    CT_NOINSTR void ct_forget_returned_block(void* ptr, size_t size)
+    {
+        ct_lock_acquire();
+        ct_table_forget_freed(ptr);
+        ct_lock_release();
+        ct_shadow_unpoison_range(ptr, size);
+    }
+
     CT_NOINSTR void ct_release_tracked_pointer(void* ptr, CtReleaseApi api, const char* site)
     {
         ct_init_env_once();
@@ -369,7 +396,7 @@ namespace
         {
             ct_log_deallocator_mismatch(action, ptr, kind, ct_expected_kind_label(api), alloc_site);
         }
-        ct_release_by_called_api(ptr, api, kind);
+        ct_quarantine_push({ptr, size, static_cast<unsigned char>(api), kind});
     }
 
     CT_NODISCARD CT_NOINSTR DWORD ct_translate_page_protection(int prot)
@@ -483,11 +510,18 @@ namespace
             return;
         }
 
-        ct_track_shadow_free(ptr, size);
         ct_log(CTLevel::Warn, "ct: auto-free ptr={:p} size={} site={}\n", ptr, size,
                ct_site_name(site));
 
-        ct_release_autofree_memory(ptr, kind);
+        if (kind == CT_ALLOC_KIND_MMAP)
+        {
+            ct_forget_returned_block(ptr, size);
+            ct_release_autofree_memory(ptr, kind);
+            return;
+        }
+        ct_track_shadow_free(ptr, size);
+        ct_quarantine_push(
+            {ptr, size, static_cast<unsigned char>(ct_release_api_for_kind(kind)), kind});
     }
 
     // Runs as a static destructor, possibly after the logger's own state is gone: only the
@@ -576,6 +610,23 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t s
     {
         return 0;
     }
+}
+
+// The allocator's side of the quarantine, see ct_runtime_quarantine.h.
+CT_NOINSTR void ct_table_forget_freed(void* ptr)
+{
+    auto it = ct_alloc_table.find(ptr);
+    if (it != ct_alloc_table.end() &&
+        (it->second.state == CT_ENTRY_FREED || it->second.state == CT_ENTRY_AUTOFREED))
+    {
+        ct_alloc_table.erase(it);
+    }
+}
+
+CT_NOINSTR void ct_quarantine_release(const ct_quarantine_item& item)
+{
+    ct_shadow_unpoison_range(item.ptr, item.size);
+    ct_release_by_called_api(item.ptr, static_cast<CtReleaseApi>(item.api), item.kind);
 }
 
 CT_NODISCARD CT_NOINSTR int ct_table_remove(void* ptr, size_t* size_out, size_t* req_size_out,
@@ -789,6 +840,33 @@ extern "C"
             return nullptr;
         }
 
+        size_t old_req_size = 0;
+        unsigned char state = CT_ENTRY_EMPTY;
+        ct_lock_acquire();
+        (void)ct_table_lookup(ptr, nullptr, &old_req_size, nullptr, &state);
+        ct_lock_release();
+        // A block recorded as freed is in the quarantine, which will release it: the C
+        // library must not release it first.
+        if (state == CT_ENTRY_FREED || state == CT_ENTRY_AUTOFREED)
+        {
+            ct_log(CTLevel::Warn, "ct: realloc skipped ptr={:p} (already freed) site={}\n", ptr,
+                   ct_site_name(site));
+            return nullptr;
+        }
+        // A tracked block is never resized in place, nor released by the C library: the
+        // contents move to a new block and the old one goes to the quarantine, as on POSIX.
+        if (state == CT_ENTRY_USED)
+        {
+            void* moved = __ct_malloc(size, site);
+            if (!moved)
+            {
+                return nullptr;
+            }
+            std::memcpy(moved, ptr, old_req_size < size ? old_req_size : size);
+            __ct_free(ptr, site);
+            return moved;
+        }
+
         void* new_ptr = std::realloc(ptr, size);
         if (!new_ptr)
         {
@@ -877,9 +955,13 @@ extern "C"
         if (ct_is_enabled(CT_FEATURE_ALLOC))
         {
             ct_lock_acquire();
-            (void)ct_remove_for_release(addr, CT_ENTRY_FREED, &size, &alloc_site, &kind);
+            const int found =
+                ct_remove_for_release(addr, CT_ENTRY_FREED, &size, &alloc_site, &kind);
             ct_lock_release();
-            ct_track_shadow_free(addr, size);
+            if (found > 0)
+            {
+                ct_forget_returned_block(addr, size);
+            }
         }
 
         const BOOL ok = addr ? VirtualFree(addr, 0, MEM_RELEASE) : TRUE;

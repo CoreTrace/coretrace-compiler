@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "ct_runtime_alloc_internal.h"
+#include "ct_runtime_quarantine.h"
 
 #include <cstdlib>
 #include <new>
@@ -747,15 +748,42 @@ CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, con
 
     size_t old_size = 0;
     size_t old_req_size = 0;
-    int had_entry = 0;
+    unsigned char old_state = CT_ENTRY_EMPTY;
 
     ct_lock_acquire();
     if (ptr)
-        had_entry = ct_table_lookup(ptr, &old_size, &old_req_size, nullptr, nullptr);
+        (void)ct_table_lookup(ptr, &old_size, &old_req_size, nullptr, &old_state);
 
     ct_lock_release();
 
-    void* new_ptr = realloc(ptr, size);
+    // A block recorded as freed is in the quarantine, which will release it: the C library
+    // must not release it first.
+    if (old_state == CT_ENTRY_FREED || old_state == CT_ENTRY_AUTOFREED)
+    {
+        ct_log(CTLevel::Warn, "{}tracing-realloc ptr={:p} (freed) site={}{}\n",
+               ct_color(CTColor::Red), ptr, ct_site_name(site), ct_color(CTColor::Reset));
+        return nullptr;
+    }
+
+    // A tracked block is never resized in place, nor released by the C library: the
+    // contents move to a new block and the old one goes to the quarantine, so that a
+    // pointer still aiming at it reads a block recorded as freed. realloc(ptr, 0) releases
+    // it the same way and returns NULL. Other blocks, which the runtime keeps no record of,
+    // go through the C library's realloc.
+    const bool tracked = old_state == CT_ENTRY_USED;
+    void* new_ptr = nullptr;
+    if (tracked && size > 0)
+    {
+        new_ptr = malloc(size);
+        if (new_ptr)
+        {
+            std::memcpy(new_ptr, ptr, old_req_size < size ? old_req_size : size);
+        }
+    }
+    else if (!tracked)
+    {
+        new_ptr = realloc(ptr, size);
+    }
     if (!new_ptr && size > 0)
     {
         if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
@@ -769,25 +797,19 @@ CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, con
     size_t real_size = ct_malloc_usable_size(new_ptr, size);
 
     ct_lock_acquire();
-    if (new_ptr)
-    {
-        if (ptr && new_ptr != ptr)
-            (void)ct_table_remove(ptr, nullptr, nullptr, nullptr);
-
-        if (!ct_table_insert(new_ptr, size, real_size, site, CT_ALLOC_KIND_MALLOC))
-        {
-            ct_warn_alloc_table_full();
-        }
-    }
-    else if (ptr && size == 0)
+    if (tracked)
     {
         (void)ct_table_remove(ptr, nullptr, nullptr, nullptr);
+    }
+    if (new_ptr && !ct_table_insert(new_ptr, size, real_size, site, CT_ALLOC_KIND_MALLOC))
+    {
+        ct_warn_alloc_table_full();
     }
     ct_lock_release();
 
     if (ct_is_enabled(CT_FEATURE_SHADOW))
     {
-        if (ptr && new_ptr != ptr && had_entry && old_size)
+        if (tracked && old_size)
         {
             ct_shadow_poison_range(ptr, old_size);
         }
@@ -795,10 +817,11 @@ CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, con
         {
             ct_shadow_track_alloc(new_ptr, size, real_size);
         }
-        else if (ptr && size == 0 && had_entry && old_size)
-        {
-            ct_shadow_poison_range(ptr, old_size);
-        }
+    }
+    if (tracked)
+    {
+        ct_quarantine_push(
+            {ptr, old_size, static_cast<unsigned char>(CtReleaseApi::Free), CT_ALLOC_KIND_MALLOC});
     }
 
     if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
@@ -831,16 +854,6 @@ CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, con
 // The tracked-release path shared by every operator delete the compiler rewrites.
 // Only the deallocation call itself differs between them; everything before it, the
 // table removal and the diagnostics, is common.
-enum class CtReleaseApi : unsigned char
-{
-    Delete,
-    DeleteArray,
-    DeleteNothrow,
-    DeleteArrayNothrow,
-    DeleteDestroying,
-    DeleteArrayDestroying
-};
-
 CT_NODISCARD CT_NOINSTR static int ct_release_api_is_array(CtReleaseApi api)
 {
     return api == CtReleaseApi::DeleteArray || api == CtReleaseApi::DeleteArrayNothrow ||
@@ -851,6 +864,9 @@ CT_NOINSTR static void ct_release_by_api(void* ptr, CtReleaseApi api)
 {
     switch (api)
     {
+    case CtReleaseApi::Free:
+        free(ptr);
+        return;
     case CtReleaseApi::DeleteNothrow:
         ::operator delete(ptr, std::nothrow);
         return;
@@ -866,6 +882,30 @@ CT_NOINSTR static void ct_release_by_api(void* ptr, CtReleaseApi api)
         ::operator delete(ptr);
         return;
     }
+}
+
+// The allocator's side of the quarantine, see ct_runtime_quarantine.h.
+CT_NOINSTR void ct_table_forget_freed(void* ptr)
+{
+    struct ct_alloc_entry* entry = ct_table_find_entry(ptr);
+    if (entry && (entry->state == CT_ENTRY_FREED || entry->state == CT_ENTRY_AUTOFREED))
+    {
+        entry->state = CT_ENTRY_TOMB;
+    }
+}
+
+CT_NOINSTR void ct_forget_returned_block(void* ptr, size_t size)
+{
+    ct_lock_acquire();
+    ct_table_forget_freed(ptr);
+    ct_lock_release();
+    ct_shadow_unpoison_range(ptr, size);
+}
+
+CT_NOINSTR void ct_quarantine_release(const ct_quarantine_item& item)
+{
+    ct_shadow_unpoison_range(item.ptr, item.size);
+    ct_release_by_api(item.ptr, static_cast<CtReleaseApi>(item.api));
 }
 
 CT_NOINSTR static void ct_release_tracked_pointer(void* ptr, CtReleaseApi api, const char* site)
@@ -931,7 +971,9 @@ CT_NOINSTR static void ct_release_tracked_pointer(void* ptr, CtReleaseApi api, c
                size, ct_color(CTColor::Reset));
     }
 
-    ct_release_by_api(ptr, api);
+    const unsigned char kind =
+        ct_release_api_is_array(api) ? CT_ALLOC_KIND_NEW_ARRAY : CT_ALLOC_KIND_NEW;
+    ct_quarantine_push({ptr, size, static_cast<unsigned char>(api), kind});
 }
 
 extern "C"
@@ -1110,9 +1152,9 @@ extern "C"
         }
         ct_lock_release();
 
-        if (ct_is_enabled(CT_FEATURE_SHADOW) && found > 0)
+        if (found > 0)
         {
-            ct_shadow_poison_range(addr, size);
+            ct_forget_returned_block(addr, size);
         }
 
         if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
@@ -1169,11 +1211,11 @@ extern "C"
             size_t req_size = 0;
             const char* alloc_site = nullptr;
             ct_lock_acquire();
-            (void)ct_table_remove(new_break, &size, &req_size, &alloc_site);
+            const int found = ct_table_remove(new_break, &size, &req_size, &alloc_site);
             ct_lock_release();
-            if (ct_is_enabled(CT_FEATURE_SHADOW) && size)
+            if (found > 0)
             {
-                ct_shadow_poison_range(new_break, size);
+                ct_forget_returned_block(new_break, size);
             }
         }
 
@@ -1237,10 +1279,7 @@ extern "C"
                 static_cast<char*>(ptr) + static_cast<ptrdiff_t>(size) == current)
             {
                 (void)sbrk(-static_cast<intptr_t>(size));
-                if (ct_is_enabled(CT_FEATURE_SHADOW))
-                {
-                    ct_shadow_poison_range(ptr, size);
-                }
+                ct_forget_returned_block(ptr, size);
                 ct_log(CTLevel::Warn, "{}auto-free ptr={:p} size={} site={}{}\n",
                        ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
                        ct_color(CTColor::Reset));
@@ -1257,29 +1296,36 @@ extern "C"
             return;
         }
 
-        if (ct_is_enabled(CT_FEATURE_SHADOW))
-        {
-            ct_shadow_poison_range(ptr, size);
-        }
-
         ct_log(CTLevel::Warn, "{}auto-free ptr={:p} size={} site={}{}\n",
                ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
                ct_color(CTColor::Reset));
 
-        switch (api)
+        if (api == CtAutoFreeApi::Munmap)
         {
-        case CtAutoFreeApi::Munmap:
+            ct_forget_returned_block(ptr, size);
             (void)munmap(ptr, size);
             return;
+        }
+
+        if (ct_is_enabled(CT_FEATURE_SHADOW))
+        {
+            ct_shadow_poison_range(ptr, size);
+        }
+        switch (api)
+        {
         case CtAutoFreeApi::Delete:
-            ::operator delete(ptr);
+            ct_quarantine_push(
+                {ptr, size, static_cast<unsigned char>(CtReleaseApi::Delete), CT_ALLOC_KIND_NEW});
             return;
         case CtAutoFreeApi::DeleteArray:
-            ::operator delete[](ptr);
+            ct_quarantine_push({ptr, size, static_cast<unsigned char>(CtReleaseApi::DeleteArray),
+                                CT_ALLOC_KIND_NEW_ARRAY});
             return;
         case CtAutoFreeApi::Free:
         case CtAutoFreeApi::Sbrk:
-            free(ptr);
+        case CtAutoFreeApi::Munmap:
+            ct_quarantine_push(
+                {ptr, size, static_cast<unsigned char>(CtReleaseApi::Free), CT_ALLOC_KIND_MALLOC});
             return;
         }
     }
@@ -1423,7 +1469,8 @@ extern "C"
             ct_log(CTLevel::Info, "{}tracing-free ptr={:p} size={}{}\n", ct_color(CTColor::Cyan),
                    ptr, size, ct_color(CTColor::Reset));
         }
-        free(ptr);
+        ct_quarantine_push(
+            {ptr, size, static_cast<unsigned char>(CtReleaseApi::Free), CT_ALLOC_KIND_MALLOC});
     }
 
     CT_NOINSTR void __ct_delete(void* ptr, const char* site)
