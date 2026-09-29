@@ -312,6 +312,7 @@ else()
     clangCodeGen
     clangDriver
     clangFrontend
+    clangFrontendTool
     clangLex
     clangParse
     clangSema

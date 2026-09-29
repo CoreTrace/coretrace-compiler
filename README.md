@@ -64,7 +64,8 @@ cmake --install build --prefix /opt/coretrace
 The prefix contains `bin/cc`, `lib/libct_instrument_runtime.a`, `lib/libcoretrace_logger.a`
 and `include/`. `cc` finds the runtime archives relative to its own location, so the prefix can
 be moved. Overrides: `CT_RUNTIME_LIB_DIR` (directory holding both archives), `CT_CLANG`
-(clang executable), `CT_CLANG_RESOURCE_DIR` (clang resource directory).
+(clang executable), `CT_CLANG_RESOURCE_DIR` (clang resource directory). Compilation runs in
+process in every mode: the clang executable is only run to assemble `.s` sources.
 
 ## Tests
 
