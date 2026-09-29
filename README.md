@@ -65,7 +65,10 @@ The prefix contains `bin/cc`, `lib/libct_instrument_runtime.a`, `lib/libcoretrac
 and `include/`. `cc` finds the runtime archives relative to its own location, so the prefix can
 be moved. Overrides: `CT_RUNTIME_LIB_DIR` (directory holding both archives), `CT_CLANG`
 (clang executable), `CT_CLANG_RESOURCE_DIR` (clang resource directory). Compilation runs in
-process in every mode: the clang executable is only run to assemble `.s` sources.
+process in every mode: the clang executable is only run to assemble `.s` sources. Without any
+clang, Clang's resource directory is enough (`CT_CLANG_RESOURCE_DIR`, or the one recorded at
+build time): the driver then assumes the standard LLVM layout, `<prefix>/bin/clang` next to
+`<prefix>/lib/clang/<version>`.
 
 ## Tests
 

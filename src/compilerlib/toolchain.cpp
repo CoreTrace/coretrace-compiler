@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "compilerlib/toolchain.hpp"
+#include "toolchain_internal.hpp"
 
 #include <clang/Driver/Driver.h>
 #include <llvm/ADT/StringRef.h>
@@ -172,6 +173,8 @@ namespace compilerlib
         {
             bool has_driver_mode = false;
             bool has_resource_dir = false;
+            // The -resource-dir value, when the arguments give one.
+            std::string resource_dir;
             bool has_sysroot = false;
             bool needs_cxx_driver = false;
             bool has_source_inputs = false;
@@ -206,7 +209,9 @@ namespace compilerlib
                     {
                         scan.has_resource_dir = true;
                         if (arg == "-resource-dir" && i + 1 < args.size())
-                            ++i;
+                            scan.resource_dir = args[++i];
+                        else if (arg != "-resource-dir")
+                            scan.resource_dir = arg.drop_front(sizeof("-resource-dir=") - 1).str();
                         continue;
                     }
                     if (arg == "-isysroot")
@@ -470,6 +475,21 @@ namespace compilerlib
         return false;
     }
 
+    std::string driverClangPath(const std::string& foundClang, const std::string& resourceDir)
+    {
+        if (!foundClang.empty() || resourceDir.empty())
+            return foundClang;
+
+        llvm::StringRef dir = resourceDir;
+        while (dir.size() > 1 && llvm::sys::path::is_separator(dir.back()))
+            dir = dir.drop_back();
+        // <prefix>/lib/clang/<version>: three levels up is the prefix.
+        llvm::SmallString<256> path(llvm::sys::path::parent_path(
+            llvm::sys::path::parent_path(llvm::sys::path::parent_path(dir))));
+        llvm::sys::path::append(path, "bin", "clang");
+        return path.str().str();
+    }
+
     CT_NODISCARD bool resolveDriverConfig(const std::vector<std::string>& args, DriverConfig& out,
                                           std::string& error)
     {
@@ -503,18 +523,22 @@ namespace compilerlib
         if (scan.has_driver_mode)
             out.force_cxx_driver = false;
 
-        out.clang_path = findClangPath();
-        if (out.clang_path.empty())
-        {
-            error = "unable to find clang executable in PATH";
-            return false;
-        }
-
+        const std::string foundClang = findClangPath();
+        std::string resourceDir = scan.resource_dir;
         if (!scan.has_resource_dir)
         {
-            out.resource_dir = detectResourceDir(out.clang_path);
+            out.resource_dir = detectResourceDir(foundClang);
             if (!out.resource_dir.empty())
                 out.add_resource_dir = true;
+            resourceDir = out.resource_dir;
+        }
+
+        out.clang_path = driverClangPath(foundClang, resourceDir);
+        if (out.clang_path.empty())
+        {
+            error = "unable to find Clang's resource directory: set CT_CLANG_RESOURCE_DIR, or "
+                    "CT_CLANG to a clang executable";
+            return false;
         }
 
         if (!scan.has_sysroot)
