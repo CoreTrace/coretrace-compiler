@@ -102,7 +102,10 @@ La compilation à plusieurs niveaux doit être gérée.
 - **Détection toolchain** : nouveau module `toolchain.cpp` (résolution du binaire clang, resource dir, mode C++).
 - **Construction driver** : utilisation du driver Clang pour produire un `JobPlan` (cc1 + autres jobs).
 - **Exécution** :
-  - **non‑instrumenté (ToFile)** : délègue à `Driver::ExecuteCompilation` (fidélité Clang).
+  - **non‑instrumenté (ToFile)** : délègue à `Driver::ExecuteCompilation` (fidélité Clang), avec
+    les jobs **cc1** exécutés en-process par `Driver::CC1Main` (`clang::ExecuteCompilerInvocation`),
+    même quand la compilation a plusieurs jobs : aucun exécutable clang n'est lancé pour compiler
+    (#104). Seuls les jobs `-cc1as` (assemblage de sources `.s`) restent des sous-processus.
   - **instrumenté / ToMemory** : **cc1** en-process via `Cc1Runner`.
   - **linker** via `Linker` (exécution des jobs non-cc1).
 

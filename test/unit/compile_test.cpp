@@ -19,6 +19,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -371,5 +372,185 @@ int main(void)
                     ::testing::ExitedWithCode(0), "");
     }
 #endif
+
+    // Sets an environment variable for its lifetime, then restores the previous value.
+    class ScopedEnv
+    {
+      public:
+        ScopedEnv(const char* name, const std::string& value) : name_(name)
+        {
+            if (const char* previous = std::getenv(name))
+                previous_ = previous;
+            set(value.c_str());
+        }
+
+        ~ScopedEnv()
+        {
+            if (previous_)
+                set(previous_->c_str());
+            else
+                unset();
+        }
+
+        ScopedEnv(const ScopedEnv&) = delete;
+        ScopedEnv& operator=(const ScopedEnv&) = delete;
+
+      private:
+        void set(const char* value) const
+        {
+#ifdef _WIN32
+            (void)_putenv_s(name_, value);
+#else
+            (void)setenv(name_, value, 1);
+#endif
+        }
+
+        void unset() const
+        {
+#ifdef _WIN32
+            (void)_putenv_s(name_, "");
+#else
+            (void)unsetenv(name_);
+#endif
+        }
+
+        const char* name_;
+        std::optional<std::string> previous_;
+    };
+
+    // As in a relocated install that ships Clang's headers and no clang (#104): CT_CLANG
+    // names a file that exists but cannot run. File output without instrumentation must
+    // still compile, in this process, like every other mode.
+    class NoClangExecutableTest : public CompileTest
+    {
+      protected:
+        void SetUp() override
+        {
+            CompileTest::SetUp();
+            clang_.emplace("CT_CLANG", writeSource("bin/clang", "not an executable\n"));
+        }
+
+        void TearDown() override
+        {
+            clang_.reset();
+            CompileTest::TearDown();
+        }
+
+      private:
+        std::optional<ScopedEnv> clang_;
+    };
+
+    constexpr const char* kUnit = "int twice(int value) { return value * 2; }\n";
+
+    struct FileOutputCase
+    {
+        const char* name;
+        std::vector<std::string> args;
+        const char* output;
+    };
+
+    class FileOutputTest : public NoClangExecutableTest,
+                           public ::testing::WithParamInterface<FileOutputCase>
+    {
+    };
+
+    TEST_P(FileOutputTest, IsWrittenWithoutAClangExecutable)
+    {
+        std::vector<std::string> args = GetParam().args;
+        args.push_back(writeSource("unit.c", kUnit));
+        args.push_back("-o");
+        args.push_back(path(GetParam().output));
+
+        compilerlib::CompileResult result = compilerlib::compile(args);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_FALSE(readFile(path(GetParam().output)).empty());
+    }
+
+    INSTANTIATE_TEST_SUITE_P(
+        Outputs, FileOutputTest,
+        ::testing::Values(FileOutputCase{"bitcode", {"-c", "-emit-llvm"}, "unit.bc"},
+                          FileOutputCase{"ir", {"-S", "-emit-llvm"}, "unit.ll"},
+                          FileOutputCase{"assembly", {"-S"}, "unit.s"},
+                          FileOutputCase{"object", {"-c"}, "unit.o"},
+                          FileOutputCase{"preprocessed", {"-E"}, "unit.i"}),
+        [](const ::testing::TestParamInfo<FileOutputCase>& info) { return info.param.name; });
+
+    TEST_F(NoClangExecutableTest, SyntaxOnlySucceeds)
+    {
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-fsyntax-only", writeSource("unit.c", kUnit)});
+        EXPECT_TRUE(result.success) << result.diagnostics;
+    }
+
+    // The compiler's own diagnostic reaches the caller, not a bare "compilation failed".
+    TEST_F(NoClangExecutableTest, InvalidSourceReportsTheCompilerDiagnostic)
+    {
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-c", writeSource("broken.c", "int main(void) { return undeclared; }\n"), "-o",
+             path("broken.o")});
+        ASSERT_FALSE(result.success);
+        EXPECT_NE(result.diagnostics.find("broken.c:1:"), std::string::npos) << result.diagnostics;
+        EXPECT_NE(result.diagnostics.find("use of undeclared identifier 'undeclared'"),
+                  std::string::npos)
+            << result.diagnostics;
+        EXPECT_FALSE(fs::exists(path("broken.o")));
+    }
+
+    // Several sources in one call, compiled and linked: the driver links with the system
+    // linker, not with clang.
+    TEST_F(NoClangExecutableTest, SeveralSourcesAreCompiledAndLinked)
+    {
+        compilerlib::CompileResult result = compilerlib::compile(
+            {writeSource("main.c", "int twice(int value);\nint main(void) { return twice(0); }\n"),
+             writeSource("unit.c", kUnit), "-o", path("app")});
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(fs::exists(path("app")) || fs::exists(path("app.exe")));
+    }
+
+    // Actions beyond code generation keep working: the static analyzer and precompiled
+    // headers.
+    TEST_F(NoClangExecutableTest, AnalyzerReportsItsFinding)
+    {
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"--analyze", writeSource("null.c", "int main(void) { int* p = 0; return *p; }\n"),
+             "-o", path("null.plist")});
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(result.diagnostics.find("Dereference of null pointer"), std::string::npos)
+            << result.diagnostics;
+        EXPECT_TRUE(fs::exists(path("null.plist")));
+    }
+
+    TEST_F(NoClangExecutableTest, PrecompiledHeaderIsWrittenAndUsable)
+    {
+        compilerlib::CompileResult header = compilerlib::compile(
+            {"-x", "c-header", writeSource("unit.h", "int twice(int value);\n"), "-o",
+             path("unit.h.pch")});
+        ASSERT_TRUE(header.success) << header.diagnostics;
+
+        compilerlib::CompileResult user =
+            compilerlib::compile({"-include-pch", path("unit.h.pch"), "-fsyntax-only",
+                                  writeSource("user.c", "int four(void) { return twice(2); }\n")});
+        EXPECT_TRUE(user.success) << user.diagnostics;
+    }
+
+    // -fno-integrated-cc1 asks, as with clang, for the frontend in a clang process: here,
+    // CT_CLANG cannot run, so the compilation fails for that reason.
+    TEST_F(NoClangExecutableTest, NoIntegratedCc1RunsTheClangExecutable)
+    {
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-fno-integrated-cc1", "-c", writeSource("unit.c", kUnit), "-o", path("unit.o")});
+        EXPECT_FALSE(result.success);
+        EXPECT_NE(result.diagnostics.find("unable to execute"), std::string::npos)
+            << result.diagnostics;
+    }
+
+    // -### prints the jobs and runs none of them.
+    TEST_F(NoClangExecutableTest, HashHashHashRunsNothing)
+    {
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-###", "-c", writeSource("unit.c", kUnit), "-o", path("unit.o")});
+        EXPECT_TRUE(result.success) << result.diagnostics;
+        EXPECT_FALSE(fs::exists(path("unit.o")));
+    }
 
 } // namespace

@@ -15,8 +15,12 @@
 #include <clang/Frontend/FrontendActions.h>
 #include <clang/Driver/Compilation.h>
 #include <clang/Driver/Driver.h>
+#include <clang/Driver/Options.h>
 #include <mutex>
 #include <clang/Frontend/CompilerInstance.h>
+#include <clang/Frontend/TextDiagnosticBuffer.h>
+#include <clang/Frontend/TextDiagnosticPrinter.h>
+#include <clang/FrontendTool/Utils.h>
 #include <clang/Frontend/FrontendOptions.h>
 #include <clang/CodeGen/CodeGenAction.h>
 
@@ -336,6 +340,70 @@ namespace compilerlib
             CompileContext& ctx_;
         };
 
+        // Target registration mutates LLVM's global registry; two threads compiling their
+        // first module concurrently used to race the plain-bool guard here and corrupt the
+        // registry (workers then spun or hung). call_once serialises it.
+        void initTargetsOnce(void)
+        {
+            static std::once_flag initialized;
+            std::call_once(initialized,
+                           []
+                           {
+                               LLVMInitializeAllTargetInfos();
+                               LLVMInitializeAllTargets();
+                               LLVMInitializeAllTargetMCs();
+                               LLVMInitializeAllAsmParsers();
+                               LLVMInitializeAllAsmPrinters();
+                           });
+        }
+
+        // The compilation whose driver is executing its jobs on this thread, for runCc1:
+        // Driver::CC1Main takes a plain function before LLVM 17, so it cannot carry it.
+        thread_local CompileContext* executingContext = nullptr;
+
+        // The driver's in-process -cc1 entry point, as clang's own cc1_main: the frontend
+        // runs in this process with every action clang supports. Its diagnostics are the text
+        // clang prints, source excerpts and "N warnings generated" included, written into the
+        // compilation's result instead of stderr. argv holds the executable, "-cc1", then the
+        // job's arguments.
+        int runCc1(llvm::SmallVectorImpl<const char*>& argv)
+        {
+            initTargetsOnce();
+            CompileContext& ctx = *executingContext;
+            auto ci = std::make_unique<clang::CompilerInstance>();
+
+            // Argument errors are buffered until the invocation's diagnostic options, such as
+            // colors or the output format, are known.
+            auto* parseBuffer = new clang::TextDiagnosticBuffer;
+            clang::DiagnosticsEngine parseDiags(new clang::DiagnosticIDs,
+                                                new clang::DiagnosticOptions, parseBuffer);
+            const bool parsed = clang::CompilerInvocation::CreateFromArgs(
+                ci->getInvocation(), llvm::ArrayRef<const char*>(argv).drop_front(2), parseDiags,
+                argv[0]);
+
+            std::string text;
+            llvm::raw_string_ostream stream(text);
+            auto* printer = new clang::TextDiagnosticPrinter(stream, &ci->getDiagnosticOpts());
+#if LLVM_VERSION_MAJOR >= 20
+            ci->createDiagnostics(*ctx.fs, printer, /*ShouldOwnClient=*/true);
+#else
+            ci->createDiagnostics(printer, /*ShouldOwnClient=*/true);
+#endif
+            ci->setVerboseOutputStream(stream);
+            parseBuffer->FlushDiagnostics(ci->getDiagnostics());
+
+            // The driver passes -disable-free for a short-lived clang process; the host of
+            // this library may compile again, so everything is released.
+            ci->getFrontendOpts().DisableFree = false;
+            ci->getCodeGenOpts().DisableFree = false;
+            const bool succeeded = parsed && clang::ExecuteCompilerInvocation(ci.get());
+
+            stream.flush();
+            ctx.dc.os << text;
+            ctx.dc.os.flush();
+            return succeeded ? 0 : 1;
+        }
+
         class DriverSession
         {
           public:
@@ -345,6 +413,7 @@ namespace compilerlib
                                                                   diags_, "cc", ctx_.fs))
             {
                 driver_->setCheckInputsExist(false);
+                driver_->CC1Main = runCc1;
             }
 
             CT_NODISCARD std::unique_ptr<clang::driver::Compilation>
@@ -352,7 +421,21 @@ namespace compilerlib
             {
                 auto comp = driver_->BuildCompilation(ctx_.clang_args);
                 auto ownedComp = takeCompilation(std::move(comp));
-                if (!ownedComp)
+                if (ownedComp)
+                {
+                    // Every -cc1 job runs in this process, including when the compilation
+                    // has several jobs, where clang itself falls back to subprocesses: a
+                    // clang executable must not be needed to compile. -cc1as jobs, which
+                    // assemble .s sources, have no library entry point and stay subprocesses,
+                    // and -fno-integrated-cc1 keeps every job out of process, as with clang.
+                    const bool integrated =
+                        ownedComp->getArgs().hasFlag(clang::driver::options::OPT_fintegrated_cc1,
+                                                     clang::driver::options::OPT_fno_integrated_cc1,
+                                                     /*Default=*/true);
+                    for (clang::driver::Command& job : ownedComp->getJobs())
+                        job.InProcess = integrated && isCc1Command(job.getArguments());
+                }
+                else
                 {
                     error = ctx_.dc.message.empty() ? "failed to build compilation"
                                                     : std::move(ctx_.dc.message);
@@ -613,23 +696,6 @@ namespace compilerlib
             }
 
           private:
-            // Target registration mutates LLVM's global registry; two threads compiling
-            // their first module concurrently used to race the plain-bool guard here and
-            // corrupt the registry (workers then spun or hung). call_once serialises it.
-            static void initTargetsOnce(void)
-            {
-                static std::once_flag initialized;
-                std::call_once(initialized,
-                               []
-                               {
-                                   LLVMInitializeAllTargetInfos();
-                                   LLVMInitializeAllTargets();
-                                   LLVMInitializeAllTargetMCs();
-                                   LLVMInitializeAllAsmParsers();
-                                   LLVMInitializeAllAsmPrinters();
-                               });
-            }
-
             void resetDiagnostics(void)
             {
                 ctx_.dc.message.clear();
@@ -872,10 +938,13 @@ namespace compilerlib
         {
             JobStderrCapture capture(comp);
             llvm::SmallVector<std::pair<int, const clang::driver::Command*>, 4> failingCommands;
+            CompileContext* const previousContext = executingContext;
+            executingContext = &ctx;
             // ExecuteCompilation only returns non-zero for crashes and internal errors;
             // an ordinary failing job is reported through failingCommands, exactly as
             // clang's own driver checks it.
             int rc = driver.driver().ExecuteCompilation(comp, failingCommands);
+            executingContext = previousContext;
 
             CompileResult result;
             result.success = (rc == 0) && failingCommands.empty();
