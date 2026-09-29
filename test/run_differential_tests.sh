@@ -60,10 +60,6 @@ known_failure() {
     # #106: libc++ allocations inlined into user code are tracked, their releases
     # left in libc++ functions are not, so they are reported as leaks.
     differential/containers.cpp:Darwin-*:-O[123s]) return 0 ;;
-    # #107: a slot stored with a pointer vector gives a vector base to the bounds
-    # check, and the instrumented module fails verification. Only the arm64 vectorizer
-    # stores this program's std::shared_ptr as one pointer vector.
-    differential/containers.cpp:Linux-aarch64:-O[23]) return 0 ;;
   esac
   return 1
 }
