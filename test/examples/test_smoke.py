@@ -430,8 +430,9 @@ def main() -> int:
             assert_stdout_count("call void @__ct_objc_track(", 5),
         ],
     )
-    # GNUstep 2.2 uses the same runtime functions, but the instrumentation runtime tracks
-    # objects with the Apple runtime only: a GNUstep program must not depend on it.
+    # GNUstep 2.2 uses the same runtime functions from Clang 18 on (message sends before),
+    # but the instrumentation runtime tracks objects with the Apple runtime only: a GNUstep
+    # program must not depend on it, whichever form its allocations take.
     tc_instrument_objc_gnustep = TestCase(
         name="compile_instrument_objc_allocations_gnustep",
         plan=CompilePlan(
@@ -443,7 +444,7 @@ def main() -> int:
         ),
         assertions=[
             assert_exit_code(0),
-            assert_stdout_contains("call ptr @objc_alloc("),
+            assert_stdout_matches(r"call ptr @(objc_alloc\(|objc_msgSend\(.*objc_selector_alloc_)"),
             assert_stdout_count("call void @__ct_objc_track(", 0),
         ],
     )

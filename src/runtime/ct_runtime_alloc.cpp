@@ -159,13 +159,29 @@ CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
     return 1;
 }
 
+// Takes `entry` for a live block. ct_alloc_lock held.
+CT_NOINSTR static void ct_claim_entry(struct ct_alloc_entry* entry, void* ptr, size_t req_size,
+                                      size_t size, const char* site, unsigned char kind)
+{
+    entry->ptr = ptr;
+    entry->size = size;
+    entry->req_size = req_size;
+    entry->site = site;
+    entry->kind = kind;
+    entry->mark = 0;
+    entry->state = CT_ENTRY_USED;
+    ++ct_alloc_count;
+}
+
 CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t size,
                                             const char* site, unsigned char kind)
 {
+    constexpr size_t kNone = static_cast<size_t>(-1);
     for (int attempt = 0; attempt < 2; ++attempt)
     {
         size_t idx = ct_hash_ptr(ptr, ct_alloc_table_mask);
-        size_t tombstone = static_cast<size_t>(-1);
+        size_t tombstone = kNone;
+        size_t freed = kNone;
 
         for (size_t i = 0; i < ct_alloc_table_size; ++i)
         {
@@ -186,48 +202,52 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t s
                 continue;
             }
 
-            if ((entry->state == CT_ENTRY_TOMB || entry->state == CT_ENTRY_FREED ||
-                 entry->state == CT_ENTRY_AUTOFREED) &&
-                tombstone == static_cast<size_t>(-1))
+            // A block recorded as freed is in the quarantine, still allocated: its record
+            // must stay, unless this very address is being handed out again.
+            if (entry->state == CT_ENTRY_FREED || entry->state == CT_ENTRY_AUTOFREED)
             {
-                tombstone = pos;
+                if (entry->ptr == ptr)
+                {
+                    ct_claim_entry(entry, ptr, req_size, size, site, kind);
+                    return 1;
+                }
+                if (freed == kNone)
+                {
+                    freed = pos;
+                }
                 continue;
             }
 
-            if (entry->state == CT_ENTRY_EMPTY)
+            if (entry->state == CT_ENTRY_TOMB)
             {
-                if (tombstone != static_cast<size_t>(-1))
+                if (tombstone == kNone)
                 {
-                    entry = &ct_alloc_table[tombstone];
+                    tombstone = pos;
                 }
-                entry->ptr = ptr;
-                entry->size = size;
-                entry->req_size = req_size;
-                entry->site = site;
-                entry->kind = kind;
-                entry->mark = 0;
-                entry->state = CT_ENTRY_USED;
-                ++ct_alloc_count;
-                return 1;
+                continue;
             }
+
+            // CT_ENTRY_EMPTY: the end of the probe sequence.
+            ct_claim_entry(tombstone != kNone ? &ct_alloc_table[tombstone] : entry, ptr, req_size,
+                           size, site, kind);
+            return 1;
         }
 
-        if (tombstone != static_cast<size_t>(-1))
+        if (tombstone != kNone)
         {
-            struct ct_alloc_entry* entry = &ct_alloc_table[tombstone];
-            entry->ptr = ptr;
-            entry->size = size;
-            entry->req_size = req_size;
-            entry->site = site;
-            entry->kind = kind;
-            entry->mark = 0;
-            entry->state = CT_ENTRY_USED;
-            ++ct_alloc_count;
+            ct_claim_entry(&ct_alloc_table[tombstone], ptr, req_size, size, site, kind);
             return 1;
         }
 
         if (!ct_alloc_grow_locked())
         {
+            // The table cannot grow: a freed record gives way to the live block, whose
+            // tracking matters more.
+            if (freed != kNone)
+            {
+                ct_claim_entry(&ct_alloc_table[freed], ptr, req_size, size, site, kind);
+                return 1;
+            }
             return 0;
         }
     }

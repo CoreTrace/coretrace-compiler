@@ -34,6 +34,8 @@ flags_for() {
     ct_bounds_stack_default_modules.c) echo "--ct-bounds-no-abort" ;;
     ct_bounds_*.c)        echo "--ct-modules=alloc,bounds --ct-bounds-no-abort" ;;
     ct_vtable_*.cpp)   echo "--ct-modules=alloc,vtable --ct-vtable-diag" ;;
+    # Clang enables sized deallocation by default only from version 19 on.
+    ct_new_delete_sized.cpp) echo "--ct-modules=alloc -fsized-deallocation" ;;
     *)                 echo "--ct-modules=alloc" ;;
   esac
 }

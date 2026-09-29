@@ -169,9 +169,16 @@ jobs:
   # KLEE 3.x support, on the Ubuntu 22.04 they run on. Its libstdc++ 11 lacks <format>,
   # which the runtime's logger needs, so the runtime is left out. The instrumented IR
   # exercises the passes on LLVM 16, stack object registration with debug info included.
-  build-llvm16:
-    name: Build with LLVM 16 (ubuntu-22.04)
-    runs-on: ubuntu-22.04
+  # compilerlib supports LLVM 16 to 20; the main jobs build with 20. Ubuntu 24.04 packages
+  # 16 to 19, and its libstdc++ has the <format> the runtime needs, so each older version
+  # builds everything and runs the same suites.
+  build-llvm-versions:
+    name: Build with LLVM ${{ matrix.llvm }} (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        llvm: [16, 17, 18, 19]
 
     steps:
     - uses: actions/checkout@v4
@@ -179,33 +186,89 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential cmake
-        sudo bash scripts/ci/install-llvm-apt.sh 16 llvm-16 llvm-16-dev clang-16 libclang-16-dev
+        sudo apt-get install -y build-essential cmake ninja-build python3-venv \
+          llvm-${{ matrix.llvm }}-dev libclang-${{ matrix.llvm }}-dev clang-${{ matrix.llvm }}
 
-    - name: Build compilerlib and cc
+    - name: Build
       run: |
-        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_C_COMPILER=clang-16 -DCMAKE_CXX_COMPILER=clang++-16 \
-          -DLLVM_DIR=/usr/lib/llvm-16/lib/cmake/llvm \
-          -DClang_DIR=/usr/lib/llvm-16/lib/cmake/clang \
-          -DUSE_SHARED_LIB=OFF \
-          -DCORETRACE_COMPILER_BUILD_RUNTIME=OFF
-        cmake --build build --target compilerlib_static compilerlib_shared cc compilerlib_unit_tests \
-          --parallel
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_COMPILER=clang-${{ matrix.llvm }} -DCMAKE_CXX_COMPILER=clang++-${{ matrix.llvm }} \
+          -DLLVM_DIR=/usr/lib/llvm-${{ matrix.llvm }}/lib/cmake/llvm \
+          -DClang_DIR=/usr/lib/llvm-${{ matrix.llvm }}/lib/cmake/clang \
+          -DUSE_SHARED_LIB=OFF
+        cmake --build build
 
-    - name: Test compilerlib and cc
+    - name: Run unit tests
+      run: ctest --test-dir build --output-on-failure
+
+    - name: Run Python smoke tests
       run: |
-        ctest --test-dir build --output-on-failure
-        ./build/cc --instrument --ct-modules=all --in-mem -S -emit-llvm -g \
-          test/examples/fixtures/stack_objects.c > stack_objects.ll
-        grep -c "call i64 @__ct_stack_push(" stack_objects.ll | grep -qx 2
-        ./build/cc --instrument --ct-modules=alloc,bounds --in-mem -S -emit-llvm \
-          test/examples/fixtures/overflow.c > overflow.ll
-        grep -q "call ptr @__ct_malloc(" overflow.ll
-        grep -q "call void @__ct_check_bounds(" overflow.ll
-        ./build/cc --instrument --ct-modules=vtable --ct-vcall-trace --in-mem -S -emit-llvm \
-          test/ct_vtable_basic.cpp > vtable.ll
-        grep -q "call void @__ct_vcall_trace(" vtable.ll
+        python3 -m venv .venv
+        source .venv/bin/activate
+        python -m pip install --upgrade pip
+        python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git
+        python test/examples/test_smoke.py
+        python test/examples/test_extern_project.py
+        python test/examples/test_help_smoke.py
+
+    - name: Run runtime fixture suites
+      run: |
+        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
+        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
+        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests"
+
+    - name: Run runtime fixture suites at -O2
+      env:
+        CT_TEST_OPT: -O2
+      run: |
+        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests_O2"
+        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests_O2"
+        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests_O2"
+
+  # compilerlib, cc and the tests built with AddressSanitizer and LeakSanitizer
+  # (ENABLE_DEBUG_ASAN). The runtime and its logger are built without them, since
+  # instrumented programs link them without the sanitizer's runtime.
+  build-asan:
+    name: Build with AddressSanitizer (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake ninja-build python3-venv
+        sudo bash scripts/ci/install-llvm-apt.sh 20 llvm-20 llvm-20-dev clang-20 libclang-20-dev \
+          libclang-rt-20-dev
+
+    - name: Build
+      run: |
+        cmake -S . -B build -G Ninja -DENABLE_DEBUG_ASAN=ON \
+          -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+          -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm \
+          -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang \
+          -DUSE_SHARED_LIB=OFF
+        cmake --build build
+
+    - name: Run unit tests
+      run: ctest --test-dir build --output-on-failure
+
+    - name: Run Python smoke tests
+      run: |
+        python3 -m venv .venv
+        source .venv/bin/activate
+        python -m pip install --upgrade pip
+        python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git
+        python test/examples/test_smoke.py
+        python test/examples/test_extern_project.py
+        python test/examples/test_help_smoke.py
+
+    - name: Run runtime fixture suites
+      run: |
+        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
+        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
+        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests"
 
   build-windows:
     name: Build on Windows (pinned LLVM 20.1.0)

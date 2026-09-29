@@ -202,7 +202,10 @@ if(CORETRACE_COMPILER_BUILD_RUNTIME)
   set_target_properties(ct_instrument_runtime PROPERTIES OUTPUT_NAME "ct_instrument_runtime")
   coretrace_force_msvc_runtime(ct_instrument_runtime)
   if(ENABLE_DEBUG_ASAN)
+    # Instrumented programs link the runtime and its logger without AddressSanitizer's
+    # runtime, so neither may be built with it.
     target_compile_options(ct_instrument_runtime PRIVATE -fno-sanitize=address)
+    target_compile_options(coretrace_logger PRIVATE -fno-sanitize=address)
   endif()
 endif()
 

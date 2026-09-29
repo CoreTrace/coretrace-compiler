@@ -751,10 +751,9 @@ namespace compilerlib
                 ci->setInvocation(std::move(invoc));
 
 // Adaptation to different LLVM/Clang versions
-// - LLVM < 16: createDiagnostics(VFS, Consumer, ShouldOwnClient)
-// - LLVM 16–18: createDiagnostics(Consumer, ShouldOwnClient)
-// - LLVM 19–20+: the overloads without a VFS have been removed, you must pass the VFS.
-#if LLVM_VERSION_MAJOR >= 19
+// - LLVM 16–19: createDiagnostics(Consumer, ShouldOwnClient)
+// - LLVM 20+: the overloads without a VFS have been removed, you must pass the VFS.
+#if LLVM_VERSION_MAJOR >= 20
                 ci->createDiagnostics(*ctx_.fs, &ctx_.dc, false);
 #else
                 ci->createDiagnostics(&ctx_.dc, false);
