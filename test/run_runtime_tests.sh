@@ -88,6 +88,7 @@ expect_stdout() {
     ct_vtable_interface.cpp) echo "run=21" ;;
     ct_vtable_multi.cpp) echo "Derived 42" ;;
     ct_vtable_virtual_base.cpp) echo "value=99" ;;
+    ct_new_delete_library.cpp) echo "owned=7 array=4 pointers=16 counts=5 shared=64" ;;
     *) echo "" ;;
   esac
 }
@@ -137,6 +138,7 @@ TESTS=(
   ct_new_delete.cpp
   ct_new_delete_sized.cpp
   ct_new_delete_variants.cpp
+  ct_new_delete_library.cpp
   ct_double_delete_site.cpp
   ct_shadow_pages.c
   ct_vtable_basic.cpp

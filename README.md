@@ -138,6 +138,11 @@ Notes:
 - All other arguments are forwarded to clang (e.g. `-O2`, `-g`, `-I`, `-D`, `-L`, `-l`, `-std=...`).
 - Alloc instrumentation rewrites `malloc/free/calloc/realloc` and basic C++ `operator new/delete`
   (scalar/array). Sized/aligned new/delete overloads are not handled yet.
+- Allocations are tracked where user code makes them: an allocation made by system-header code,
+  such as a standard container's, stays untracked, even once inlined into user code. Releases go
+  through the runtime everywhere, system headers included, since library code such as
+  `std::unique_ptr` releases blocks user code allocated. The release of an untracked block is only
+  traced, marked `(unknown)`.
 - Bounds checks cover heap blocks and the stack objects of running frames, reported as
   `stack-buffer-overflow`. A local array or struct is tracked while its function runs when its
   address escapes, for instance to a callee, or when an access to it cannot be proven in bounds at

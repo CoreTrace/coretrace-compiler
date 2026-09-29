@@ -909,8 +909,13 @@ CT_NOINSTR static void ct_release_tracked_pointer(void* ptr, CtReleaseApi api, c
     }
     if (found == 0)
     {
-        ct_log(CTLevel::Warn, "{}{} ptr={:p} (unknown){}\n", ct_color(CTColor::Red), label, ptr,
-               ct_color(CTColor::Reset));
+        // A block the runtime did not track, such as one the C++ library allocated: its
+        // release is traced like any other, not reported.
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
+        {
+            ct_log(CTLevel::Info, "{}{} ptr={:p} (unknown){}\n", ct_color(CTColor::Cyan), label,
+                   ptr, ct_color(CTColor::Reset));
+        }
         ct_release_by_api(ptr, api);
         return;
     }
@@ -1397,8 +1402,13 @@ extern "C"
         }
         if (found == 0)
         {
-            ct_log(CTLevel::Warn, "{}tracing-free ptr={:p} (unknown){}\n", ct_color(CTColor::Red),
-                   ptr, ct_color(CTColor::Reset));
+            // A block the runtime did not track, such as one libc allocated: its release is
+            // traced like any other, not reported.
+            if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
+            {
+                ct_log(CTLevel::Info, "{}tracing-free ptr={:p} (unknown){}\n",
+                       ct_color(CTColor::Cyan), ptr, ct_color(CTColor::Reset));
+            }
             free(ptr);
             return;
         }

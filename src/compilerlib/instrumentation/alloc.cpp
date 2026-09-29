@@ -296,6 +296,20 @@ namespace compilerlib
             return fnTy->getParamType(0)->isPointerTy();
         }
 
+        // A call that only releases memory: free, munmap or a global operator delete.
+        // realloc is not one: the runtime tracks the block it returns, so it is rewritten
+        // only where allocations are.
+        CT_NODISCARD bool isReleaseCall(const llvm::Function& callee, llvm::StringRef name)
+        {
+            if (name == "free")
+                return isFreeLike(callee);
+            if (isMunmapLikeName(name))
+                return isMunmapLike(callee);
+            bool isArray = false;
+            OperatorDeleteKind kind = OperatorDeleteKind::Normal;
+            return isOperatorDeleteName(name, isArray, kind) && isDeleteLike(callee);
+        }
+
         CT_NODISCARD bool isLoadFromAlloca(llvm::Value* value, llvm::AllocaInst* alloca)
         {
             auto* load = llvm::dyn_cast<llvm::LoadInst>(value);
@@ -1531,7 +1545,7 @@ namespace compilerlib
 
         for (llvm::Function& func : module)
         {
-            if (!shouldRewriteAllocations(func))
+            if (!isUserDefinedFunction(func))
             {
                 continue;
             }
@@ -1565,6 +1579,12 @@ namespace compilerlib
                     }
 
                     llvm::StringRef name = callee->getName();
+                    // Releases are rewritten in every function, allocations only in user
+                    // code: see shouldRewriteAllocations.
+                    if (!isUserCall(*call) && !isReleaseCall(*callee, name))
+                    {
+                        continue;
+                    }
                     if (trackObjcObjects && isObjcAllocation(*call, name))
                     {
                         objcAllocCalls.push_back(call);
@@ -1788,7 +1808,7 @@ namespace compilerlib
 
         for (llvm::Function& func : module)
         {
-            if (!shouldRewriteAllocations(func))
+            if (!isUserDefinedFunction(func))
             {
                 continue;
             }

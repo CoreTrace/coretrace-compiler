@@ -6,6 +6,7 @@
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/Instruction.h>
 #include <llvm/Support/Path.h>
 
 namespace compilerlib
@@ -24,6 +25,33 @@ namespace compilerlib
             return path.starts_with("/Library/Developer/CommandLineTools") ||
                    path.starts_with("/Applications/Xcode.app") ||
                    path.starts_with("/usr/include") || path.starts_with("/usr/local/include");
+        }
+
+        // A definition the passes may modify: not runtime-internal, not opted out, and
+        // not an available_externally copy, which is discarded for the real body.
+        CT_NODISCARD bool isModifiableDefinition(const llvm::Function& func)
+        {
+            if (func.isDeclaration())
+                return false;
+            if (func.getName().starts_with("__ct_"))
+                return false;
+            if (func.hasFnAttribute("no_instrument_function") ||
+                func.hasFnAttribute(llvm::Attribute::Naked))
+            {
+                return false;
+            }
+            return !func.hasAvailableExternallyLinkage();
+        }
+
+        CT_NODISCARD bool isSystemFile(llvm::StringRef dir, llvm::StringRef file)
+        {
+            if (file.empty())
+                return false;
+            if (dir.empty())
+                return isSystemPath(file);
+            llvm::SmallString<256> fullPath(dir);
+            llvm::sys::path::append(fullPath, file);
+            return isSystemPath(fullPath);
         }
 
     } // namespace
@@ -57,36 +85,10 @@ namespace compilerlib
 
     bool isUserDefinedFunction(const llvm::Function& func)
     {
-        if (func.isDeclaration())
+        if (!isModifiableDefinition(func))
             return false;
-        if (func.getName().starts_with("__ct_"))
-            return false;
-        if (func.hasFnAttribute("no_instrument_function") ||
-            func.hasFnAttribute(llvm::Attribute::Naked))
-        {
-            return false;
-        }
-        if (func.hasAvailableExternallyLinkage())
-            return false;
-
-        if (auto* subprogram = func.getSubprogram())
-        {
-            llvm::StringRef dir = subprogram->getDirectory();
-            llvm::StringRef file = subprogram->getFilename();
-            if (!dir.empty() && !file.empty())
-            {
-                llvm::SmallString<256> fullPath(dir);
-                llvm::sys::path::append(fullPath, file);
-                if (isSystemPath(fullPath))
-                    return false;
-            }
-            else if (!file.empty() && isSystemPath(file))
-            {
-                return false;
-            }
-        }
-
-        return true;
+        const llvm::DISubprogram* subprogram = func.getSubprogram();
+        return !subprogram || !isSystemFile(subprogram->getDirectory(), subprogram->getFilename());
     }
 
     bool shouldInstrument(const llvm::Function& func)
@@ -99,7 +101,14 @@ namespace compilerlib
 
     bool shouldRewriteAllocations(const llvm::Function& func)
     {
-        return isUserDefinedFunction(func);
+        return isModifiableDefinition(func);
+    }
+
+    bool isUserCall(const llvm::Instruction& call)
+    {
+        if (const llvm::DILocation* location = call.getDebugLoc().get())
+            return !isSystemFile(location->getDirectory(), location->getFilename());
+        return isUserDefinedFunction(*call.getFunction());
     }
 
 } // namespace compilerlib

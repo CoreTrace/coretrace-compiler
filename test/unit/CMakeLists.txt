@@ -13,6 +13,7 @@ FetchContent_MakeAvailable(googletest)
 
 add_executable(compilerlib_unit_tests
   alloc_names_test.cpp
+  alloc_pass_test.cpp
   args_test.cpp
   bounds_pass_test.cpp
   compile_test.cpp
