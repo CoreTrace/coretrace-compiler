@@ -534,6 +534,12 @@ namespace
     // lock-free writers, as in the POSIX leak report.
     struct CtLeakReporter
     {
+        // User-provided, so that the object is initialized dynamically, in this file's
+        // init_seg: clang registers the destructor of a constant-initialized object from
+        // .CRT$XCU, with the program's own objects, whose destructors then ran after the
+        // report.
+        CT_NOINSTR CtLeakReporter() {}
+
         CT_NOINSTR ~CtLeakReporter()
         {
             std::vector<std::pair<void*, CtAllocEntry>> leaks;
