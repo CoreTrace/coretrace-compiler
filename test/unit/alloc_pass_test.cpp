@@ -249,4 +249,30 @@ define void @swap() {
         ASSERT_FALSE(callees("swap").empty());
         EXPECT_EQ(callees("swap").front(), "__ct_malloc");
     }
+
+    // Clang at -O2: an allocation in a branch, which does not reach the return on every
+    // path. Releasing it there would use a value that does not dominate the return.
+    TEST_F(AutoFreeTest, AllocationInABranchIsNotReleasedAtTheReturn)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+
+define i32 @conditional(i32 %n) {
+entry:
+  %positive = icmp sgt i32 %n, 0
+  br i1 %positive, label %allocate, label %done
+
+allocate:
+  %block = call ptr @malloc(i64 8)
+  %byte = trunc i32 %n to i8
+  store i8 %byte, ptr %block
+  br label %done
+
+done:
+  %result = phi i32 [ %n, %allocate ], [ 0, %entry ]
+  ret i32 %result
+}
+)");
+        EXPECT_EQ(callees("conditional"), std::vector<std::string>{"__ct_malloc"});
+    }
 } // namespace

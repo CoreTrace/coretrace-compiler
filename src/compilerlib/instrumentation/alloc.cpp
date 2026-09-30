@@ -12,6 +12,7 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DebugInfoMetadata.h>
+#include <llvm/IR/Dominators.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstrTypes.h>
@@ -1868,6 +1869,7 @@ namespace compilerlib
             if (returns.empty())
                 continue;
 
+            const llvm::DominatorTree dominators(func);
             for (const auto& site : localSites)
             {
                 EscapeState state = EscapeState::ReachableLocal;
@@ -1898,6 +1900,13 @@ namespace compilerlib
 
                 for (llvm::ReturnInst* ret : returns)
                 {
+                    // The release uses the allocation, which must then be on every path to
+                    // the return. One made in a branch or a loop is left to the leak report.
+                    if (site.value &&
+                        !dominators.dominates(llvm::cast<llvm::Instruction>(site.value), ret))
+                    {
+                        continue;
+                    }
                     llvm::IRBuilder<> builder(ret);
                     llvm::Value* ptr = nullptr;
                     if (site.value)
