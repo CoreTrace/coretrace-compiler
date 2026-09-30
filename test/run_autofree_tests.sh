@@ -84,6 +84,48 @@ skip_reason_after_run() {
   return 1
 }
 
+# Instrumentation flags of a fixture.
+flags_for() {
+  case "$1" in
+    # Its drainer thread must not log: every log line would block on its full pipe.
+    ct_autofree_scan_suspended_io.c) echo "--ct-modules=alloc --ct-autofree" ;;
+    *) echo "--ct-modules=trace,alloc --ct-autofree" ;;
+  esac
+}
+
+# Environment of a fixture's run, as NAME=value words.
+env_for() {
+  case "$1" in
+    # The conservative scan every 5 ms, logging each pass (macOS; a no-op elsewhere).
+    ct_autofree_scan_suspended_io.c)
+      echo "CT_AUTOFREE_SCAN=1 CT_AUTOFREE_SCAN_START=1 CT_AUTOFREE_SCAN_PERIOD_MS=5 CT_DEBUG_AUTOFREE_SCAN=2"
+      ;;
+  esac
+}
+
+# A run longer than this is a hang: the fixture is killed and fails.
+RUN_TIMEOUT_SECONDS=60
+
+# Runs a command with its output in a file, killed after RUN_TIMEOUT_SECONDS. Returns the
+# command's status, or 124 on timeout, as timeout(1) does, which macOS lacks.
+run_with_timeout() {
+  local log="$1"
+  shift
+  "$@" >"${log}" 2>&1 &
+  local pid=$!
+  local waited=0
+  while kill -0 "${pid}" 2>/dev/null; do
+    if [[ "${waited}" -ge $((RUN_TIMEOUT_SECONDS * 10)) ]]; then
+      kill -9 "${pid}" 2>/dev/null || true
+      wait "${pid}" 2>/dev/null || true
+      return 124
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  wait "${pid}"
+}
+
 TESTS=(
   ct_autofree_local.c
   ct_autofree_return_unused.c
@@ -100,6 +142,7 @@ TESTS=(
   ct_autofree_mmap.c
   ct_autofree_sbrk.c
   ct_autofree_brk.c
+  ct_autofree_scan_suspended_io.c
 )
 
 PASS=0
@@ -116,16 +159,26 @@ run_one() {
 
   echo "==> ${test_file}"
 
-  "${CC_BIN}" --instrument ${CT_TEST_OPT:+"${CT_TEST_OPT}"} --ct-modules=trace,alloc --ct-autofree \
+  local flags
+  flags="$(flags_for "${test_file}")"
+  # shellcheck disable=SC2086
+  "${CC_BIN}" --instrument ${CT_TEST_OPT:+"${CT_TEST_OPT}"} ${flags} \
     "${test_path}" -o "${bin}" >"${compile_log}" 2>&1 || {
       echo "  FAIL: compile (see ${compile_log})"
       return 1
     }
 
+  local run_env
+  run_env="$(env_for "${test_file}")"
   set +e
-  "${bin}" >"${run_log}" 2>&1
+  # shellcheck disable=SC2086
+  run_with_timeout "${run_log}" env ${run_env} "${bin}"
   local run_rc=$?
   set -e
+  if [[ "${run_rc}" -eq 124 ]]; then
+    echo "  FAIL: no exit after ${RUN_TIMEOUT_SECONDS}s, killed (see ${run_log})"
+    return 1
+  fi
 
   local reason
   if reason="$(skip_reason_after_run "${test_file}" "${run_log}")"; then
