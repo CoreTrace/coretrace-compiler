@@ -99,6 +99,7 @@ expect_stdout() {
     ct_vtable_virtual_base.cpp) echo "value=99" ;;
     ct_new_delete_library.cpp) echo "owned=7 array=4 pointers=16 counts=5 shared=64" ;;
     ct_bounds_freed_address_reuse.c) echo "sum=" ;;
+    ct_leak_static_destructor.cpp) echo "ok" ;;
     ct_threads_stress.c) echo "damaged=0" ;;
     *) echo "" ;;
   esac
@@ -113,7 +114,9 @@ FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-ove
 # reports XFAIL; an unexpected pass is reported as XPASS and fails the suite so the
 # entry gets removed once the defect is fixed.
 known_failure() {
-  case "$1" in
+  case "$1:$(uname -s)" in
+    # #130: the report runs before the destructors of global objects on macOS.
+    ct_leak_static_destructor.cpp:Darwin) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -154,6 +157,7 @@ TESTS=(
   ct_new_delete_variants.cpp
   ct_new_delete_library.cpp
   ct_double_delete_site.cpp
+  ct_leak_static_destructor.cpp
   ct_shadow_pages.c
   ct_vtable_basic.cpp
   ct_vtable_interface.cpp
