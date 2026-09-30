@@ -114,9 +114,7 @@ FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-ove
 # reports XFAIL; an unexpected pass is reported as XPASS and fails the suite so the
 # entry gets removed once the defect is fixed.
 known_failure() {
-  case "$1:$(uname -s)" in
-    # #130: the leak report runs before the program's own exit-time code.
-    ct_leak_static_destructor.cpp:Darwin|ct_leak_destructor_function.c:Darwin) return 0 ;;
+  case "$1" in
     *) return 1 ;;
   esac
 }
