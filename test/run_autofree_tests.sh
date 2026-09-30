@@ -38,7 +38,7 @@ source "${ROOT_DIR}/test/scripts/run_with_timeout.sh"
 
 expect_leak() {
   case "$1" in
-    ct_autofree_local.c|ct_autofree_select_escape.c|ct_autofree_ptrtoint_escape.c|ct_autofree_inttoptr_escape.c|ct_autofree_scalar_slot_escape.c|ct_threads_stress.c)
+    ct_autofree_local.c|ct_autofree_select_escape.c|ct_autofree_ptrtoint_escape.c|ct_autofree_inttoptr_escape.c|ct_autofree_scalar_slot_escape.c|ct_autofree_branch.c|ct_threads_stress.c)
       return 0
       ;;
     *)
@@ -144,6 +144,7 @@ TESTS=(
   ct_autofree_mmap.c
   ct_autofree_sbrk.c
   ct_autofree_brk.c
+  ct_autofree_branch.c
   ct_autofree_scan_suspended_io.c
   ct_threads_stress.c
   ct_autofree_scan_roots.c
