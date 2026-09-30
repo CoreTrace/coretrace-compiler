@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Runs the allocation pass on hand-written IR and checks which calls it rewrites: an
 // allocation is tracked when the call itself is user code, and a release is rewritten
-// wherever it is, so that a tracked block released by a system header is seen.
+// wherever it is, so that a tracked block released by a system header is seen. Then
+// which allocations it releases before the function returns (auto-free): only those
+// that cannot be used after the return, and only with valid IR.
 #include "compilerlib/instrumentation/alloc.hpp"
 
 #include <llvm/AsmParser/Parser.h>
@@ -67,13 +69,14 @@ define linkonce_odr void @library_release(ptr %block) !dbg !18 {
 !19 = !DILocation(line: 51, column: 3, scope: !18)
 )";
 
-    class AllocPassTest : public ::testing::Test
+    class InstrumentedModuleTest : public ::testing::Test
     {
       protected:
-        void SetUp() override
+        // Parses `ir` and runs the allocation pass on it, which must leave valid IR.
+        void instrument(const char* ir)
         {
             llvm::SMDiagnostic parseError;
-            module_ = llvm::parseAssemblyString(kModule, parseError, context_);
+            module_ = llvm::parseAssemblyString(ir, parseError, context_);
             ASSERT_NE(module_, nullptr) << parseError.getMessage().str();
             compilerlib::wrapAllocCalls(*module_);
 
@@ -101,6 +104,15 @@ define linkonce_odr void @library_release(ptr %block) !dbg !18 {
         std::unique_ptr<llvm::Module> module_;
     };
 
+    class AllocPassTest : public InstrumentedModuleTest
+    {
+      protected:
+        void SetUp() override
+        {
+            instrument(kModule);
+        }
+    };
+
     TEST_F(AllocPassTest, UserAllocationIsTracked)
     {
         EXPECT_EQ(callees("user"), std::vector<std::string>{"__ct_new"});
@@ -119,5 +131,122 @@ define linkonce_odr void @library_release(ptr %block) !dbg !18 {
     TEST_F(AllocPassTest, LibraryReleaseGoesThroughTheRuntime)
     {
         EXPECT_EQ(callees("library_release"), std::vector<std::string>{"__ct_delete"});
+    }
+
+    using AutoFreeTest = InstrumentedModuleTest;
+
+    TEST_F(AutoFreeTest, AllocationUsedOnlyInItsFunctionIsReleasedBeforeTheReturn)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+
+define void @local() {
+  %block = call ptr @malloc(i64 8)
+  store i8 1, ptr %block
+  ret void
+}
+)");
+        EXPECT_EQ(callees("local"), (std::vector<std::string>{"__ct_malloc", "__ct_autofree"}));
+    }
+
+    TEST_F(AutoFreeTest, AllocationCopiedBetweenLocalSlotsIsReleasedBeforeTheReturn)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+
+define void @local_copy() {
+  %first = alloca ptr
+  %second = alloca ptr
+  %block = call ptr @malloc(i64 8)
+  store ptr %block, ptr %first
+  %copy = load ptr, ptr %first
+  store ptr %copy, ptr %second
+  ret void
+}
+)");
+        EXPECT_EQ(callees("local_copy"),
+                  (std::vector<std::string>{"__ct_malloc", "__ct_autofree"}));
+    }
+
+    // Clang at -O0: `struct node* head = node; return head;`.
+    TEST_F(AutoFreeTest, AllocationReturnedThroughASecondLocalSlotIsKept)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+
+define ptr @make() {
+  %node = alloca ptr
+  %head = alloca ptr
+  %block = call ptr @malloc(i64 16)
+  store ptr %block, ptr %node
+  %copy = load ptr, ptr %node
+  store ptr %copy, ptr %head
+  %result = load ptr, ptr %head
+  ret ptr %result
+}
+)");
+        EXPECT_EQ(callees("make"), std::vector<std::string>{"__ct_malloc"});
+    }
+
+    // Clang at -O0: a list built in a loop, `node->next = head; head = node;`.
+    TEST_F(AutoFreeTest, ListBuiltInALoopIsKept)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+
+define ptr @build(i32 %length) {
+entry:
+  %head = alloca ptr
+  %node = alloca ptr
+  %i = alloca i32
+  store ptr null, ptr %head
+  store i32 0, ptr %i
+  br label %cond
+
+cond:
+  %n = load i32, ptr %i
+  %more = icmp slt i32 %n, %length
+  br i1 %more, label %body, label %done
+
+body:
+  %block = call ptr @malloc(i64 8)
+  store ptr %block, ptr %node
+  %previous = load ptr, ptr %head
+  %current = load ptr, ptr %node
+  %next_field = getelementptr inbounds { ptr }, ptr %current, i32 0, i32 0
+  store ptr %previous, ptr %next_field
+  %copy = load ptr, ptr %node
+  store ptr %copy, ptr %head
+  %incremented = add i32 %n, 1
+  store i32 %incremented, ptr %i
+  br label %cond
+
+done:
+  %result = load ptr, ptr %head
+  ret ptr %result
+}
+)");
+        EXPECT_EQ(callees("build"), std::vector<std::string>{"__ct_malloc"});
+    }
+
+    TEST_F(AutoFreeTest, LocalSlotsCopiedIntoEachOtherAreClassified)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+
+define void @swap() {
+  %first = alloca ptr
+  %second = alloca ptr
+  %block = call ptr @malloc(i64 8)
+  store ptr %block, ptr %first
+  %to_second = load ptr, ptr %first
+  store ptr %to_second, ptr %second
+  %to_first = load ptr, ptr %second
+  store ptr %to_first, ptr %first
+  ret void
+}
+)");
+        ASSERT_FALSE(callees("swap").empty());
+        EXPECT_EQ(callees("swap").front(), "__ct_malloc");
     }
 } // namespace

@@ -374,6 +374,10 @@ namespace compilerlib
             {
                 return it->second;
             }
+            if (!ctx.inProgress.insert(alloca).second)
+            {
+                return EscapeState::EscapedCall;
+            }
 
             EscapeState state = EscapeState::ReachableLocal;
             llvm::SmallVector<llvm::Value*, 8> worklist;
@@ -384,6 +388,7 @@ namespace compilerlib
             auto finish = [&](EscapeState finalState)
             {
                 ctx.allocaCache[alloca] = finalState;
+                ctx.inProgress.erase(alloca);
                 return finalState;
             };
 
@@ -465,12 +470,23 @@ namespace compilerlib
                             {
                                 llvm::Value* dest =
                                     store2->getPointerOperand()->stripPointerCasts();
-                                if (!llvm::isa<llvm::AllocaInst>(dest))
+                                auto* destSlot = llvm::dyn_cast<llvm::AllocaInst>(dest);
+                                if (!destSlot)
                                 {
                                     state = promoteState(state, EscapeState::EscapedStore,
                                                          "escape: store", alloca, loadUser);
                                     return finish(state);
                                 }
+                                // Copied into another local slot: the pointer leaves the
+                                // function wherever that slot's value does.
+                                EscapeState copied = classifyAllocaEscape(destSlot, ctx);
+                                if (copied != EscapeState::ReachableLocal)
+                                {
+                                    state = promoteState(state, copied, "escape: copied slot",
+                                                         alloca, loadUser);
+                                    return finish(state);
+                                }
+                                continue;
                             }
                             EscapeState inner = classifyPointerEscape(loadUser, ctx);
                             if (inner != EscapeState::ReachableLocal)
