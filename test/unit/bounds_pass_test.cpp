@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Runs the bounds pass on hand-written IR and checks the base each access is checked
-// against.
+// against, and how a frame keeps the registry of stack objects around setjmp.
 #include "compilerlib/instrumentation/bounds.hpp"
 
 #include <llvm/AsmParser/Parser.h>
@@ -72,6 +72,37 @@ namespace
                 }
             }
             return "<no check>";
+        }
+
+        // The runtime calls around the call to `callee` in @f, in order: "depth" for the
+        // depth read right before it, "pop" when the next instruction restores that depth.
+        static std::string stackDepthAround(llvm::Function& func, llvm::StringRef callee)
+        {
+            for (llvm::Instruction& inst : llvm::instructions(func))
+            {
+                auto* call = llvm::dyn_cast<llvm::CallInst>(&inst);
+                if (!call || !call->getCalledFunction() ||
+                    call->getCalledFunction()->getName() != callee)
+                {
+                    continue;
+                }
+                std::string around;
+                auto* before = llvm::dyn_cast_or_null<llvm::CallInst>(call->getPrevNode());
+                if (before && before->getCalledFunction() &&
+                    before->getCalledFunction()->getName() == "__ct_stack_depth")
+                {
+                    around += "depth";
+                }
+                auto* after = llvm::dyn_cast_or_null<llvm::CallInst>(call->getNextNode());
+                if (after && after->getCalledFunction() &&
+                    after->getCalledFunction()->getName() == "__ct_stack_pop" &&
+                    after->getArgOperand(0) == before)
+                {
+                    around += around.empty() ? "pop" : ",pop";
+                }
+                return around.empty() ? "<nothing>" : around;
+            }
+            return "<no call>";
         }
 
         llvm::LLVMContext context_;
@@ -150,5 +181,51 @@ define i32 @f(ptr %first) {
 )");
         ASSERT_NE(func, nullptr);
         EXPECT_EQ(checkedBase(*func, "p"), "p");
+    }
+
+    // setjmp returns a second time from a longjmp that left the frames above it without
+    // their exits: the depth read before the call is restored after it.
+    TEST_F(BoundsPassTest, DepthIsRestoredAfterACallThatReturnsTwice)
+    {
+        llvm::Function* func = instrument(R"(
+declare i32 @setjmp(ptr) returns_twice
+
+define i32 @f(ptr %buffer) {
+  %again = call i32 @setjmp(ptr %buffer) returns_twice
+  ret i32 %again
+}
+)");
+        ASSERT_NE(func, nullptr);
+        EXPECT_EQ(stackDepthAround(*func, "setjmp"), "depth,pop");
+    }
+
+    // Instrumented code is compiled with -fno-builtin, which keeps clang from marking the C
+    // library's setjmp returns_twice.
+    TEST_F(BoundsPassTest, DepthIsRestoredAfterSetjmpWithoutTheAttribute)
+    {
+        llvm::Function* func = instrument(R"(
+declare i32 @_setjmp(ptr)
+
+define i32 @f(ptr %buffer) {
+  %again = call i32 @_setjmp(ptr %buffer)
+  ret i32 %again
+}
+)");
+        ASSERT_NE(func, nullptr);
+        EXPECT_EQ(stackDepthAround(*func, "_setjmp"), "depth,pop");
+    }
+
+    TEST_F(BoundsPassTest, DepthIsLeftAloneAroundOrdinaryCalls)
+    {
+        llvm::Function* func = instrument(R"(
+declare i32 @compute(ptr)
+
+define i32 @f(ptr %buffer) {
+  %value = call i32 @compute(ptr %buffer)
+  ret i32 %value
+}
+)");
+        ASSERT_NE(func, nullptr);
+        EXPECT_EQ(stackDepthAround(*func, "compute"), "<nothing>");
     }
 } // namespace
