@@ -33,9 +33,12 @@ fi
 
 mkdir -p "${OUT_DIR}"
 
+# shellcheck source-path=SCRIPTDIR source=scripts/run_with_timeout.sh
+source "${ROOT_DIR}/test/scripts/run_with_timeout.sh"
+
 expect_leak() {
   case "$1" in
-    ct_autofree_local.c|ct_autofree_select_escape.c|ct_autofree_ptrtoint_escape.c|ct_autofree_inttoptr_escape.c|ct_autofree_scalar_slot_escape.c)
+    ct_autofree_local.c|ct_autofree_select_escape.c|ct_autofree_ptrtoint_escape.c|ct_autofree_inttoptr_escape.c|ct_autofree_scalar_slot_escape.c|ct_threads_stress.c)
       return 0
       ;;
     *)
@@ -89,6 +92,7 @@ flags_for() {
   case "$1" in
     # Its drainer thread must not log: every log line would block on its full pipe.
     ct_autofree_scan_suspended_io.c) echo "--ct-modules=alloc --ct-autofree" ;;
+    ct_threads_stress.c) echo "--ct-modules=alloc,bounds --ct-autofree --ct-no-alloc-trace" ;;
     *) echo "--ct-modules=trace,alloc --ct-autofree" ;;
   esac
 }
@@ -100,30 +104,9 @@ env_for() {
     ct_autofree_scan_suspended_io.c)
       echo "CT_AUTOFREE_SCAN=1 CT_AUTOFREE_SCAN_START=1 CT_AUTOFREE_SCAN_PERIOD_MS=5 CT_DEBUG_AUTOFREE_SCAN=2"
       ;;
+    # The scan suspends the threads while they allocate.
+    ct_threads_stress.c) echo "CT_AUTOFREE_SCAN=1 CT_AUTOFREE_SCAN_START=1 CT_AUTOFREE_SCAN_PERIOD_MS=5" ;;
   esac
-}
-
-# A run longer than this is a hang: the fixture is killed and fails.
-RUN_TIMEOUT_SECONDS=60
-
-# Runs a command with its output in a file, killed after RUN_TIMEOUT_SECONDS. Returns the
-# command's status, or 124 on timeout, as timeout(1) does, which macOS lacks.
-run_with_timeout() {
-  local log="$1"
-  shift
-  "$@" >"${log}" 2>&1 &
-  local pid=$!
-  local waited=0
-  while kill -0 "${pid}" 2>/dev/null; do
-    if [[ "${waited}" -ge $((RUN_TIMEOUT_SECONDS * 10)) ]]; then
-      kill -9 "${pid}" 2>/dev/null || true
-      wait "${pid}" 2>/dev/null || true
-      return 124
-    fi
-    sleep 0.1
-    waited=$((waited + 1))
-  done
-  wait "${pid}"
 }
 
 TESTS=(
@@ -143,6 +126,7 @@ TESTS=(
   ct_autofree_sbrk.c
   ct_autofree_brk.c
   ct_autofree_scan_suspended_io.c
+  ct_threads_stress.c
 )
 
 PASS=0
@@ -172,7 +156,7 @@ run_one() {
   run_env="$(env_for "${test_file}")"
   set +e
   # shellcheck disable=SC2086
-  run_with_timeout "${run_log}" env ${run_env} "${bin}"
+  run_with_timeout env ${run_env} "${bin}" >"${run_log}" 2>&1
   local run_rc=$?
   set -e
   if [[ "${run_rc}" -eq 124 ]]; then
