@@ -16,6 +16,12 @@
 #endif
 #include <windows.h>
 
+// The objects of this file are constructed before the program's and destroyed after them:
+// the program's static initializers may already allocate through the table, and the leak
+// report, ct_leak_reporter's destructor, must come after the destructors of the program's
+// global objects and its exit handlers, which release blocks too.
+#pragma init_seg(lib)
+
 namespace
 {
     enum CtAllocKind : unsigned char
@@ -1055,6 +1061,7 @@ extern "C"
         ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayDestroying, site);
     }
 
-    // The report is the destructor of ct_leak_reporter, a static object of this file.
+    // The report is the destructor of ct_leak_reporter, constructed before the program's
+    // own static objects (init_seg above).
     CT_NOINSTR void __ct_schedule_leak_report(void) {}
 }
