@@ -124,6 +124,11 @@ extern "C"
         }
     }
 
+    CT_NOINSTR size_t __ct_stack_depth(void)
+    {
+        return ct_stack_depth;
+    }
+
     CT_NOINSTR void __ct_check_bounds(const void* base, const void* ptr, size_t access_size,
                                       const char* site, int is_write)
     {

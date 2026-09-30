@@ -74,6 +74,8 @@
     /* __ct_stack_push returns the depth __ct_stack_pop restores when the frame exits.      */  \
     X(size_t, __ct_stack_push, (const void* base, size_t size, const char* site))                \
     X(void,  __ct_stack_pop,   (size_t depth))                                                    \
+    /* __ct_stack_depth reads it, for a frame that setjmp may return to again.              */  \
+    X(size_t, __ct_stack_depth, (void))                                                           \
     /* Vtable diagnostics (Itanium ABI on POSIX, MSVC ABI on Windows). */                         \
     X(void,  __ct_vtable_dump, (void* this_ptr, const char* site, const char* static_type))       \
     X(void,  __ct_vcall_trace, (void* this_ptr, void* target, const char* site,                   \
