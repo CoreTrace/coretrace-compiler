@@ -58,6 +58,16 @@ expect_autofree() {
   esac
 }
 
+# What the conservative scan must release, checked on macOS, where it runs: "none", or
+# the grep pattern of the allocation site of the one block it must release.
+expect_scan_release() {
+  case "$1" in
+    ct_autofree_scan_roots.c) echo 'ct_autofree_scan_roots\.c:57:' ;;
+    ct_threads_stress.c) echo none ;;
+    *) return 1 ;;
+  esac
+}
+
 expect_nonzero_exit() {
   case "$1" in
     ct_autofree_select_escape.c|ct_autofree_ptrtoint_escape.c|ct_autofree_inttoptr_escape.c|ct_autofree_scalar_slot_escape.c)
@@ -77,6 +87,12 @@ skip_reason_after_run() {
   local test_file="$1"
   local run_log="$2"
   case "${test_file}" in
+    ct_autofree_scan_roots.c)
+      if [[ "$(uname -s)" != Darwin ]]; then
+        echo "the conservative scan runs on macOS only"
+        return 0
+      fi
+      ;;
     ct_autofree_sbrk.c|ct_autofree_brk.c)
       if has_match "auto-free skipped ptr=0xffffffffffffffff" "${run_log}"; then
         echo "sbrk returned -1 on this host, the break cannot grow"
@@ -93,6 +109,7 @@ flags_for() {
     # Its drainer thread must not log: every log line would block on its full pipe.
     ct_autofree_scan_suspended_io.c) echo "--ct-modules=alloc --ct-autofree" ;;
     ct_threads_stress.c) echo "--ct-modules=alloc,bounds --ct-autofree --ct-no-alloc-trace" ;;
+    ct_autofree_scan_roots.c) echo "--ct-modules=alloc --ct-autofree" ;;
     *) echo "--ct-modules=trace,alloc --ct-autofree" ;;
   esac
 }
@@ -105,7 +122,9 @@ env_for() {
       echo "CT_AUTOFREE_SCAN=1 CT_AUTOFREE_SCAN_START=1 CT_AUTOFREE_SCAN_PERIOD_MS=5 CT_DEBUG_AUTOFREE_SCAN=2"
       ;;
     # The scan suspends the threads while they allocate.
-    ct_threads_stress.c) echo "CT_AUTOFREE_SCAN=1 CT_AUTOFREE_SCAN_START=1 CT_AUTOFREE_SCAN_PERIOD_MS=5" ;;
+    ct_threads_stress.c|ct_autofree_scan_roots.c)
+      echo "CT_AUTOFREE_SCAN=1 CT_AUTOFREE_SCAN_START=1 CT_AUTOFREE_SCAN_PERIOD_MS=5"
+      ;;
   esac
 }
 
@@ -127,6 +146,7 @@ TESTS=(
   ct_autofree_brk.c
   ct_autofree_scan_suspended_io.c
   ct_threads_stress.c
+  ct_autofree_scan_roots.c
 )
 
 PASS=0
@@ -197,6 +217,22 @@ run_one() {
   if expect_autofree "${test_file}"; then
     if ! has_match "auto-free ptr=" "${run_log}"; then
       echo "  FAIL: expected auto-free log, none found"
+      return 1
+    fi
+  fi
+
+  local release
+  if [[ "$(uname -s)" == Darwin ]] && release="$(expect_scan_release "${test_file}")"; then
+    local released
+    released="$(grep "auto-free(scan)" "${run_log}" || true)"
+    if [[ "${release}" == none ]]; then
+      if [[ -n "${released}" ]]; then
+        echo "  FAIL: the scan released a block still in use (see ${run_log})"
+        return 1
+      fi
+    elif [[ "$(grep -c . <<<"${released}")" -ne 1 ]] ||
+      ! grep -q "site=[^ ]*${release}" <<<"${released}"; then
+      echo "  FAIL: expected the scan to release the block allocated at ${release} only (see ${run_log})"
       return 1
     fi
   fi

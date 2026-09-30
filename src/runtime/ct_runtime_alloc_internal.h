@@ -66,6 +66,11 @@ extern size_t ct_alloc_table_size;
 extern size_t ct_alloc_table_mask;
 extern size_t ct_alloc_count;
 
+// Bounds of the table's initial storage, a static array in the image's data. Until the
+// table grows, it holds a pointer to every tracked block, which the scan must not take
+// for references to them.
+CT_NOINSTR void ct_alloc_table_storage_bounds(uintptr_t* begin, uintptr_t* end);
+
 CT_NODISCARD CT_NOINSTR size_t ct_hash_ptr(const void* ptr, size_t mask);
 
 // Entry holding exactly `ptr`, in any state; nullptr when absent.
