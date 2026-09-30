@@ -1540,10 +1540,8 @@ extern "C"
 } // extern "C"
 
 // The report must run after the program's own exit-time code, which may release blocks:
-// exit handlers, destructors of global objects, destructor functions. ELF runs .fini_array
-// after every exit handler, and the lowest priority last: 101, the lowest a program may
-// use, puts the report after every destructor function of default priority.
-CT_NOINSTR __attribute__((destructor(101))) static void ct_report_leaks(void)
+// exit handlers, destructors of global objects, destructor functions.
+CT_NOINSTR static void ct_report_leaks(void)
 {
     // The detached GC thread may still mutate the table; hold the spinlock for the whole
     // report. The ct_write_* primitives write raw bytes and never re-enter the allocator,
@@ -1593,3 +1591,35 @@ CT_NOINSTR __attribute__((destructor(101))) static void ct_report_leaks(void)
     }
     ct_lock_release();
 }
+
+#if defined(__APPLE__)
+// Mach-O keeps one list of exit-time code, run in reverse order of registration: exit
+// handlers, destructors of global objects, and destructor functions, which clang registers
+// the same way. The report registered first runs last: every module that tracks
+// allocations schedules it from a constructor that runs before its static initializers.
+extern "C" CT_NOINSTR void __ct_schedule_leak_report(void)
+{
+    static int scheduled = 0;
+    if (__atomic_exchange_n(&scheduled, 1, __ATOMIC_ACQ_REL) == 0)
+    {
+        std::atexit(ct_report_leaks);
+    }
+}
+
+// Objects compiled without that constructor still get a report, scheduled when the runtime
+// starts: after the static initializers of the objects linked before it.
+CT_NOINSTR __attribute__((constructor)) static void ct_schedule_leak_report_late(void)
+{
+    __ct_schedule_leak_report();
+}
+#else
+// ELF runs .fini_array after every exit handler, the destructors of global objects among
+// them, and the lowest priority last: 101, the lowest a program may use, puts the report
+// after every destructor function of default priority.
+extern "C" CT_NOINSTR void __ct_schedule_leak_report(void) {}
+
+CT_NOINSTR __attribute__((destructor(101))) static void ct_report_leaks_at_exit(void)
+{
+    ct_report_leaks();
+}
+#endif

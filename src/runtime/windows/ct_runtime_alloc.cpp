@@ -1054,4 +1054,7 @@ extern "C"
     {
         ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayDestroying, site);
     }
+
+    // The report is the destructor of ct_leak_reporter, a static object of this file.
+    CT_NOINSTR void __ct_schedule_leak_report(void) {}
 }
