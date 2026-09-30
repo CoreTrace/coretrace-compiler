@@ -99,6 +99,7 @@ expect_stdout() {
     ct_vtable_virtual_base.cpp) echo "value=99" ;;
     ct_new_delete_library.cpp) echo "owned=7 array=4 pointers=16 counts=5 shared=64" ;;
     ct_bounds_stack_longjmp.c) echo "recovered=1000" ;;
+    ct_bounds_stack_deep_valid.c) echo "again=" ;;
     ct_bounds_freed_address_reuse.c) echo "sum=" ;;
     ct_threads_stress.c) echo "damaged=0" ;;
     *) echo "" ;;
@@ -147,6 +148,7 @@ TESTS=(
   ct_bounds_stack_valid.c
   ct_bounds_stack_unwind_valid.cpp
   ct_bounds_stack_longjmp.c
+  ct_bounds_stack_deep_valid.c
   ct_bounds_freed_address_reuse.c
   ct_bounds_heap_use_after_free.c
   ct_realloc_zero.c
