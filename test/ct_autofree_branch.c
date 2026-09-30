@@ -10,9 +10,10 @@ static int first_byte(int n)
     int result = 0;
     if (n > 0)
     {
-        char* block = malloc(8);
+        // A volatile store stays although nothing reads it, and so does the block.
+        volatile char* block = malloc(8);
         block[0] = (char)n;
-        result = block[0];
+        result = n;
     }
     return result;
 }
