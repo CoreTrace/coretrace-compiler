@@ -7,6 +7,7 @@
 #include "compilerlib/instrumentation/alloc.hpp"
 
 #include <llvm/AsmParser/Parser.h>
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
@@ -131,6 +132,29 @@ define linkonce_odr void @library_release(ptr %block) !dbg !18 {
     TEST_F(AllocPassTest, LibraryReleaseGoesThroughTheRuntime)
     {
         EXPECT_EQ(callees("library_release"), std::vector<std::string>{"__ct_delete"});
+    }
+
+    // Before the module's static initializers, which may register exit-time code that
+    // releases blocks: programs may give their own constructors priority 101 and above.
+    TEST_F(AllocPassTest, ModuleSchedulesTheLeakReportBeforeItsConstructors)
+    {
+        const llvm::GlobalVariable* ctors = module_->getGlobalVariable("llvm.global_ctors");
+        ASSERT_NE(ctors, nullptr);
+        const auto* entries = llvm::dyn_cast<llvm::ConstantArray>(ctors->getInitializer());
+        ASSERT_NE(entries, nullptr);
+        int scheduled = 0;
+        for (const llvm::Use& use : entries->operands())
+        {
+            const auto* entry = llvm::cast<llvm::ConstantStruct>(use.get());
+            const auto* function = llvm::dyn_cast<llvm::Function>(entry->getOperand(1));
+            if (function && function->getName() == "__ct_schedule_leak_report")
+            {
+                ++scheduled;
+                EXPECT_LT(llvm::cast<llvm::ConstantInt>(entry->getOperand(0))->getZExtValue(),
+                          101u);
+            }
+        }
+        EXPECT_EQ(scheduled, 1);
     }
 
     using AutoFreeTest = InstrumentedModuleTest;
