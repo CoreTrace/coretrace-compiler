@@ -2,7 +2,9 @@
 //
 // Conservative auto-free scan: decides whether an allocation the compiler proved
 // unused is still reachable from the mutator's roots (thread registers, thread
-// stacks and the images' __DATA segments) before the runtime releases it.
+// stacks and the images' __DATA segments) before the runtime releases it. The
+// periodic scan also releases every block it cannot reach from those roots,
+// directly or through other tracked blocks.
 //
 // The scan suspends every other thread while it reads their registers and stacks,
 // so it only exists where that is possible; elsewhere the entry points below are
@@ -10,6 +12,7 @@
 #include "ct_runtime_alloc_internal.h"
 #include "ct_runtime_quarantine.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -22,6 +25,7 @@
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <malloc/malloc.h>
 #include <pthread.h>
 #endif
@@ -43,6 +47,11 @@ static std::atomic<uint64_t> ct_autofree_scan_last_ns{0};
 static std::atomic<uint64_t> ct_autofree_scan_last_gc_ns{0};
 static pthread_t ct_autofree_scan_thread;
 static std::atomic<int> ct_autofree_scan_thread_started{0};
+#if defined(__APPLE__)
+// The periodic scan's own thread, which the scan skips: it holds none of the program's
+// references, only stale copies of the words earlier passes read.
+static std::atomic<thread_t> ct_autofree_scan_thread_port{MACH_PORT_NULL};
+#endif
 static size_t ct_autofree_scan_timeout_check_freq = 100;
 CT_NODISCARD CT_NOINSTR static uint64_t ct_time_ns(void)
 {
@@ -225,54 +234,53 @@ CT_NODISCARD CT_NOINSTR static int ct_scan_time_exceeded_fast(uint64_t start_ns,
     return 0;
 }
 
-CT_NODISCARD CT_NOINSTR static struct ct_alloc_entry*
-ct_table_find_entry_containing(const void* ptr)
+// A tracked block's address range. The periodic scan lists the live blocks' ranges,
+// sorted, to look up each word it reads by binary search.
+struct ct_block_range
 {
-    if (!ptr)
+    uintptr_t begin;
+    uintptr_t end;
+    struct ct_alloc_entry* entry;
+};
+
+// The periodic scan's work buffers, grown before the threads are suspended and kept across
+// passes: the live blocks' ranges, and the marked blocks whose contents are still to be
+// scanned, each pushed once. Only the scan that owns ct_autofree_scan_guard uses them.
+static struct ct_block_range* ct_scan_ranges = nullptr;
+static size_t ct_scan_range_count = 0;
+static size_t ct_scan_ranges_capacity = 0;
+static struct ct_alloc_entry** ct_scan_pending = nullptr;
+static size_t ct_scan_pending_count = 0;
+static size_t ct_scan_pending_capacity = 0;
+
+// The live block `value` points to, or into when interior pointers count; nullptr if none.
+CT_NODISCARD CT_NOINSTR static struct ct_alloc_entry* ct_scan_find_block(uintptr_t value)
+{
+    if (ct_scan_range_count == 0 || value < ct_scan_ranges[0].begin ||
+        value > ct_scan_ranges[ct_scan_range_count - 1].end)
     {
         return nullptr;
     }
-    uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
-    for (size_t i = 0; i < ct_alloc_table_size; ++i)
+    const struct ct_block_range* after =
+        std::upper_bound(ct_scan_ranges, ct_scan_ranges + ct_scan_range_count, value,
+                         [](uintptr_t address, const struct ct_block_range& range)
+                         { return address < range.begin; });
+    const struct ct_block_range& range = after[-1];
+    if (value == range.begin ||
+        (value < range.end && ct_autofree_scan_interior.load(std::memory_order_relaxed)))
     {
-        struct ct_alloc_entry* entry = &ct_alloc_table[i];
-        if (entry->state != CT_ENTRY_USED)
-        {
-            continue;
-        }
-        if (!entry->ptr || entry->size == 0)
-        {
-            continue;
-        }
-        uintptr_t base = reinterpret_cast<uintptr_t>(entry->ptr);
-        if (addr >= base && (addr - base) < entry->size)
-        {
-            return entry;
-        }
+        return range.entry;
     }
     return nullptr;
 }
 
 CT_NOINSTR static void ct_autofree_mark_value(uintptr_t value)
 {
-    if (!value)
-    {
-        return;
-    }
-    struct ct_alloc_entry* entry = ct_table_find_entry(reinterpret_cast<const void*>(value));
-    if (entry && entry->state == CT_ENTRY_USED)
+    struct ct_alloc_entry* entry = ct_scan_find_block(value);
+    if (entry && !entry->mark)
     {
         entry->mark = 1;
-        return;
-    }
-    if (!ct_autofree_scan_interior.load(std::memory_order_relaxed))
-    {
-        return;
-    }
-    entry = ct_table_find_entry_containing(reinterpret_cast<const void*>(value));
-    if (entry && entry->state == CT_ENTRY_USED)
-    {
-        entry->mark = 1;
+        ct_scan_pending[ct_scan_pending_count++] = entry;
     }
 }
 
@@ -555,81 +563,148 @@ CT_NOINSTR static void ct_scan_regs_for_marks(thread_t thread, uint64_t start_ns
 #endif
 }
 
-CT_NODISCARD CT_NOINSTR static int ct_scan_thread_stack_for_ptr(thread_t thread, uintptr_t base,
-                                                                size_t size, uint64_t start_ns)
+// A thread of the process, as a scan sees it. Its stack bounds are read before any thread
+// is suspended: pthread_from_mach_thread_np takes a lock a suspended thread may hold. Only a
+// thread the scan could suspend, or the scanning thread, is read: one that could not be
+// suspended has exited, and its stack may already be gone.
+struct ct_scan_thread
 {
-    pthread_t pthread = pthread_from_mach_thread_np(thread);
-    if (!pthread)
-    {
-        return 0;
-    }
-    void* stack_addr = pthread_get_stackaddr_np(pthread);
-    size_t stack_size = pthread_get_stacksize_np(pthread);
-    if (!stack_addr || !stack_size)
-    {
-        return 0;
-    }
+    thread_t port;
+    uintptr_t stack_low; // above the guard page
+    uintptr_t stack_high;
+    bool readable;
+};
 
-    uintptr_t top = reinterpret_cast<uintptr_t>(stack_addr);
-    uintptr_t bottom = top - stack_size;
-    long page_size = sysconf(_SC_PAGESIZE);
-    uintptr_t guard = bottom;
-    if (page_size > 0 && guard + static_cast<uintptr_t>(page_size) < top)
+struct ct_scan_threads
+{
+    struct ct_scan_thread* items;
+    mach_msg_type_number_t count;
+    thread_t self;
+};
+
+// Lists the process's threads and their stacks, before any is suspended. False when they
+// cannot be listed, with nothing to release.
+CT_NODISCARD CT_NOINSTR static bool ct_list_threads(struct ct_scan_threads* threads)
+{
+    thread_act_array_t ports = nullptr;
+    mach_msg_type_number_t count = 0;
+    if (task_threads(mach_task_self(), &ports, &count) != KERN_SUCCESS)
     {
-        guard += static_cast<uintptr_t>(page_size);
+        return false;
     }
-    uintptr_t sp = 0;
-    if (ct_thread_get_sp(thread, &sp) && sp >= guard && sp < top)
+    threads->items =
+        static_cast<struct ct_scan_thread*>(std::malloc(count * sizeof(struct ct_scan_thread)));
+    if (threads->items)
     {
-        bottom = sp;
+        for (mach_msg_type_number_t i = 0; i < count; ++i)
+        {
+            struct ct_scan_thread& thread = threads->items[i];
+            thread = {ports[i], 0, 0, false};
+            const pthread_t pthread = pthread_from_mach_thread_np(ports[i]);
+            if (!pthread)
+            {
+                continue;
+            }
+            const uintptr_t high = reinterpret_cast<uintptr_t>(pthread_get_stackaddr_np(pthread));
+            const size_t size = pthread_get_stacksize_np(pthread);
+            if (!high || !size)
+            {
+                continue;
+            }
+            thread.stack_low = high - size;
+            if (thread.stack_low + vm_page_size < high)
+            {
+                thread.stack_low += vm_page_size;
+            }
+            thread.stack_high = high;
+        }
     }
     else
     {
-        bottom = guard;
+        for (mach_msg_type_number_t i = 0; i < count; ++i)
+        {
+            mach_port_deallocate(mach_task_self(), ports[i]);
+        }
     }
-    return ct_scan_range_for_ptr(base, size, reinterpret_cast<void*>(bottom),
-                                 reinterpret_cast<void*>(top), start_ns);
+    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(ports),
+                  count * sizeof(thread_t));
+    if (!threads->items)
+    {
+        return false;
+    }
+    threads->count = count;
+    threads->self = mach_thread_self();
+    return true;
 }
 
-CT_NOINSTR static void ct_scan_thread_stack_for_marks(thread_t thread, uint64_t start_ns,
-                                                      int* timed_out)
+// Suspends every listed thread but the calling one.
+CT_NOINSTR static void ct_suspend_threads(struct ct_scan_threads* threads)
 {
-    pthread_t pthread = pthread_from_mach_thread_np(thread);
-    if (!pthread)
+    for (mach_msg_type_number_t i = 0; i < threads->count; ++i)
     {
-        return;
+        struct ct_scan_thread& thread = threads->items[i];
+        thread.readable =
+            thread.port == threads->self || thread_suspend(thread.port) == KERN_SUCCESS;
     }
-    void* stack_addr = pthread_get_stackaddr_np(pthread);
-    size_t stack_size = pthread_get_stacksize_np(pthread);
-    if (!stack_addr || !stack_size)
-    {
-        return;
-    }
+}
 
-    uintptr_t top = reinterpret_cast<uintptr_t>(stack_addr);
-    uintptr_t bottom = top - stack_size;
-    long page_size = sysconf(_SC_PAGESIZE);
-    uintptr_t guard = bottom;
-    if (page_size > 0 && guard + static_cast<uintptr_t>(page_size) < top)
+// Resumes the threads ct_suspend_threads suspended, and releases the list.
+CT_NOINSTR static void ct_resume_threads(struct ct_scan_threads* threads)
+{
+    for (mach_msg_type_number_t i = 0; i < threads->count; ++i)
     {
-        guard += static_cast<uintptr_t>(page_size);
+        const struct ct_scan_thread& thread = threads->items[i];
+        if (thread.readable && thread.port != threads->self)
+        {
+            thread_resume(thread.port);
+        }
+        mach_port_deallocate(mach_task_self(), thread.port);
+    }
+    mach_port_deallocate(mach_task_self(), threads->self);
+    std::free(threads->items);
+}
+
+// The part of a thread's stack in use, from its stack pointer, or the whole stack when that
+// cannot be read, to its top. False when the thread's stack is unknown.
+CT_NODISCARD CT_NOINSTR static bool ct_thread_stack_in_use(const struct ct_scan_thread& thread,
+                                                           const void** begin, const void** end)
+{
+    if (!thread.stack_high)
+    {
+        return false;
     }
     uintptr_t sp = 0;
-    if (ct_thread_get_sp(thread, &sp) && sp >= guard && sp < top)
+    const bool sp_known =
+        ct_thread_get_sp(thread.port, &sp) && sp >= thread.stack_low && sp < thread.stack_high;
+    *begin = reinterpret_cast<const void*>(sp_known ? sp : thread.stack_low);
+    *end = reinterpret_cast<const void*>(thread.stack_high);
+    return true;
+}
+
+CT_NODISCARD CT_NOINSTR static int ct_scan_thread_stack_for_ptr(const struct ct_scan_thread& thread,
+                                                                uintptr_t base, size_t size,
+                                                                uint64_t start_ns)
+{
+    const void* begin = nullptr;
+    const void* end = nullptr;
+    return ct_thread_stack_in_use(thread, &begin, &end) &&
+           ct_scan_range_for_ptr(base, size, begin, end, start_ns);
+}
+
+CT_NOINSTR static void ct_scan_thread_stack_for_marks(const struct ct_scan_thread& thread,
+                                                      uint64_t start_ns, int* timed_out)
+{
+    const void* begin = nullptr;
+    const void* end = nullptr;
+    if (ct_thread_stack_in_use(thread, &begin, &end))
     {
-        bottom = sp;
+        ct_scan_range_for_marks(begin, end, start_ns, timed_out);
     }
-    else
-    {
-        bottom = guard;
-    }
-    ct_scan_range_for_marks(reinterpret_cast<void*>(bottom), reinterpret_cast<void*>(top), start_ns,
-                            timed_out);
 }
 
 // Optimized function: scan regs and stack together in one pass
-CT_NOINSTR static void ct_scan_thread_regs_and_stack_marks(thread_t thread, uint64_t start_ns,
-                                                           int* timed_out)
+CT_NOINSTR static void ct_scan_thread_regs_and_stack_marks(const struct ct_scan_thread& thread,
+                                                           uint64_t start_ns, int* timed_out)
 {
     if (timed_out && *timed_out)
     {
@@ -639,7 +714,7 @@ CT_NOINSTR static void ct_scan_thread_regs_and_stack_marks(thread_t thread, uint
     // Scan regs if enabled
     if (ct_autofree_scan_regs.load(std::memory_order_relaxed))
     {
-        ct_scan_regs_for_marks(thread, start_ns, timed_out);
+        ct_scan_regs_for_marks(thread.port, start_ns, timed_out);
     }
 
     // Then scan stack if enabled and not timed out
@@ -718,6 +793,33 @@ CT_NODISCARD CT_NOINSTR static bool ct_reserve(void** buffer, size_t* capacity, 
     return true;
 }
 
+// Appends [begin, end) to ct_data_ranges, less the allocation table's static storage.
+CT_NODISCARD CT_NOINSTR static bool ct_add_data_range(size_t* count, uintptr_t begin, uintptr_t end)
+{
+    uintptr_t table_begin = 0;
+    uintptr_t table_end = 0;
+    ct_alloc_table_storage_bounds(&table_begin, &table_end);
+    const struct ct_data_range pieces[] = {
+        {begin, std::min(end, table_begin)},
+        {std::max(begin, table_end), end},
+    };
+    for (const struct ct_data_range& piece : pieces)
+    {
+        if (piece.begin >= piece.end)
+        {
+            continue;
+        }
+        void* buffer = ct_data_ranges;
+        if (!ct_reserve(&buffer, &ct_data_range_capacity, *count + 1, sizeof(struct ct_data_range)))
+        {
+            return false;
+        }
+        ct_data_ranges = static_cast<struct ct_data_range*>(buffer);
+        ct_data_ranges[(*count)++] = piece;
+    }
+    return true;
+}
+
 // Lists the data segments into ct_data_ranges and returns, in *generation, the image
 // generation they belong to. Needs the scan guard; only outside suspension.
 CT_NODISCARD CT_NOINSTR static bool ct_list_data_segments(uint64_t* generation)
@@ -752,15 +854,12 @@ CT_NODISCARD CT_NOINSTR static bool ct_list_data_segments(uint64_t* generation)
                 const segment_command_64* seg = reinterpret_cast<const segment_command_64*>(cmd);
                 if (std::strncmp(seg->segname, "__DATA", 6) == 0)
                 {
-                    void* buffer = ct_data_ranges;
-                    if (!ct_reserve(&buffer, &ct_data_range_capacity, count + 1,
-                                    sizeof(struct ct_data_range)))
+                    const uintptr_t begin = static_cast<uintptr_t>(seg->vmaddr + slide);
+                    if (!ct_add_data_range(&count, begin,
+                                           begin + static_cast<uintptr_t>(seg->vmsize)))
                     {
                         return false;
                     }
-                    ct_data_ranges = static_cast<struct ct_data_range*>(buffer);
-                    const uintptr_t begin = static_cast<uintptr_t>(seg->vmaddr + slide);
-                    ct_data_ranges[count++] = {begin, begin + static_cast<uintptr_t>(seg->vmsize)};
                 }
             }
             cmd = reinterpret_cast<const load_command*>(reinterpret_cast<const char*>(cmd) +
@@ -823,30 +922,24 @@ CT_NODISCARD CT_NOINSTR int ct_autofree_scan_for_ptr(void* ptr, size_t size)
     uint64_t start_ns = ct_time_ns();
     uintptr_t base = reinterpret_cast<uintptr_t>(ptr);
 
-    thread_act_array_t threads = nullptr;
-    mach_msg_type_number_t thread_count = 0;
-    if (task_threads(mach_task_self(), &threads, &thread_count) != KERN_SUCCESS)
+    struct ct_scan_threads threads = {};
+    if (!ct_list_threads(&threads))
     {
         return 0;
     }
+    ct_suspend_threads(&threads);
 
-    thread_t self_thread = mach_thread_self();
-    for (mach_msg_type_number_t i = 0; i < thread_count; ++i)
+    int found = 0;
+    for (mach_msg_type_number_t i = 0; i < threads.count && !found; ++i)
     {
-        if (threads[i] == self_thread)
+        const struct ct_scan_thread& thread = threads.items[i];
+        if (!thread.readable)
         {
             continue;
         }
-        thread_suspend(threads[i]);
-    }
-
-    int found = 0;
-    for (mach_msg_type_number_t i = 0; i < thread_count && !found; ++i)
-    {
-        thread_t thread = threads[i];
         if (ct_autofree_scan_regs.load(std::memory_order_relaxed))
         {
-            if (ct_scan_regs_for_ptr(thread, base, size, start_ns))
+            if (ct_scan_regs_for_ptr(thread.port, base, size, start_ns))
             {
                 found = 1;
                 break;
@@ -876,17 +969,7 @@ CT_NODISCARD CT_NOINSTR int ct_autofree_scan_for_ptr(void* ptr, size_t size)
         }
     }
 
-    for (mach_msg_type_number_t i = 0; i < thread_count; ++i)
-    {
-        if (threads[i] != self_thread)
-        {
-            thread_resume(threads[i]);
-        }
-        mach_port_deallocate(mach_task_self(), threads[i]);
-    }
-    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads),
-                  thread_count * sizeof(thread_t));
-    mach_port_deallocate(mach_task_self(), self_thread);
+    ct_resume_threads(&threads);
 
     const int debug_level = ct_autofree_scan_debug.load(std::memory_order_relaxed);
     if (debug_level > 1 || (debug_level == 1 && found))
@@ -995,6 +1078,76 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
     }
 }
 
+// Lists the live blocks into ct_scan_ranges, sorted, and clears their marks. False when
+// they outnumber the buffers reserved before the threads were suspended. ct_alloc_lock held.
+CT_NODISCARD CT_NOINSTR static bool ct_scan_list_blocks(void)
+{
+    size_t count = 0;
+    for (size_t i = 0; i < ct_alloc_table_size; ++i)
+    {
+        struct ct_alloc_entry* entry = &ct_alloc_table[i];
+        if (entry->state != CT_ENTRY_USED)
+        {
+            continue;
+        }
+        if (count == ct_scan_ranges_capacity || count == ct_scan_pending_capacity)
+        {
+            return false;
+        }
+        entry->mark = 0;
+        const uintptr_t begin = reinterpret_cast<uintptr_t>(entry->ptr);
+        ct_scan_ranges[count++] = {begin, begin + entry->size, entry};
+    }
+    std::sort(ct_scan_ranges, ct_scan_ranges + count,
+              [](const struct ct_block_range& left, const struct ct_block_range& right)
+              { return left.begin < right.begin; });
+    ct_scan_range_count = count;
+    ct_scan_pending_count = 0;
+    return true;
+}
+
+// A mapping may be unreadable (PROT_NONE): its words are copied through the kernel, which
+// fails on such a page instead of faulting. That page may hold the only reference to a
+// block, so the pass is then marked incomplete.
+CT_NOINSTR static void ct_scan_mapping_for_marks(const struct ct_alloc_entry& entry,
+                                                 uint64_t start_ns, int* incomplete)
+{
+    uintptr_t words[512];
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(entry.ptr);
+    const uintptr_t end = begin + entry.size;
+    for (uintptr_t at = begin; at < end && !*incomplete; at += sizeof(words))
+    {
+        const mach_vm_size_t chunk = std::min<uintptr_t>(sizeof(words), end - at);
+        mach_vm_size_t copied = 0;
+        if (mach_vm_read_overwrite(mach_task_self(), at, chunk,
+                                   reinterpret_cast<mach_vm_address_t>(words),
+                                   &copied) != KERN_SUCCESS)
+        {
+            *incomplete = 1;
+            return;
+        }
+        ct_scan_range_for_marks(words, reinterpret_cast<const char*>(words) + copied, start_ns,
+                                incomplete);
+    }
+}
+
+// Scans the contents of every marked block, marking the blocks they point to in turn, so
+// that a block reachable only through other blocks is kept.
+CT_NOINSTR static void ct_scan_marked_blocks(uint64_t start_ns, int* incomplete)
+{
+    while (ct_scan_pending_count > 0 && !*incomplete)
+    {
+        const struct ct_alloc_entry* entry = ct_scan_pending[--ct_scan_pending_count];
+        if (entry->kind == CT_ALLOC_KIND_MMAP)
+        {
+            ct_scan_mapping_for_marks(*entry, start_ns, incomplete);
+            continue;
+        }
+        const char* begin = static_cast<const char*>(entry->ptr);
+        ct_scan_range_for_marks(begin, begin + entry->size, start_ns, incomplete);
+    }
+}
+
 // The blocks a pass releases, kept across passes and grown before the threads are
 // suspended. Only the scan that owns ct_autofree_scan_guard uses it.
 static struct ct_autofree_free_item* ct_scan_items = nullptr;
@@ -1029,22 +1182,32 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
     // Everything that allocates, releases, logs or calls into dyld happens before the
     // threads are suspended or after they resume: a suspended thread may hold the
     // allocator's lock, the logger's or dyld's, and the scan would wait for it forever
-    // (#118). The list of blocks to release is sized to the live blocks beforehand; any
-    // block allocated in between waits for the next pass.
+    // (#118). The work buffers are sized to the table beforehand, which holds every live
+    // block unless it grows in between: that pass then releases nothing.
     ct_lock_acquire();
     const size_t live = ct_alloc_count;
+    const size_t table_size = ct_alloc_table_size;
     ct_lock_release();
     if (live == 0)
     {
         return;
     }
     void* items_buffer = ct_scan_items;
-    if (!ct_reserve(&items_buffer, &ct_scan_items_capacity, live,
-                    sizeof(struct ct_autofree_free_item)))
+    void* ranges_buffer = ct_scan_ranges;
+    void* pending_buffer = ct_scan_pending;
+    const bool reserved = ct_reserve(&items_buffer, &ct_scan_items_capacity, table_size,
+                                     sizeof(struct ct_autofree_free_item)) &&
+                          ct_reserve(&ranges_buffer, &ct_scan_ranges_capacity, table_size,
+                                     sizeof(struct ct_block_range)) &&
+                          ct_reserve(&pending_buffer, &ct_scan_pending_capacity, table_size,
+                                     sizeof(struct ct_alloc_entry*));
+    ct_scan_items = static_cast<struct ct_autofree_free_item*>(items_buffer);
+    ct_scan_ranges = static_cast<struct ct_block_range*>(ranges_buffer);
+    ct_scan_pending = static_cast<struct ct_alloc_entry**>(pending_buffer);
+    if (!reserved)
     {
         return;
     }
-    ct_scan_items = static_cast<struct ct_autofree_free_item*>(items_buffer);
     const bool scan_globals = ct_autofree_scan_globals.load(std::memory_order_relaxed);
     uint64_t generation = 0;
     if (scan_globals && !ct_list_data_segments(&generation))
@@ -1053,39 +1216,29 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
     }
 
     uint64_t start_ns = ct_time_ns();
-    thread_act_array_t threads = nullptr;
-    mach_msg_type_number_t thread_count = 0;
-    if (task_threads(mach_task_self(), &threads, &thread_count) != KERN_SUCCESS)
+    struct ct_scan_threads threads = {};
+    if (!ct_list_threads(&threads))
     {
         return;
     }
 
     ct_lock_acquire();
-    thread_t self_thread = mach_thread_self();
-    for (mach_msg_type_number_t i = 0; i < thread_count; ++i)
+    ct_suspend_threads(&threads);
+
+    // A pass that cannot see every block and root, or runs out of time, releases nothing.
+    int timed_out = !ct_scan_list_blocks();
+    const thread_t scan_thread = ct_autofree_scan_thread_port.load(std::memory_order_acquire);
+    for (mach_msg_type_number_t i = 0; i < threads.count && !timed_out; ++i)
     {
-        if (threads[i] == self_thread)
+        const struct ct_scan_thread& thread = threads.items[i];
+        if (!thread.readable || thread.port == scan_thread)
         {
             continue;
         }
-        thread_suspend(threads[i]);
-    }
-
-    for (size_t i = 0; i < ct_alloc_table_size; ++i)
-    {
-        if (ct_alloc_table[i].state == CT_ENTRY_USED)
-        {
-            ct_alloc_table[i].mark = 0;
-        }
-    }
-
-    int timed_out = 0;
-    for (mach_msg_type_number_t i = 0; i < thread_count && !timed_out; ++i)
-    {
         if (ct_autofree_scan_regs.load(std::memory_order_relaxed) ||
             ct_autofree_scan_stack.load(std::memory_order_relaxed))
         {
-            ct_scan_thread_regs_and_stack_marks(threads[i], start_ns, &timed_out);
+            ct_scan_thread_regs_and_stack_marks(thread, start_ns, &timed_out);
         }
     }
     // Images changed since the segments were listed: some roots may be missing, so this
@@ -1101,6 +1254,7 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
             timed_out = 1;
         }
     }
+    ct_scan_marked_blocks(start_ns, &timed_out);
 
     size_t collected = 0;
     if (!timed_out)
@@ -1120,18 +1274,7 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
         }
     }
     ct_lock_release();
-
-    for (mach_msg_type_number_t i = 0; i < thread_count; ++i)
-    {
-        if (threads[i] != self_thread)
-        {
-            thread_resume(threads[i]);
-        }
-        mach_port_deallocate(mach_task_self(), threads[i]);
-    }
-    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads),
-                  thread_count * sizeof(thread_t));
-    mach_port_deallocate(mach_task_self(), self_thread);
+    ct_resume_threads(&threads);
 
     const int debug_level = ct_autofree_scan_debug.load(std::memory_order_relaxed);
     if (debug_level > 1 || (debug_level == 1 && (timed_out || collected > 0)))
@@ -1169,6 +1312,8 @@ CT_NOINSTR static void* ct_autofree_scan_thread_main(void*)
     {
         return nullptr;
     }
+    // The send right is kept for the life of the thread, which is the process's.
+    ct_autofree_scan_thread_port.store(mach_thread_self(), std::memory_order_release);
 
     for (;;)
     {

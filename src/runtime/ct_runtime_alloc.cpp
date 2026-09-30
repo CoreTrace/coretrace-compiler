@@ -68,6 +68,12 @@ CT_NOINSTR static void ct_warn_alloc_table_full(void)
            ct_alloc_table_size, ct_color(CTColor::Reset));
 }
 
+CT_NOINSTR void ct_alloc_table_storage_bounds(uintptr_t* begin, uintptr_t* end)
+{
+    *begin = reinterpret_cast<uintptr_t>(ct_alloc_table_storage);
+    *end = reinterpret_cast<uintptr_t>(ct_alloc_table_storage + CT_ALLOC_TABLE_SIZE);
+}
+
 CT_NODISCARD CT_NOINSTR size_t ct_hash_ptr(const void* ptr, size_t mask)
 {
     uintptr_t value = reinterpret_cast<uintptr_t>(ptr);

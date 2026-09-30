@@ -195,7 +195,9 @@ Limits:
 ## Auto-free GC Scan (Conservative)
 
 The runtime can run a conservative root scan (stack/regs/globals) to decide whether an
-allocation is still reachable. This is optional and controlled by environment variables.
+allocation is still reachable. The periodic scan keeps every block reachable from those roots,
+directly or through other tracked blocks, and releases the others. It runs on macOS only, and is
+optional and controlled by environment variables.
 
 Typical usage:
 
@@ -233,7 +235,8 @@ Environment variables (ms can be floating-point; US/NS override MS):
 - `CT_AUTOFREE_SCAN_PERIOD_MS=N`: period between scans when START=1 (default: 1000ms).
 - `CT_AUTOFREE_SCAN_PERIOD_US=N`: period between scans in microseconds.
 - `CT_AUTOFREE_SCAN_PERIOD_NS=N`: period between scans in nanoseconds.
-- `CT_AUTOFREE_SCAN_BUDGET_MS=N`: time budget per scan; if exceeded, no frees are performed.
+- `CT_AUTOFREE_SCAN_BUDGET_MS=N`: time budget per scan; if exceeded, no frees are performed
+  (default: 5ms; 0 for no limit).
 - `CT_AUTOFREE_SCAN_BUDGET_US=N`: time budget per scan in microseconds.
 - `CT_AUTOFREE_SCAN_BUDGET_NS=N`: time budget per scan in nanoseconds.
 - `CT_AUTOFREE_SCAN_STACK=0/1`: scan thread stacks (default: 1).
@@ -247,7 +250,8 @@ Environment variables (ms can be floating-point; US/NS override MS):
 Use cases:
 - Keep `CT_AUTOFREE_SCAN_PTR=1` for a conservative safety check before any auto-free.
 - Set `CT_AUTOFREE_SCAN_PTR=0` for immediate auto-free on unreachable sites, and rely on periodic scans.
-- Disable `CT_AUTOFREE_SCAN_GLOBALS=0` to reduce scan cost when you see timeouts.
+- Disable `CT_AUTOFREE_SCAN_GLOBALS=0` to reduce scan cost when you see timeouts: the periodic
+  scan then releases blocks that only globals refer to.
 
 Notes:
 - This is conservative: stale values on stack/regs/globals can keep a pointer "reachable".
