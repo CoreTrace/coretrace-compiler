@@ -555,81 +555,148 @@ CT_NOINSTR static void ct_scan_regs_for_marks(thread_t thread, uint64_t start_ns
 #endif
 }
 
-CT_NODISCARD CT_NOINSTR static int ct_scan_thread_stack_for_ptr(thread_t thread, uintptr_t base,
-                                                                size_t size, uint64_t start_ns)
+// A thread of the process, as a scan sees it. Its stack bounds are read before any thread
+// is suspended: pthread_from_mach_thread_np takes a lock a suspended thread may hold. Only a
+// thread the scan could suspend, or the scanning thread, is read: one that could not be
+// suspended has exited, and its stack may already be gone.
+struct ct_scan_thread
 {
-    pthread_t pthread = pthread_from_mach_thread_np(thread);
-    if (!pthread)
-    {
-        return 0;
-    }
-    void* stack_addr = pthread_get_stackaddr_np(pthread);
-    size_t stack_size = pthread_get_stacksize_np(pthread);
-    if (!stack_addr || !stack_size)
-    {
-        return 0;
-    }
+    thread_t port;
+    uintptr_t stack_low; // above the guard page
+    uintptr_t stack_high;
+    bool readable;
+};
 
-    uintptr_t top = reinterpret_cast<uintptr_t>(stack_addr);
-    uintptr_t bottom = top - stack_size;
-    long page_size = sysconf(_SC_PAGESIZE);
-    uintptr_t guard = bottom;
-    if (page_size > 0 && guard + static_cast<uintptr_t>(page_size) < top)
+struct ct_scan_threads
+{
+    struct ct_scan_thread* items;
+    mach_msg_type_number_t count;
+    thread_t self;
+};
+
+// Lists the process's threads and their stacks, before any is suspended. False when they
+// cannot be listed, with nothing to release.
+CT_NODISCARD CT_NOINSTR static bool ct_list_threads(struct ct_scan_threads* threads)
+{
+    thread_act_array_t ports = nullptr;
+    mach_msg_type_number_t count = 0;
+    if (task_threads(mach_task_self(), &ports, &count) != KERN_SUCCESS)
     {
-        guard += static_cast<uintptr_t>(page_size);
+        return false;
     }
-    uintptr_t sp = 0;
-    if (ct_thread_get_sp(thread, &sp) && sp >= guard && sp < top)
+    threads->items =
+        static_cast<struct ct_scan_thread*>(std::malloc(count * sizeof(struct ct_scan_thread)));
+    if (threads->items)
     {
-        bottom = sp;
+        for (mach_msg_type_number_t i = 0; i < count; ++i)
+        {
+            struct ct_scan_thread& thread = threads->items[i];
+            thread = {ports[i], 0, 0, false};
+            const pthread_t pthread = pthread_from_mach_thread_np(ports[i]);
+            if (!pthread)
+            {
+                continue;
+            }
+            const uintptr_t high = reinterpret_cast<uintptr_t>(pthread_get_stackaddr_np(pthread));
+            const size_t size = pthread_get_stacksize_np(pthread);
+            if (!high || !size)
+            {
+                continue;
+            }
+            thread.stack_low = high - size;
+            if (thread.stack_low + vm_page_size < high)
+            {
+                thread.stack_low += vm_page_size;
+            }
+            thread.stack_high = high;
+        }
     }
     else
     {
-        bottom = guard;
+        for (mach_msg_type_number_t i = 0; i < count; ++i)
+        {
+            mach_port_deallocate(mach_task_self(), ports[i]);
+        }
     }
-    return ct_scan_range_for_ptr(base, size, reinterpret_cast<void*>(bottom),
-                                 reinterpret_cast<void*>(top), start_ns);
+    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(ports),
+                  count * sizeof(thread_t));
+    if (!threads->items)
+    {
+        return false;
+    }
+    threads->count = count;
+    threads->self = mach_thread_self();
+    return true;
 }
 
-CT_NOINSTR static void ct_scan_thread_stack_for_marks(thread_t thread, uint64_t start_ns,
-                                                      int* timed_out)
+// Suspends every listed thread but the calling one.
+CT_NOINSTR static void ct_suspend_threads(struct ct_scan_threads* threads)
 {
-    pthread_t pthread = pthread_from_mach_thread_np(thread);
-    if (!pthread)
+    for (mach_msg_type_number_t i = 0; i < threads->count; ++i)
     {
-        return;
+        struct ct_scan_thread& thread = threads->items[i];
+        thread.readable =
+            thread.port == threads->self || thread_suspend(thread.port) == KERN_SUCCESS;
     }
-    void* stack_addr = pthread_get_stackaddr_np(pthread);
-    size_t stack_size = pthread_get_stacksize_np(pthread);
-    if (!stack_addr || !stack_size)
-    {
-        return;
-    }
+}
 
-    uintptr_t top = reinterpret_cast<uintptr_t>(stack_addr);
-    uintptr_t bottom = top - stack_size;
-    long page_size = sysconf(_SC_PAGESIZE);
-    uintptr_t guard = bottom;
-    if (page_size > 0 && guard + static_cast<uintptr_t>(page_size) < top)
+// Resumes the threads ct_suspend_threads suspended, and releases the list.
+CT_NOINSTR static void ct_resume_threads(struct ct_scan_threads* threads)
+{
+    for (mach_msg_type_number_t i = 0; i < threads->count; ++i)
     {
-        guard += static_cast<uintptr_t>(page_size);
+        const struct ct_scan_thread& thread = threads->items[i];
+        if (thread.readable && thread.port != threads->self)
+        {
+            thread_resume(thread.port);
+        }
+        mach_port_deallocate(mach_task_self(), thread.port);
+    }
+    mach_port_deallocate(mach_task_self(), threads->self);
+    std::free(threads->items);
+}
+
+// The part of a thread's stack in use, from its stack pointer, or the whole stack when that
+// cannot be read, to its top. False when the thread's stack is unknown.
+CT_NODISCARD CT_NOINSTR static bool ct_thread_stack_in_use(const struct ct_scan_thread& thread,
+                                                           const void** begin, const void** end)
+{
+    if (!thread.stack_high)
+    {
+        return false;
     }
     uintptr_t sp = 0;
-    if (ct_thread_get_sp(thread, &sp) && sp >= guard && sp < top)
+    const bool sp_known =
+        ct_thread_get_sp(thread.port, &sp) && sp >= thread.stack_low && sp < thread.stack_high;
+    *begin = reinterpret_cast<const void*>(sp_known ? sp : thread.stack_low);
+    *end = reinterpret_cast<const void*>(thread.stack_high);
+    return true;
+}
+
+CT_NODISCARD CT_NOINSTR static int ct_scan_thread_stack_for_ptr(const struct ct_scan_thread& thread,
+                                                                uintptr_t base, size_t size,
+                                                                uint64_t start_ns)
+{
+    const void* begin = nullptr;
+    const void* end = nullptr;
+    return ct_thread_stack_in_use(thread, &begin, &end) &&
+           ct_scan_range_for_ptr(base, size, begin, end, start_ns);
+}
+
+CT_NOINSTR static void ct_scan_thread_stack_for_marks(const struct ct_scan_thread& thread,
+                                                      uint64_t start_ns, int* timed_out)
+{
+    const void* begin = nullptr;
+    const void* end = nullptr;
+    if (ct_thread_stack_in_use(thread, &begin, &end))
     {
-        bottom = sp;
+        ct_scan_range_for_marks(begin, end, start_ns, timed_out);
     }
-    else
-    {
-        bottom = guard;
-    }
-    ct_scan_range_for_marks(reinterpret_cast<void*>(bottom), reinterpret_cast<void*>(top), start_ns,
-                            timed_out);
 }
 
 // Optimized function: scan regs and stack together in one pass
-CT_NOINSTR static void ct_scan_thread_regs_and_stack_marks(thread_t thread, uint64_t start_ns,
-                                                           int* timed_out)
+CT_NOINSTR static void ct_scan_thread_regs_and_stack_marks(const struct ct_scan_thread& thread,
+                                                           uint64_t start_ns, int* timed_out)
 {
     if (timed_out && *timed_out)
     {
@@ -639,7 +706,7 @@ CT_NOINSTR static void ct_scan_thread_regs_and_stack_marks(thread_t thread, uint
     // Scan regs if enabled
     if (ct_autofree_scan_regs.load(std::memory_order_relaxed))
     {
-        ct_scan_regs_for_marks(thread, start_ns, timed_out);
+        ct_scan_regs_for_marks(thread.port, start_ns, timed_out);
     }
 
     // Then scan stack if enabled and not timed out
@@ -823,30 +890,24 @@ CT_NODISCARD CT_NOINSTR int ct_autofree_scan_for_ptr(void* ptr, size_t size)
     uint64_t start_ns = ct_time_ns();
     uintptr_t base = reinterpret_cast<uintptr_t>(ptr);
 
-    thread_act_array_t threads = nullptr;
-    mach_msg_type_number_t thread_count = 0;
-    if (task_threads(mach_task_self(), &threads, &thread_count) != KERN_SUCCESS)
+    struct ct_scan_threads threads = {};
+    if (!ct_list_threads(&threads))
     {
         return 0;
     }
+    ct_suspend_threads(&threads);
 
-    thread_t self_thread = mach_thread_self();
-    for (mach_msg_type_number_t i = 0; i < thread_count; ++i)
+    int found = 0;
+    for (mach_msg_type_number_t i = 0; i < threads.count && !found; ++i)
     {
-        if (threads[i] == self_thread)
+        const struct ct_scan_thread& thread = threads.items[i];
+        if (!thread.readable)
         {
             continue;
         }
-        thread_suspend(threads[i]);
-    }
-
-    int found = 0;
-    for (mach_msg_type_number_t i = 0; i < thread_count && !found; ++i)
-    {
-        thread_t thread = threads[i];
         if (ct_autofree_scan_regs.load(std::memory_order_relaxed))
         {
-            if (ct_scan_regs_for_ptr(thread, base, size, start_ns))
+            if (ct_scan_regs_for_ptr(thread.port, base, size, start_ns))
             {
                 found = 1;
                 break;
@@ -876,17 +937,7 @@ CT_NODISCARD CT_NOINSTR int ct_autofree_scan_for_ptr(void* ptr, size_t size)
         }
     }
 
-    for (mach_msg_type_number_t i = 0; i < thread_count; ++i)
-    {
-        if (threads[i] != self_thread)
-        {
-            thread_resume(threads[i]);
-        }
-        mach_port_deallocate(mach_task_self(), threads[i]);
-    }
-    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads),
-                  thread_count * sizeof(thread_t));
-    mach_port_deallocate(mach_task_self(), self_thread);
+    ct_resume_threads(&threads);
 
     const int debug_level = ct_autofree_scan_debug.load(std::memory_order_relaxed);
     if (debug_level > 1 || (debug_level == 1 && found))
@@ -1053,23 +1104,14 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
     }
 
     uint64_t start_ns = ct_time_ns();
-    thread_act_array_t threads = nullptr;
-    mach_msg_type_number_t thread_count = 0;
-    if (task_threads(mach_task_self(), &threads, &thread_count) != KERN_SUCCESS)
+    struct ct_scan_threads threads = {};
+    if (!ct_list_threads(&threads))
     {
         return;
     }
 
     ct_lock_acquire();
-    thread_t self_thread = mach_thread_self();
-    for (mach_msg_type_number_t i = 0; i < thread_count; ++i)
-    {
-        if (threads[i] == self_thread)
-        {
-            continue;
-        }
-        thread_suspend(threads[i]);
-    }
+    ct_suspend_threads(&threads);
 
     for (size_t i = 0; i < ct_alloc_table_size; ++i)
     {
@@ -1080,12 +1122,17 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
     }
 
     int timed_out = 0;
-    for (mach_msg_type_number_t i = 0; i < thread_count && !timed_out; ++i)
+    for (mach_msg_type_number_t i = 0; i < threads.count && !timed_out; ++i)
     {
+        const struct ct_scan_thread& thread = threads.items[i];
+        if (!thread.readable)
+        {
+            continue;
+        }
         if (ct_autofree_scan_regs.load(std::memory_order_relaxed) ||
             ct_autofree_scan_stack.load(std::memory_order_relaxed))
         {
-            ct_scan_thread_regs_and_stack_marks(threads[i], start_ns, &timed_out);
+            ct_scan_thread_regs_and_stack_marks(thread, start_ns, &timed_out);
         }
     }
     // Images changed since the segments were listed: some roots may be missing, so this
@@ -1120,18 +1167,7 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
         }
     }
     ct_lock_release();
-
-    for (mach_msg_type_number_t i = 0; i < thread_count; ++i)
-    {
-        if (threads[i] != self_thread)
-        {
-            thread_resume(threads[i]);
-        }
-        mach_port_deallocate(mach_task_self(), threads[i]);
-    }
-    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads),
-                  thread_count * sizeof(thread_t));
-    mach_port_deallocate(mach_task_self(), self_thread);
+    ct_resume_threads(&threads);
 
     const int debug_level = ct_autofree_scan_debug.load(std::memory_order_relaxed);
     if (debug_level > 1 || (debug_level == 1 && (timed_out || collected > 0)))
