@@ -115,8 +115,6 @@ FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-ove
 # entry gets removed once the defect is fixed.
 known_failure() {
   case "$1" in
-    # #135: frames left by longjmp fill the stack object registry.
-    ct_bounds_stack_longjmp.c) return 0 ;;
     *) return 1 ;;
   esac
 }

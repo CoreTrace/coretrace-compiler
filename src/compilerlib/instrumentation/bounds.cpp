@@ -345,6 +345,54 @@ namespace compilerlib
             }
         }
 
+        // Whether `call` may return a second time, as setjmp does after a longjmp. Instrumented
+        // code is compiled with -fno-builtin, which keeps clang from marking the C library's
+        // functions returns_twice: they are also recognized by name.
+        CT_NODISCARD bool returnsTwice(const llvm::CallInst& call)
+        {
+            if (call.hasFnAttr(llvm::Attribute::ReturnsTwice))
+            {
+                return true;
+            }
+            const llvm::Function* callee = call.getCalledFunction();
+            if (!callee || !callee->isDeclaration())
+            {
+                return false;
+            }
+            static constexpr llvm::StringLiteral kReturnsTwice[] = {
+                "setjmp",    "_setjmp", "sigsetjmp",  "__sigsetjmp",
+                "_setjmpex", "savectx", "getcontext", "vfork"};
+            return llvm::is_contained(kReturnsTwice, callee->getName());
+        }
+
+        // A call that returns twice, such as setjmp, returns the second time when a longjmp
+        // has left the frames above without their exits: restoring the depth read before
+        // the call drops the stack objects those frames registered.
+        void restoreStackDepthAfterReturnsTwice(llvm::Function& func)
+        {
+            llvm::SmallVector<llvm::CallInst*, 2> calls;
+            for (llvm::Instruction& inst : llvm::instructions(func))
+            {
+                if (auto* call = llvm::dyn_cast<llvm::CallInst>(&inst); call && returnsTwice(*call))
+                {
+                    calls.push_back(call);
+                }
+            }
+            if (calls.empty())
+            {
+                return;
+            }
+
+            llvm::Module& module = *func.getParent();
+            llvm::FunctionCallee depthFn = CT_RUNTIME_CALLEE(module, __ct_stack_depth);
+            llvm::FunctionCallee popFn = CT_RUNTIME_CALLEE(module, __ct_stack_pop);
+            for (llvm::CallInst* call : calls)
+            {
+                llvm::Value* depth = llvm::IRBuilder<>(call).CreateCall(depthFn);
+                llvm::IRBuilder<>(call->getNextNode()).CreateCall(popFn, {depth});
+            }
+        }
+
         void emitBoundsCheck(llvm::IRBuilder<>& builder, llvm::FunctionCallee checkFn,
                              llvm::Value* base, llvm::Value* ptr, llvm::Value* sizeVal,
                              llvm::Value* site, bool isWrite, llvm::Type* voidPtrTy,
@@ -496,6 +544,7 @@ namespace compilerlib
             }
 
             registerStackObjects(func, stackObjects.getArrayRef(), layout, unknownSite);
+            restoreStackDepthAfterReturnsTwice(func);
         }
     }
 
