@@ -116,7 +116,7 @@ FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-ove
 known_failure() {
   case "$1:$(uname -s)" in
     # #130: the leak report runs before the program's own exit-time code.
-    ct_leak_static_destructor.cpp:Darwin|ct_leak_destructor_function.c:*) return 0 ;;
+    ct_leak_static_destructor.cpp:Darwin|ct_leak_destructor_function.c:Darwin) return 0 ;;
     *) return 1 ;;
   esac
 }

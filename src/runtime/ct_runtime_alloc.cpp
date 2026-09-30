@@ -1539,7 +1539,11 @@ extern "C"
 
 } // extern "C"
 
-CT_NOINSTR __attribute__((destructor)) static void ct_report_leaks(void)
+// The report must run after the program's own exit-time code, which may release blocks:
+// exit handlers, destructors of global objects, destructor functions. ELF runs .fini_array
+// after every exit handler, and the lowest priority last: 101, the lowest a program may
+// use, puts the report after every destructor function of default priority.
+CT_NOINSTR __attribute__((destructor(101))) static void ct_report_leaks(void)
 {
     // The detached GC thread may still mutate the table; hold the spinlock for the whole
     // report. The ct_write_* primitives write raw bytes and never re-enter the allocator,
