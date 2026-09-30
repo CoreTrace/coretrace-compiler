@@ -649,10 +649,91 @@ CT_NOINSTR static void ct_scan_thread_regs_and_stack_marks(thread_t thread, uint
     }
 }
 
-CT_NODISCARD CT_NOINSTR static int ct_scan_globals_for_ptr(uintptr_t base, size_t size,
-                                                           uint64_t start_ns)
+// Claims ct_autofree_scan_in_progress for the lifetime of a scan and releases it on every
+// exit path, so an early return can never leave the flag set and starve later scans. Two
+// scans at once would suspend each other's threads, and each other.
+struct ct_autofree_scan_guard
 {
-    uint32_t image_count = _dyld_image_count();
+    int owned;
+
+    CT_NOINSTR ct_autofree_scan_guard()
+        : owned(!ct_autofree_scan_in_progress.exchange(1, std::memory_order_acq_rel))
+    {
+    }
+
+    CT_NOINSTR ~ct_autofree_scan_guard()
+    {
+        if (owned)
+        {
+            ct_autofree_scan_in_progress.store(0, std::memory_order_release);
+        }
+    }
+
+    ct_autofree_scan_guard(const ct_autofree_scan_guard&) = delete;
+    ct_autofree_scan_guard& operator=(const ct_autofree_scan_guard&) = delete;
+};
+
+// The images' data segments, the global roots of a scan. dyld's functions may take a lock
+// a suspended thread holds, so they are listed before the threads are suspended (#118).
+// An image loaded or unloaded since then changes ct_image_generation, which the scan checks
+// while the threads are suspended: a list older than that cannot be relied on. An image
+// still being loaded has run no initializer, so its data holds no heap pointer yet; one
+// being unloaded is reported before its memory goes.
+struct ct_data_range
+{
+    uintptr_t begin;
+    uintptr_t end;
+};
+
+static struct ct_data_range* ct_data_ranges = nullptr;
+static size_t ct_data_range_count = 0;
+static size_t ct_data_range_capacity = 0;
+static std::atomic<uint64_t> ct_image_generation{0};
+
+CT_NOINSTR static void ct_on_image_change(const struct mach_header*, intptr_t)
+{
+    ct_image_generation.fetch_add(1, std::memory_order_acq_rel);
+}
+
+// Grows *buffer to hold `needed` items of `item_size` bytes. Only outside suspension.
+CT_NODISCARD CT_NOINSTR static bool ct_reserve(void** buffer, size_t* capacity, size_t needed,
+                                               size_t item_size)
+{
+    if (needed <= *capacity)
+    {
+        return true;
+    }
+    size_t grown = *capacity ? *capacity : 64;
+    while (grown < needed)
+    {
+        grown *= 2;
+    }
+    void* resized = std::realloc(*buffer, grown * item_size);
+    if (!resized)
+    {
+        return false;
+    }
+    *buffer = resized;
+    *capacity = grown;
+    return true;
+}
+
+// Lists the data segments into ct_data_ranges and returns, in *generation, the image
+// generation they belong to. Needs the scan guard; only outside suspension.
+CT_NODISCARD CT_NOINSTR static bool ct_list_data_segments(uint64_t* generation)
+{
+    static std::atomic<int> watching{0};
+    int expected = 0;
+    if (watching.compare_exchange_strong(expected, 1, std::memory_order_acq_rel))
+    {
+        _dyld_register_func_for_add_image(ct_on_image_change);
+        _dyld_register_func_for_remove_image(ct_on_image_change);
+    }
+    // Read first: an image added while listing then shows as a changed generation.
+    *generation = ct_image_generation.load(std::memory_order_acquire);
+
+    size_t count = 0;
+    const uint32_t image_count = _dyld_image_count();
     for (uint32_t i = 0; i < image_count; ++i)
     {
         const mach_header_64* header =
@@ -661,7 +742,7 @@ CT_NODISCARD CT_NOINSTR static int ct_scan_globals_for_ptr(uintptr_t base, size_
         {
             continue;
         }
-        intptr_t slide = _dyld_get_image_vmaddr_slide(i);
+        const intptr_t slide = _dyld_get_image_vmaddr_slide(i);
         const load_command* cmd = reinterpret_cast<const load_command*>(
             reinterpret_cast<const char*>(header) + sizeof(mach_header_64));
         for (uint32_t c = 0; c < header->ncmds; ++c)
@@ -671,21 +752,40 @@ CT_NODISCARD CT_NOINSTR static int ct_scan_globals_for_ptr(uintptr_t base, size_
                 const segment_command_64* seg = reinterpret_cast<const segment_command_64*>(cmd);
                 if (std::strncmp(seg->segname, "__DATA", 6) == 0)
                 {
-                    uintptr_t seg_start = static_cast<uintptr_t>(seg->vmaddr + slide);
-                    uintptr_t seg_end = seg_start + static_cast<uintptr_t>(seg->vmsize);
-                    if (ct_scan_range_for_ptr(base, size, reinterpret_cast<void*>(seg_start),
-                                              reinterpret_cast<void*>(seg_end), start_ns))
+                    void* buffer = ct_data_ranges;
+                    if (!ct_reserve(&buffer, &ct_data_range_capacity, count + 1,
+                                    sizeof(struct ct_data_range)))
                     {
-                        return 1;
+                        return false;
                     }
+                    ct_data_ranges = static_cast<struct ct_data_range*>(buffer);
+                    const uintptr_t begin = static_cast<uintptr_t>(seg->vmaddr + slide);
+                    ct_data_ranges[count++] = {begin, begin + static_cast<uintptr_t>(seg->vmsize)};
                 }
             }
             cmd = reinterpret_cast<const load_command*>(reinterpret_cast<const char*>(cmd) +
                                                         cmd->cmdsize);
-            if (ct_scan_time_exceeded(start_ns))
-            {
-                return 1;
-            }
+        }
+    }
+    ct_data_range_count = count;
+    return true;
+}
+
+// Whether the listed data segments still describe the loaded images.
+CT_NODISCARD CT_NOINSTR static bool ct_data_segments_current(uint64_t generation)
+{
+    return ct_image_generation.load(std::memory_order_acquire) == generation;
+}
+
+CT_NODISCARD CT_NOINSTR static int ct_scan_globals_for_ptr(uintptr_t base, size_t size,
+                                                           uint64_t start_ns)
+{
+    for (size_t i = 0; i < ct_data_range_count; ++i)
+    {
+        if (ct_scan_range_for_ptr(base, size, reinterpret_cast<void*>(ct_data_ranges[i].begin),
+                                  reinterpret_cast<void*>(ct_data_ranges[i].end), start_ns))
+        {
+            return 1;
         }
     }
     return 0;
@@ -693,46 +793,11 @@ CT_NODISCARD CT_NOINSTR static int ct_scan_globals_for_ptr(uintptr_t base, size_
 
 CT_NOINSTR static void ct_scan_globals_for_marks(uint64_t start_ns, int* timed_out)
 {
-    uint32_t image_count = _dyld_image_count();
-    for (uint32_t i = 0; i < image_count; ++i)
+    for (size_t i = 0; i < ct_data_range_count && !*timed_out; ++i)
     {
-        const mach_header_64* header =
-            reinterpret_cast<const mach_header_64*>(_dyld_get_image_header(i));
-        if (!header || header->magic != MH_MAGIC_64)
-        {
-            continue;
-        }
-        intptr_t slide = _dyld_get_image_vmaddr_slide(i);
-        const load_command* cmd = reinterpret_cast<const load_command*>(
-            reinterpret_cast<const char*>(header) + sizeof(mach_header_64));
-        for (uint32_t c = 0; c < header->ncmds; ++c)
-        {
-            if (cmd->cmd == LC_SEGMENT_64)
-            {
-                const segment_command_64* seg = reinterpret_cast<const segment_command_64*>(cmd);
-                if (std::strncmp(seg->segname, "__DATA", 6) == 0)
-                {
-                    uintptr_t seg_start = static_cast<uintptr_t>(seg->vmaddr + slide);
-                    uintptr_t seg_end = seg_start + static_cast<uintptr_t>(seg->vmsize);
-                    ct_scan_range_for_marks(reinterpret_cast<void*>(seg_start),
-                                            reinterpret_cast<void*>(seg_end), start_ns, timed_out);
-                    if (timed_out && *timed_out)
-                    {
-                        return;
-                    }
-                }
-            }
-            cmd = reinterpret_cast<const load_command*>(reinterpret_cast<const char*>(cmd) +
-                                                        cmd->cmdsize);
-            if (ct_scan_time_exceeded(start_ns))
-            {
-                if (timed_out)
-                {
-                    *timed_out = 1;
-                }
-                return;
-            }
-        }
+        ct_scan_range_for_marks(reinterpret_cast<void*>(ct_data_ranges[i].begin),
+                                reinterpret_cast<void*>(ct_data_ranges[i].end), start_ns,
+                                timed_out);
     }
 }
 
@@ -741,6 +806,18 @@ CT_NODISCARD CT_NOINSTR int ct_autofree_scan_for_ptr(void* ptr, size_t size)
     if (!ct_autofree_scan_should_run())
     {
         return 0;
+    }
+
+    ct_autofree_scan_guard scan_guard;
+    if (!scan_guard.owned)
+    {
+        return 0;
+    }
+    const bool scan_globals = ct_autofree_scan_globals.load(std::memory_order_relaxed);
+    uint64_t generation = 0;
+    if (scan_globals && !ct_list_data_segments(&generation))
+    {
+        return 1;
     }
 
     uint64_t start_ns = ct_time_ns();
@@ -790,9 +867,10 @@ CT_NODISCARD CT_NOINSTR int ct_autofree_scan_for_ptr(void* ptr, size_t size)
         }
     }
 
-    if (!found && ct_autofree_scan_globals.load(std::memory_order_relaxed))
+    if (!found && scan_globals)
     {
-        if (ct_scan_globals_for_ptr(base, size, start_ns))
+        // Images changed since the list was made: a reference may be where it cannot see.
+        if (!ct_data_segments_current(generation) || ct_scan_globals_for_ptr(base, size, start_ns))
         {
             found = 1;
         }
@@ -917,28 +995,10 @@ CT_NOINSTR static void ct_autofree_do_free(const struct ct_autofree_free_item& i
     }
 }
 
-// Claims ct_autofree_scan_in_progress for the lifetime of a GC scan and releases it on
-// every exit path, so an early return can never leave the flag set and starve later scans.
-struct ct_autofree_scan_guard
-{
-    int owned;
-
-    CT_NOINSTR ct_autofree_scan_guard()
-        : owned(!ct_autofree_scan_in_progress.exchange(1, std::memory_order_acq_rel))
-    {
-    }
-
-    CT_NOINSTR ~ct_autofree_scan_guard()
-    {
-        if (owned)
-        {
-            ct_autofree_scan_in_progress.store(0, std::memory_order_release);
-        }
-    }
-
-    ct_autofree_scan_guard(const ct_autofree_scan_guard&) = delete;
-    ct_autofree_scan_guard& operator=(const ct_autofree_scan_guard&) = delete;
-};
+// The blocks a pass releases, kept across passes and grown before the threads are
+// suspended. Only the scan that owns ct_autofree_scan_guard uses it.
+static struct ct_autofree_free_item* ct_scan_items = nullptr;
+static size_t ct_scan_items_capacity = 0;
 
 // An allocation the scan found no reference to, which it may release. It never releases
 // an Objective-C object: the Objective-C runtime owns its memory and reference count.
@@ -966,6 +1026,32 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
         return;
     }
 
+    // Everything that allocates, releases, logs or calls into dyld happens before the
+    // threads are suspended or after they resume: a suspended thread may hold the
+    // allocator's lock, the logger's or dyld's, and the scan would wait for it forever
+    // (#118). The list of blocks to release is sized to the live blocks beforehand; any
+    // block allocated in between waits for the next pass.
+    ct_lock_acquire();
+    const size_t live = ct_alloc_count;
+    ct_lock_release();
+    if (live == 0)
+    {
+        return;
+    }
+    void* items_buffer = ct_scan_items;
+    if (!ct_reserve(&items_buffer, &ct_scan_items_capacity, live,
+                    sizeof(struct ct_autofree_free_item)))
+    {
+        return;
+    }
+    ct_scan_items = static_cast<struct ct_autofree_free_item*>(items_buffer);
+    const bool scan_globals = ct_autofree_scan_globals.load(std::memory_order_relaxed);
+    uint64_t generation = 0;
+    if (scan_globals && !ct_list_data_segments(&generation))
+    {
+        return;
+    }
+
     uint64_t start_ns = ct_time_ns();
     thread_act_array_t threads = nullptr;
     mach_msg_type_number_t thread_count = 0;
@@ -985,7 +1071,6 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
         thread_suspend(threads[i]);
     }
 
-    // Single pass: reset marks for used entries
     for (size_t i = 0; i < ct_alloc_table_size; ++i)
     {
         if (ct_alloc_table[i].state == CT_ENTRY_USED)
@@ -1000,52 +1085,32 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
         if (ct_autofree_scan_regs.load(std::memory_order_relaxed) ||
             ct_autofree_scan_stack.load(std::memory_order_relaxed))
         {
-            // Optimized: combine regs and stack scan
             ct_scan_thread_regs_and_stack_marks(threads[i], start_ns, &timed_out);
         }
     }
-    if (!timed_out && ct_autofree_scan_globals.load(std::memory_order_relaxed))
+    // Images changed since the segments were listed: some roots may be missing, so this
+    // pass releases nothing, as when it runs out of time.
+    if (!timed_out && scan_globals)
     {
-        ct_scan_globals_for_marks(start_ns, &timed_out);
-    }
-
-    // Single pass: count and collect unmarked entries
-    size_t to_free_count = 0;
-    size_t idx = 0;
-    struct ct_autofree_free_item* items = nullptr;
-
-    if (!timed_out)
-    {
-        for (size_t i = 0; i < ct_alloc_table_size; ++i)
+        if (ct_data_segments_current(generation))
         {
-            if (ct_autofree_scan_may_release(ct_alloc_table[i]))
-            {
-                ++to_free_count;
-            }
+            ct_scan_globals_for_marks(start_ns, &timed_out);
+        }
+        else
+        {
+            timed_out = 1;
         }
     }
 
-    ct_lock_release();
-
-    if (!timed_out && to_free_count > 0)
+    size_t collected = 0;
+    if (!timed_out)
     {
-        items = static_cast<struct ct_autofree_free_item*>(
-            std::malloc(sizeof(struct ct_autofree_free_item) * to_free_count));
-    }
-
-    ct_lock_acquire();
-    if (!timed_out && items)
-    {
-        for (size_t i = 0; i < ct_alloc_table_size && idx < to_free_count; ++i)
+        for (size_t i = 0; i < ct_alloc_table_size && collected < ct_scan_items_capacity; ++i)
         {
             struct ct_alloc_entry* entry = &ct_alloc_table[i];
             if (ct_autofree_scan_may_release(*entry))
             {
-                items[idx].ptr = entry->ptr;
-                items[idx].size = entry->size;
-                items[idx].site = entry->site;
-                items[idx].kind = entry->kind;
-                ++idx;
+                ct_scan_items[collected++] = {entry->ptr, entry->size, entry->site, entry->kind};
                 entry->state = CT_ENTRY_AUTOFREED;
                 if (ct_alloc_count > 0)
                 {
@@ -1055,26 +1120,6 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
         }
     }
     ct_lock_release();
-
-    const int debug_level = ct_autofree_scan_debug.load(std::memory_order_relaxed);
-    if (debug_level > 1 || (debug_level == 1 && (timed_out || to_free_count > 0)))
-    {
-        ct_log(CTLevel::Warn, "{}ct: scan({}) done timed_out={} free_count={}{}\n",
-               ct_color(CTColor::BgBrightYellow), reason ? reason : "periodic", timed_out,
-               to_free_count, ct_color(CTColor::Reset));
-    }
-
-    if (!timed_out && items)
-    {
-        for (size_t i = 0; i < idx; ++i)
-        {
-            ct_autofree_do_free(items[i]);
-        }
-    }
-    if (items)
-    {
-        std::free(items);
-    }
 
     for (mach_msg_type_number_t i = 0; i < thread_count; ++i)
     {
@@ -1087,6 +1132,18 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
     vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads),
                   thread_count * sizeof(thread_t));
     mach_port_deallocate(mach_task_self(), self_thread);
+
+    const int debug_level = ct_autofree_scan_debug.load(std::memory_order_relaxed);
+    if (debug_level > 1 || (debug_level == 1 && (timed_out || collected > 0)))
+    {
+        ct_log(CTLevel::Warn, "{}ct: scan({}) done timed_out={} free_count={}{}\n",
+               ct_color(CTColor::BgBrightYellow), reason ? reason : "periodic", timed_out,
+               collected, ct_color(CTColor::Reset));
+    }
+    for (size_t i = 0; i < collected; ++i)
+    {
+        ct_autofree_do_free(ct_scan_items[i]);
+    }
 }
 
 CT_NOINSTR static void ct_autofree_scan_sleep(uint64_t ns)

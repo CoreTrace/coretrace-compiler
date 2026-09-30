@@ -33,9 +33,12 @@ fi
 
 mkdir -p "${OUT_DIR}"
 
+# shellcheck source-path=SCRIPTDIR source=scripts/run_with_timeout.sh
+source "${ROOT_DIR}/test/scripts/run_with_timeout.sh"
+
 expect_leak() {
   case "$1" in
-    ct_autofree_local.c|ct_autofree_select_escape.c|ct_autofree_ptrtoint_escape.c|ct_autofree_inttoptr_escape.c|ct_autofree_scalar_slot_escape.c|ct_autofree_branch.c)
+    ct_autofree_local.c|ct_autofree_select_escape.c|ct_autofree_ptrtoint_escape.c|ct_autofree_inttoptr_escape.c|ct_autofree_scalar_slot_escape.c|ct_autofree_branch.c|ct_threads_stress.c)
       return 0
       ;;
     *)
@@ -84,6 +87,28 @@ skip_reason_after_run() {
   return 1
 }
 
+# Instrumentation flags of a fixture.
+flags_for() {
+  case "$1" in
+    # Its drainer thread must not log: every log line would block on its full pipe.
+    ct_autofree_scan_suspended_io.c) echo "--ct-modules=alloc --ct-autofree" ;;
+    ct_threads_stress.c) echo "--ct-modules=alloc,bounds --ct-autofree --ct-no-alloc-trace" ;;
+    *) echo "--ct-modules=trace,alloc --ct-autofree" ;;
+  esac
+}
+
+# Environment of a fixture's run, as NAME=value words.
+env_for() {
+  case "$1" in
+    # The conservative scan every 5 ms, logging each pass (macOS; a no-op elsewhere).
+    ct_autofree_scan_suspended_io.c)
+      echo "CT_AUTOFREE_SCAN=1 CT_AUTOFREE_SCAN_START=1 CT_AUTOFREE_SCAN_PERIOD_MS=5 CT_DEBUG_AUTOFREE_SCAN=2"
+      ;;
+    # The scan suspends the threads while they allocate.
+    ct_threads_stress.c) echo "CT_AUTOFREE_SCAN=1 CT_AUTOFREE_SCAN_START=1 CT_AUTOFREE_SCAN_PERIOD_MS=5" ;;
+  esac
+}
+
 TESTS=(
   ct_autofree_local.c
   ct_autofree_return_unused.c
@@ -101,6 +126,8 @@ TESTS=(
   ct_autofree_sbrk.c
   ct_autofree_brk.c
   ct_autofree_branch.c
+  ct_autofree_scan_suspended_io.c
+  ct_threads_stress.c
 )
 
 PASS=0
@@ -117,16 +144,26 @@ run_one() {
 
   echo "==> ${test_file}"
 
-  "${CC_BIN}" --instrument ${CT_TEST_OPT:+"${CT_TEST_OPT}"} --ct-modules=trace,alloc --ct-autofree \
+  local flags
+  flags="$(flags_for "${test_file}")"
+  # shellcheck disable=SC2086
+  "${CC_BIN}" --instrument ${CT_TEST_OPT:+"${CT_TEST_OPT}"} ${flags} \
     "${test_path}" -o "${bin}" >"${compile_log}" 2>&1 || {
       echo "  FAIL: compile (see ${compile_log})"
       return 1
     }
 
+  local run_env
+  run_env="$(env_for "${test_file}")"
   set +e
-  "${bin}" >"${run_log}" 2>&1
+  # shellcheck disable=SC2086
+  run_with_timeout env ${run_env} "${bin}" >"${run_log}" 2>&1
   local run_rc=$?
   set -e
+  if [[ "${run_rc}" -eq 124 ]]; then
+    echo "  FAIL: no exit after ${RUN_TIMEOUT_SECONDS}s, killed (see ${run_log})"
+    return 1
+  fi
 
   local reason
   if reason="$(skip_reason_after_run "${test_file}" "${run_log}")"; then

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# Compiles and runs the runtime fixtures under test/ that are not covered by
-# run_autofree_tests.sh (alloc tracking, new/delete variants, shadow memory,
-# vtable diagnostics) and checks their exit code and diagnostics.
+# Compiles and runs the runtime fixtures under test/ other than the auto-free ones
+# (alloc tracking, new/delete variants, shadow memory, threads, vtable diagnostics) and
+# checks their exit code and diagnostics.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,6 +21,9 @@ fi
 
 mkdir -p "${OUT_DIR}"
 
+# shellcheck source-path=SCRIPTDIR source=scripts/run_with_timeout.sh
+source "${ROOT_DIR}/test/scripts/run_with_timeout.sh"
+
 # Instrumentation flags per fixture.
 flags_for() {
   case "$1" in
@@ -36,6 +39,8 @@ flags_for() {
     ct_vtable_*.cpp)   echo "--ct-modules=alloc,vtable --ct-vtable-diag" ;;
     # Clang enables sized deallocation by default only from version 19 on.
     ct_new_delete_sized.cpp) echo "--ct-modules=alloc -fsized-deallocation" ;;
+    # Without a log line per allocation: that is a million lines here.
+    ct_threads_stress.c) echo "--ct-modules=alloc,bounds --ct-no-alloc-trace" ;;
     *)                 echo "--ct-modules=alloc" ;;
   esac
 }
@@ -51,6 +56,7 @@ expect_leaks() {
   case "$1" in
     ct_alloc_basic.c|ct_new_delete.cpp) echo 1 ;;   # deliberate unreachable allocation
     ct_leak_site.c) echo 1 ;;
+    ct_threads_stress.c) echo 8 ;;                  # one per thread
     ct_realloc_zero.c) echo any ;;                  # realloc(p, 0) may allocate or free per libc
     *) echo none ;;
   esac
@@ -93,6 +99,7 @@ expect_stdout() {
     ct_vtable_virtual_base.cpp) echo "value=99" ;;
     ct_new_delete_library.cpp) echo "owned=7 array=4 pointers=16 counts=5 shared=64" ;;
     ct_bounds_freed_address_reuse.c) echo "sum=" ;;
+    ct_threads_stress.c) echo "damaged=0" ;;
     *) echo "" ;;
   esac
 }
@@ -141,6 +148,7 @@ TESTS=(
   ct_bounds_freed_address_reuse.c
   ct_bounds_heap_use_after_free.c
   ct_realloc_zero.c
+  ct_threads_stress.c
   ct_new_delete.cpp
   ct_new_delete_sized.cpp
   ct_new_delete_variants.cpp
@@ -184,9 +192,13 @@ check_one() {
     }
 
   set +e
-  "${bin}" >"${out_log}" 2>"${err_log}"
+  run_with_timeout "${bin}" >"${out_log}" 2>"${err_log}"
   local run_rc=$?
   set -e
+  if [[ "${run_rc}" -eq 124 ]]; then
+    echo "  no exit after ${RUN_TIMEOUT_SECONDS}s, killed (see ${err_log})"
+    return 1
+  fi
 
   local want_rc
   want_rc="$(expect_exit "${test_file}")"
