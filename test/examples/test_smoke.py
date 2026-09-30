@@ -52,11 +52,13 @@ def assert_stderr_contains(text: str) -> Assertion:
     return Assertion(name=f"stderr_contains_{text}", check=_check)
 
 def assert_run_artifact(path: str, expected_exit: int | None, stderr_contains: str | list[str],
-                        env: dict[str, str] | None = None) -> Assertion:
+                        env: dict[str, str] | None = None,
+                        stderr_excludes: list[str] | None = None) -> Assertion:
     """Run the artifact produced by the compile step and check its exit code and stderr.
 
     expected_exit None requires a failing status: a fatal signal or exception is reported
-    as a platform-specific code. env adds variables to the artifact's environment."""
+    as a platform-specific code. env adds variables to the artifact's environment.
+    stderr_excludes lists texts stderr must not contain."""
     expected_texts = [stderr_contains] if isinstance(stderr_contains, str) else stderr_contains
     def _check(res) -> None:
         import subprocess
@@ -74,6 +76,8 @@ def assert_run_artifact(path: str, expected_exit: int | None, stderr_contains: s
                     f"expected exit {expected_exit}, got {proc.returncode}\nstderr:\n{proc.stderr}")
         for text in expected_texts:
             require(text in proc.stderr, f"stderr does not contain '{text}'\nstderr:\n{proc.stderr}")
+        for text in stderr_excludes or []:
+            require(text not in proc.stderr, f"stderr contains '{text}'\nstderr:\n{proc.stderr}")
     return Assertion(name=f"run_artifact_{Path(path).name}", check=_check)
 
 def assert_stdout_matches(pattern: str) -> Assertion:
@@ -173,6 +177,7 @@ def main() -> int:
     undefined_ref_src = FIXTURES / "undefined_ref.c"
     alloc_site_src = FIXTURES / "alloc_site.c"
     new_delete_src = FIXTURES / "new_delete.cpp"
+    exit_frees_src = FIXTURES / "exit_frees.cpp"
     crash_src = FIXTURES / "crash.c"
     trace_threads_src = FIXTURES / "trace_threads.cpp"
     trace_objc_src = FIXTURES / "trace_objc.m"
@@ -717,6 +722,23 @@ def main() -> int:
         ],
     )
 
+    # Runtime behaviour: the leak report comes after the program's exit-time code, which
+    # releases blocks too, such as the destructors of global objects.
+    tc_runtime_leak_report_after_destructors = TestCase(
+        name="runtime_leak_report_after_destructors",
+        plan=CompilePlan(
+            name="runtime_leak_report_after_destructors",
+            sources=[Path("exit_frees.cpp")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=alloc", "-o", "exit_frees_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("exit_frees_app"),
+            assert_run_artifact("exit_frees_app", 0, [], stderr_excludes=["ct: leaks detected"]),
+        ],
+    )
+
     # Runtime behaviour: bounds diagnostics must be reported even when the trace
     # module is not part of the build.
     tc_runtime_bounds_without_trace = TestCase(
@@ -996,6 +1018,7 @@ def main() -> int:
     runtime_cases = [
         tc_runtime_leak_report,
         tc_runtime_cpp_leak_report,
+        tc_runtime_leak_report_after_destructors,
         tc_runtime_bounds_without_trace,
         tc_runtime_bounds_stack,
         tc_runtime_trace_c_function,
@@ -1056,7 +1079,7 @@ def main() -> int:
             copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src,
                                leak_src, overflow_src, broken_src, codegen_error_src,
                                undefined_ref_src,
-                               alloc_site_src, new_delete_src, crash_src,
+                               alloc_site_src, new_delete_src, exit_frees_src, crash_src,
                                trace_threads_src, trace_objc_src, leak_objc_src,
                                new_delete_objc_src, objc_alloc_forms_src, objc_objects_src,
                                objcxx_objects_src, objc_autofree_scan_src,
