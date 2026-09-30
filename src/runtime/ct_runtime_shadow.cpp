@@ -34,14 +34,14 @@ static size_t ct_shadow_table_mask = CT_SHADOW_TABLE_SIZE - 1u;
 static int ct_shadow_lock = 0;
 static int ct_shadow_table_full_logged = 0;
 
-CT_NOINSTR static void ct_shadow_lock_acquire(void)
+CT_NOINSTR void ct_shadow_lock_acquire(void)
 {
     while (__atomic_exchange_n(&ct_shadow_lock, 1, __ATOMIC_ACQUIRE) != 0)
     {
     }
 }
 
-CT_NOINSTR static void ct_shadow_lock_release(void)
+CT_NOINSTR void ct_shadow_lock_release(void)
 {
     __atomic_store_n(&ct_shadow_lock, 0, __ATOMIC_RELEASE);
 }

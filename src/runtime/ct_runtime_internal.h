@@ -131,6 +131,8 @@ CT_NOINSTR void ct_maybe_install_backtrace(void);
 CT_NOINSTR void ct_init_env_once(void);
 CT_NOINSTR void ct_lock_acquire(void);
 CT_NOINSTR void ct_lock_release(void);
+CT_NOINSTR void ct_shadow_lock_acquire(void);
+CT_NOINSTR void ct_shadow_lock_release(void);
 // Held while a line goes through the logger, which takes its own locks inside: fork() waits
 // on it, so that no other thread is writing a line when the child is created (#133).
 CT_NOINSTR void ct_log_lock_acquire(void);

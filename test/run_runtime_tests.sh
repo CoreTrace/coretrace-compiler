@@ -116,8 +116,6 @@ FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-ove
 # entry gets removed once the defect is fixed.
 known_failure() {
   case "$1" in
-    # #133: a lock another thread holds when the program forks stays held in the child.
-    ct_fork_threads.c) return 0 ;;
     *) return 1 ;;
   esac
 }
