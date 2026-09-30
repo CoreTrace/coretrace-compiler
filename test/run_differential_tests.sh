@@ -59,8 +59,6 @@ TESTS=(
 # entry gets removed once the defect is fixed.
 known_failure() {
   case "$1:$(uname -s)-$(uname -m):${CT_TEST_OPT:--O0}" in
-    # #131: instrumented objects run the constructors of a file in reverse priority order.
-    differential/constructor_order.c:Darwin-*) return 0 ;;
   esac
   return 1
 }
