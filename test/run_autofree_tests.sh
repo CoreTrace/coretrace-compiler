@@ -35,7 +35,7 @@ mkdir -p "${OUT_DIR}"
 
 expect_leak() {
   case "$1" in
-    ct_autofree_local.c|ct_autofree_select_escape.c|ct_autofree_ptrtoint_escape.c|ct_autofree_inttoptr_escape.c|ct_autofree_scalar_slot_escape.c)
+    ct_autofree_local.c|ct_autofree_select_escape.c|ct_autofree_ptrtoint_escape.c|ct_autofree_inttoptr_escape.c|ct_autofree_scalar_slot_escape.c|ct_autofree_branch.c)
       return 0
       ;;
     *)
@@ -100,6 +100,7 @@ TESTS=(
   ct_autofree_mmap.c
   ct_autofree_sbrk.c
   ct_autofree_brk.c
+  ct_autofree_branch.c
 )
 
 PASS=0
