@@ -72,7 +72,7 @@ expect_stderr() {
     ct_bounds_container_of_overflow.c) echo "heap-buffer-overflow" ;;
     ct_bounds_heap_use_after_free.c) echo "heap-use-after-free" ;;
     ct_bounds_stack_overflow.c|ct_bounds_stack_callee.c|ct_bounds_stack_container_of.c|\
-    ct_bounds_stack_default_modules.c)
+    ct_bounds_stack_default_modules.c|ct_bounds_stack_longjmp.c)
       echo "stack-buffer-overflow" ;;
     ct_new_delete.cpp) echo "tracing-new-unreachable" ;;
     # Leaks and double frees name where the memory came from; a double free also names
@@ -99,6 +99,8 @@ expect_stdout() {
     ct_vtable_multi.cpp) echo "Derived 42" ;;
     ct_vtable_virtual_base.cpp) echo "value=99" ;;
     ct_new_delete_library.cpp) echo "owned=7 array=4 pointers=16 counts=5 shared=64" ;;
+    ct_bounds_stack_longjmp.c) echo "recovered=1000" ;;
+    ct_bounds_stack_deep_valid.c) echo "again=" ;;
     ct_bounds_freed_address_reuse.c) echo "sum=" ;;
     ct_leak_static_destructor.cpp|ct_leak_destructor_function.c) echo "ok" ;;
     ct_threads_stress.c) echo "damaged=0" ;;
@@ -148,6 +150,8 @@ TESTS=(
   ct_bounds_stack_container_of.c
   ct_bounds_stack_valid.c
   ct_bounds_stack_unwind_valid.cpp
+  ct_bounds_stack_longjmp.c
+  ct_bounds_stack_deep_valid.c
   ct_bounds_freed_address_reuse.c
   ct_bounds_heap_use_after_free.c
   ct_realloc_zero.c
