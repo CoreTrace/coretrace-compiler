@@ -60,55 +60,270 @@ pull request.
 
 ## v0.10.0 (2026-09-29)
 
-- Compiles in process in every output mode: a clang executable is no longer needed,
-  only Clang's resource directory (#115, #117).
-- Released blocks go to a quarantine (`CT_QUARANTINE_MB`, 256 MB by default), so a
-  use-after-free keeps being reported (#111).
-- Releases are rewritten in every function, so blocks released by the C++ library are
-  no longer reported as leaks; allocations are tracked where user code makes them
-  (#110).
-- Fixes: LLVM 19 build (#114), invalid IR from the bounds pass at `-O2` (#109), lost
-  freed records (#114).
-- A differential test suite, runtime suites at `-O2`, an LLVM 16 to 19 matrix and an
-  AddressSanitizer job in CI (#108, #114).
+Compiles in process in every output mode, quarantines released blocks, and fixes the
+false positives a new differential test suite found.
+
+### Features
+
+- **No clang executable needed.** File output without instrumentation runs the
+  frontend in process, through `clang::ExecuteCompilerInvocation`, in every output
+  mode and with several sources in one call; `-E`, `-fsyntax-only`, `--analyze` and
+  precompiled headers keep working (#115, #104). Without a clang, Clang's resource
+  directory is enough: `CT_CLANG_RESOURCE_DIR`, `-resource-dir`, or the directory
+  recorded at build time (#117, #116). Only assembling `.s` sources still runs clang.
+- **Quarantine of released blocks.** `free`, `delete`, `realloc` and auto-free keep
+  released blocks away from the allocator, so an access through a dangling pointer
+  keeps being reported as `heap-use-after-free`. `CT_QUARANTINE_MB` sets the limit,
+  256 MB by default (#111, #105).
+- **Allocations and releases across the library boundary.** Releases are rewritten in
+  every function, system headers included, so a block that user code allocates and
+  `std::unique_ptr` or a container releases is no longer reported as a leak.
+  Allocations are tracked where user code makes them (#110, #106).
+
+### Behaviour changes
+
+- An instrumented program keeps up to 256 MB of released memory by default; set
+  `CT_QUARANTINE_MB` lower, or to 0 to release at once (#111).
+- `realloc` of a tracked block always allocates a new block and copies the contents;
+  `realloc` of a released block returns `NULL` with a warning (#111).
+- `munmap` and a shrinking `sbrk` no longer keep a freed record (#111).
+- Releasing a block the runtime did not track is traced at the info level, marked
+  `(unknown)`, instead of a warning (#110).
+- An allocation that libc++ or libstdc++ makes in code inlined into user functions is
+  no longer tracked (#110).
+- compilerlib links `clangFrontendTool` (#115).
+- A failed compilation reports the compiler's diagnostic with the source excerpt
+  instead of a bare `compilation failed` (#115).
+- **Runtime ABI:** unchanged since 0.9.0.
+
+### Fixes
+
+- compilerlib builds with LLVM 19 again (#114, #112).
+- On macOS, a failed sysroot detection is retried by the next compilation (#100, #98).
+- The bounds pass resolves a pointer loaded from a stack slot only when the store wrote
+  exactly what the load reads. This fixes invalid IR when the vectorizer copied a
+  `std::shared_ptr` with one vector store at `-O2` on arm64, and wrong bases for
+  fields at an offset (#109, #107).
+- No false use-after-free on memory allocated outside instrumented code at the address
+  of a freed block (#111, #105).
+- Inserting a block no longer erases the record of a quarantined block (#114, #113).
+
+### Tests and CI
+
+- A differential suite builds programs without memory errors both plain and
+  instrumented and requires the same output (#108).
+- The runtime suites run again at `-O2` (`CT_TEST_OPT`) (#108).
+- An LLVM 16 to 19 matrix and an AddressSanitizer job (#114).
+- Unit tests of the bounds and alloc passes on hand-written IR (#109, #110), of the
+  quarantine (#111, #114), and of compilation without a clang executable (#115,
+  #117).
+- The LLVM apt install refreshes its index on every attempt (#102, #101).
+
+### Known issues
+
+- The conservative auto-free scan (`CT_AUTOFREE_SCAN`, macOS) can hang a
+  multithreaded program (#118), fixed in the next release.
 
 ## v0.9.0 (2026-09-26)
 
-- Bounds checks cover stack objects (`stack-buffer-overflow`) (#86, #93).
-- Objective-C objects are tracked until they are deallocated (#84).
-- Builds with LLVM 16 to 20 (#89); the runtime can be left out of the build
-  (`CORETRACE_COMPILER_BUILD_RUNTIME=OFF`) (#88).
-- Leak and double-free reports give the allocation site (#94); in-memory bitcode output
-  (#95).
-- **Runtime ABI:** `__ct_free` and `__ct_delete*` take the site of their call: objects
-  instrumented by 0.8.0 must be recompiled (#94).
+Bounds checks on stack objects, Objective-C object tracking, LLVM 16 to 20, and
+source locations in leak and double-free reports.
+
+### Features
+
+- **Stack objects in bounds checks.** A local object is registered while its frame
+  runs when a check uses it as a base or its address escapes; an access outside it is
+  reported as `stack-buffer-overflow`, in its own function, in a callee, or through
+  `container_of` (#86, #79, #93, #90).
+- **Objective-C and Objective-C++.** On Apple targets, objects allocated with `alloc`,
+  `allocWithZone:` and `new` are tracked until `-[NSObject dealloc]`, so a leaked
+  object is reported; the auto-free scan never releases them (#84, #33). Smoke tests
+  and documentation (#82, #83).
+- **LLVM 16 to 20.** compilerlib and `cc` build with LLVM 16 to 20; CMake rejects older
+  versions (#89, #87).
+- **Optional runtime.** `-DCORETRACE_COMPILER_BUILD_RUNTIME=OFF` builds compilerlib and
+  `cc` without the runtime; `CT_RUNTIME_LIB_DIR` then supplies it (#88, #85).
+- **Sites in memory reports.** Leak and double-free lines give the allocation site as
+  `alloc_site=`, and a double free the site of the second release as `site=` (#94,
+  #92).
+- **In-memory bitcode.** `OutputMode::ToMemoryBitcode` returns the bytes of
+  `-emit-llvm -c` in `CompileResult::llvmBitcode`, without writing a file (#95).
+
+### Behaviour changes
+
+- **Runtime ABI:** `__ct_free` and the `__ct_delete*` entry points take the site of
+  their call. Objects instrumented by 0.8.0 must be recompiled (#94).
+- Sites name a file by the path the compiler was given instead of its base name; on
+  Windows, the leak line uses `alloc_site=` instead of `site=` (#94).
+- A failed instrumented compilation removes its output file, as clang does (#97,
+  #96).
+- `compile()` verifies every instrumented module and fails with the verifier's
+  message, flagged as a CoreTrace bug, instead of generating code from invalid IR
+  (#93).
+
+### Fixes
+
+- A code-generation error no longer ends the process that compiles, `cc` or a host
+  calling `compile()`; the compilation fails and reports it (#93, #91).
+- A write error on the output fails the compilation instead of ending the process
+  (#97, #96).
+- The trace prints Objective-C methods and other asm-labelled functions without LLVM's
+  `\01` marker (#81).
+- The vtable pass no longer crashes on opaque pointers with LLVM 16 (#89).
+
+### Tests and CI
+
+- In-process unit tests through `compilerlib::compile` (`test/unit/compile_test.cpp`):
+  instrumented IR validity, code-generation and write errors, output removal, sites,
+  in-memory bitcode (#93, #94, #95, #97).
+- Fixtures for stack bounds and report sites; Objective-C smoke cases (#82, #84, #86,
+  #94).
+- CI builds without the runtime (#88) and with LLVM 16 on Ubuntu 22.04 (#89).
 
 ## v0.8.0 (2026-09-24)
 
-- First release with Windows (x64) support, with a Windows port of the runtime (#36,
-  #73, #74).
-- Relocatable install; `cc --version` (#52).
-- A failed compile or link of a non-instrumented build exits with a non-zero status
-  (#55).
+The first release with Windows support; a relocatable install; correctness fixes in the
+runtime and the passes.
+
+### Features
+
+- **Windows (x64).** Native build with clang-cl (`scripts/build-windows.ps1`) and a
+  Windows port of the runtime (#36). `new`/`delete` are tracked under the Microsoft
+  C++ ABI (#74); CI runs instrumented programs on Windows (#73).
+- **Relocatable install.** `cmake --install` produces a self-contained prefix, and
+  `cc` finds its runtime relative to its own location; `CT_RUNTIME_LIB_DIR` overrides
+  the lookup. `cc --version` prints the compiler and LLVM versions (#52).
+- **Instrumented LLVM IR and bitcode output**, with object, IR and bitcode emission in
+  one module (#28, #23).
+- **In-tree frontend.** `--ct-optnone` marks user functions `optnone` and `noinline`
+  before code generation, and the wrapper's diagnostics are cleaner (#30, #29).
+- Richer runtime logs (#32, #31).
+
+### Behaviour changes
+
+- A non-instrumented build exits with a non-zero status when a compile or link step
+  fails (#55).
+- On Windows, vtable diagnostics need `--ct-vtable-diag`, as elsewhere (#72), and the
+  trace prints a C function's name once (#75).
+- `scripts/build-windows.ps1 -BuildTests` controls whether unit tests are built (#73).
+
+### Fixes
+
+- `--help` is clearer and matches the options, and running the produced binary alone
+  behaves predictably (#26, #21).
+- The leak report runs at teardown without touching logger state that may be
+  destroyed; logging is enabled whichever module starts first (#48).
+- The auto-free scan releases its flag on every exit path, and the runtime locks the
+  allocation table before reading it (#56).
+- Polymorphic `delete` is tracked: allocator calls in `linkonce`/`weak` bodies such as
+  deleting destructors are rewritten (#60).
+- Windows: the leak report and the exception filter use lock-free writers, and DbgHelp
+  calls are serialised (#77).
+- With shadow memory, an access whose base is a known allocation is checked against
+  its bounds first (#78), and a pointer rebuilt through integer arithmetic
+  (`container_of` with `uintptr_t`) is traced back to its allocation (#78).
+- Auto-free follows scalar spills and out-parameters such as `posix_memalign` (#49).
+- LLVM target initialisation is thread-safe (#39).
+- `compile_c` validates its arguments and never writes past the caller's buffer; `-g0`
+  keeps the line tables sites need; a trailing `-o=` is handled (#53).
+
+### Tests and CI
+
+- Smoke coverage for the instrumentation flags (#38).
+- GoogleTest unit tests of the driver helpers, the alloc pass and the runtime
+  allocation table, run by `ctest` (#64, #65, #66); `compile_c` checks from C (#59).
+- Runtime fixture suites in CI on Linux and macOS (#51) and on Windows (#73, #75, #77).
+- Retried LLVM installation, a vendored apt.llvm.org key, and an sbrk fixture stable
+  under QEMU (#58, #62, #63).
+
+### Internal
+
+- The compiler/runtime ABI is declared once, in `include/coretrace/runtime_abi.h`
+  (#67).
+- One rewrite helper in the alloc pass, one release path and one auto-free path in the
+  runtime; the auto-free scan and the configuration in their own units (#68, #69, #70,
+  #71, #72).
+- Apache-2.0 SPDX headers across the tree (#35, #34); the superseded smoke-test script
+  is removed (#76).
 
 ## v0.7.0 (2026-02-26)
 
-- clang-format configuration and format check (#19, #20).
-- Better garbage-collection analysis and allocator/deallocator identification (#25).
+- **Conservative auto-free scan** (`CT_AUTOFREE_SCAN`, macOS): a background pass scans
+  stacks, registers and globals for pointers to tracked blocks and releases the ones
+  no root reaches, tuned by the `CT_AUTOFREE_SCAN_*` variables (#25, #24).
+- Better identification of allocators and deallocators for auto-free (#25).
+- Runtime features can be read and toggled at run time with `ct_is_enabled`,
+  `ct_set_enabled` and `ct_get_features`; the configuration is held in atomic state
+  (#25).
+- `cc --help`, and a module for argument parsing.
+- clang-format configuration, `format` targets and a format check in CI (#19, #18);
+  the targets are skipped when the project is built through FetchContent (#20).
+- Commit messages are checked against Conventional Commits in CI and by a `commit-msg`
+  pre-commit hook.
+- A test stage in the Dockerfile; multi-arch Docker tests run on pushes to `main`.
 
-## Earlier versions
+## v0.6.2 (2026-01-29)
 
-Tagged without release notes; summarized from their commits.
+- Instrumented Linux targets are compiled and linked as position-independent
+  executables.
+- Toolchain resolution: clang and its resource directory are detected instead of
+  relying on hard-coded C++ include paths, and `-o=`/`-x=` arguments are normalised
+  (#15, #14).
+- Tests use the external coretrace-testkit, installed with pip (#17, #16); multi-arch
+  Docker builds for Linux in CI.
 
-- **v0.6.2** (2026-01-29): position-independent code for instrumented Linux targets,
-  multi-arch Docker tests, the external coretrace-testkit.
-- **v0.6.1** (2026-01-18): runtime log levels and `nodiscard` helpers.
-- **v0.6.0** (2026-01-15): vtable and virtual call instrumentation, with diagnostics;
-  dynamic allocation and shadow tables.
-- **v0.5.0** (2026-01-14): instrumentation of `calloc`, `realloc`, `new` and `delete`.
-- **v0.4.1** (2026-01-05): the instrumentation pipeline in the compiler.
-- **v0.4.0** (2026-01-05): the instrumentation runtime.
-- **v0.3.1** (2025-11-29): driver compatibility.
-- **v0.3.0** (2025-11-19): FetchContent integration and the extern-project sample.
-- **v0.2.0** (2025-04-18): shared and static libraries.
-- **v0.1.0** (2025-04-17): the Clang-based compiler.
+## v0.6.1 (2026-01-18)
+
+- Allocation-detail logs take a level and follow the surrounding log level (#12, #11).
+- Runtime helpers returning a value are `nodiscard`; the logger handles the result of
+  `write()`.
+- The vtable flags and diagnostic fixtures are documented.
+
+## v0.6.0 (2026-01-15)
+
+- **vtable and virtual call instrumentation** (`--ct-vtable-diag`, `--ct-vcall-trace`),
+  with runtime diagnostics of suspicious virtual dispatch and module resolution on
+  Linux and macOS (#10, #9).
+- Allocation and shadow tables grow dynamically; allocation wrappers in the runtime.
+- `realloc` logs give the old and new sizes and pointers.
+- Driver diagnostics are kept with `--instrument`.
+
+## v0.5.0 (2026-01-14)
+
+- Instrumentation of `calloc`, `realloc`, `new` and `delete`.
+- Site strings are deduplicated.
+- Stress tests of allocations and shadow memory.
+
+## v0.4.1 (2026-01-05)
+
+- The instrumentation pipeline in the compiler: `--instrument` and the `--ct-*` flags
+  select the trace, alloc, bounds and shadow modules (`--ct-modules=`).
+- Diagnostics are reset between cc1 actions.
+
+## v0.4.0 (2026-01-05)
+
+- The instrumentation runtime and its libraries, with the trace, alloc and bounds
+  passes.
+- Clang's resource directory is detected generically.
+- CI on Linux builds with LLVM/Clang 20.
+
+## v0.3.1 (2025-11-29)
+
+- The driver is switched for better compatibility, and the API example is updated.
+
+## v0.3.0 (2025-11-19)
+
+- Integration through CMake FetchContent, with the `extern-project` sample.
+- Builds with several LLVM/Clang versions, including LLVM 16.
+- GitHub Actions workflow building on Linux, Windows and macOS (#3), with a test of
+  the generated output.
+
+## v0.2.0 (2025-04-18)
+
+- The project is exported as shared and static libraries, with a standard
+  `src`/`include` layout.
+- A build helper script and test samples.
+
+## v0.1.0 (2025-04-17)
+
+- A compiler based on Clang, with CMake configuration for LLVM and Clang.
