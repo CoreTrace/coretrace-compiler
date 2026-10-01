@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "compilerlib/instrumentation/alloc.hpp"
 #include "alloc_internal.hpp"
+#include "capture_compat.hpp"
 #include "compilerlib/instrumentation/common.hpp"
 #include "compilerlib/attributes.hpp"
 #include "runtime_abi.hpp"
 
-#include <llvm/Analysis/CaptureTracking.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallPtrSet.h>
@@ -457,10 +457,8 @@ namespace compilerlib
                                                          "escape: call", alloca, loadUser);
                                     return finish(state);
                                 }
-                                auto captureKind = llvm::DetermineUseCaptureKind(
-                                    loadUse,
-                                    [&](llvm::Value*, const llvm::DataLayout&) { return false; });
-                                if (captureKind != llvm::UseCaptureKind::NO_CAPTURE)
+                                if (capture_compat::useCapture(loadUse) !=
+                                    capture_compat::UseCapture::None)
                                 {
                                     state = promoteState(state, EscapeState::EscapedCall,
                                                          "escape: call", alloca, loadUser);
@@ -956,13 +954,12 @@ namespace compilerlib
                             return state;
                         }
 
-                        auto captureKind = llvm::DetermineUseCaptureKind(
-                            use, [&](llvm::Value*, const llvm::DataLayout&) { return false; });
-                        if (captureKind == llvm::UseCaptureKind::NO_CAPTURE)
+                        const capture_compat::UseCapture capture = capture_compat::useCapture(use);
+                        if (capture == capture_compat::UseCapture::None)
                         {
                             continue;
                         }
-                        if (captureKind == llvm::UseCaptureKind::PASSTHROUGH)
+                        if (capture == capture_compat::UseCapture::Passthrough)
                         {
                             if (call->getType()->isPointerTy() && visited.insert(call).second)
                             {
