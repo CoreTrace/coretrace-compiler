@@ -226,10 +226,11 @@ jobs:
         bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests_O2"
 
   # compilerlib, cc and the tests built with AddressSanitizer and LeakSanitizer
-  # (ENABLE_DEBUG_ASAN). The runtime and its logger are built without them, since
-  # instrumented programs link them without the sanitizer's runtime.
+  # (ENABLE_DEBUG_ASAN), and with UndefinedBehaviorSanitizer (ENABLE_DEBUG_UBSAN). The
+  # runtime and its logger are built without them, since instrumented programs link them
+  # without the sanitizers' runtimes.
   build-asan:
-    name: Build with AddressSanitizer (ubuntu-24.04)
+    name: Build with AddressSanitizer and UBSan (ubuntu-24.04)
     runs-on: ubuntu-24.04
 
     steps:
@@ -244,7 +245,7 @@ jobs:
 
     - name: Build
       run: |
-        cmake -S . -B build -G Ninja -DENABLE_DEBUG_ASAN=ON \
+        cmake -S . -B build -G Ninja -DENABLE_DEBUG_ASAN=ON -DENABLE_DEBUG_UBSAN=ON \
           -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
           -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm \
           -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang \
