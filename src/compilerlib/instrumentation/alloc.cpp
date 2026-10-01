@@ -7,6 +7,7 @@
 #include "runtime_abi.hpp"
 
 #include <llvm/Analysis/ValueTracking.h>
+#include <llvm/Config/llvm-config.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
@@ -34,6 +35,17 @@ namespace compilerlib
 {
     namespace
     {
+
+        // A conditional branch, which LLVM 23 gives its own instruction class.
+        CT_NODISCARD bool isConditionalBranch(const llvm::User* user)
+        {
+#if LLVM_VERSION_MAJOR >= 23
+            return llvm::isa<llvm::CondBrInst>(user);
+#else
+            const auto* branch = llvm::dyn_cast<llvm::BranchInst>(user);
+            return branch && branch->isConditional();
+#endif
+        }
 
         CT_NODISCARD llvm::Function* getCalledFunction(llvm::CallBase& call)
         {
@@ -622,12 +634,9 @@ namespace compilerlib
                         (void)cmp;
                         continue;
                     }
-                    if (auto* br = llvm::dyn_cast<llvm::BranchInst>(user))
+                    if (isConditionalBranch(user))
                     {
-                        if (br->isConditional())
-                        {
-                            continue;
-                        }
+                        continue;
                     }
                     if (llvm::isa<llvm::SwitchInst>(user))
                     {
@@ -871,13 +880,10 @@ namespace compilerlib
                     {
                         continue;
                     }
-                    if (auto* br = llvm::dyn_cast<llvm::BranchInst>(user))
+                    if (isConditionalBranch(user))
                     {
-                        if (br->isConditional())
-                        {
-                            // Using the value only as a branch condition is non-escaping.
-                            continue;
-                        }
+                        // Using the value only as a branch condition is non-escaping.
+                        continue;
                     }
                     if (llvm::isa<llvm::SwitchInst>(user))
                     {
