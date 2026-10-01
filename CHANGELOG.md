@@ -14,6 +14,10 @@ pull request.
 
 ## Unreleased
 
+### Features
+
+- **LLVM 21 to 23.** compilerlib and `cc` build with LLVM 16 to 23 (#145).
+
 ### Behaviour changes
 
 - **Runtime ABI.** Two entry points are added, `__ct_schedule_leak_report` and
@@ -57,6 +61,8 @@ pull request.
 - UndefinedBehaviorSanitizer joins AddressSanitizer in CI (`ENABLE_DEBUG_UBSAN`)
   (#140).
 - The passes are fuzzed with `llvm-stress` on Linux and macOS (#141).
+- The LLVM versions workflow builds everything with each of LLVM 16 to 23, one job per
+  version, and runs every suite and the fuzzer with it (#145).
 
 ## v0.10.0 (2026-09-29)
 

@@ -183,7 +183,7 @@ namespace compilerlib
         }
 
         llvm::LLVMContext& context = module.getContext();
-        llvm::Type* voidPtrTy = llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
+        llvm::Type* voidPtrTy = llvm::PointerType::get(context, 0);
 
         llvm::FunctionCallee traceFn = CT_RUNTIME_CALLEE(module, __ct_vcall_trace);
         llvm::FunctionCallee dumpFn = CT_RUNTIME_CALLEE(module, __ct_vtable_dump);

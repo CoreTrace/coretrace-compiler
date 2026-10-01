@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# compilerlib supports LLVM 16 to 23. Each version gets its own job, which builds
+# everything with that LLVM and runs every suite, so a failure names the version.
+# The Build workflow covers the platforms (Linux, macOS, Windows) with LLVM 20.
+#
+# Ubuntu 24.04 packages LLVM 16 to 19, and its libstdc++ has the <format> the runtime's
+# logger needs; apt.llvm.org packages 20 and later (it has no noble-16).
+name: LLVM versions
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  llvm:
+    name: LLVM ${{ matrix.llvm }} (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        llvm: [16, 17, 18, 19, 20, 21, 22, 23]
+    env:
+      LLVM_DIR: /usr/lib/llvm-${{ matrix.llvm }}/lib/cmake/llvm
+      Clang_DIR: /usr/lib/llvm-${{ matrix.llvm }}/lib/cmake/clang
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install LLVM ${{ matrix.llvm }}
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake ninja-build python3-venv
+        packages="llvm-${{ matrix.llvm }}-dev libclang-${{ matrix.llvm }}-dev clang-${{ matrix.llvm }}"
+        if [ "${{ matrix.llvm }}" -ge 20 ]; then
+          sudo bash scripts/ci/install-llvm-apt.sh ${{ matrix.llvm }} ${packages}
+        else
+          sudo apt-get install -y ${packages}
+        fi
+        clang-${{ matrix.llvm }} --version
+
+    - name: Build
+      run: |
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_COMPILER=clang-${{ matrix.llvm }} -DCMAKE_CXX_COMPILER=clang++-${{ matrix.llvm }} \
+          -DLLVM_DIR="${LLVM_DIR}" -DClang_DIR="${Clang_DIR}" \
+          -DUSE_SHARED_LIB=OFF
+        # -k 0: every compile error of this LLVM version, not only the first ones.
+        cmake --build build -- -k 0
+
+    - name: Run unit tests
+      run: ctest --test-dir build --output-on-failure
+
+    - name: Run Python smoke tests
+      run: |
+        python3 -m venv .venv
+        source .venv/bin/activate
+        python -m pip install --upgrade pip
+        python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git
+        python test/examples/test_smoke.py
+        python test/examples/test_extern_project.py
+        python test/examples/test_help_smoke.py
+
+    - name: Run runtime fixture suites
+      run: |
+        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
+        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
+        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests"
+
+    - name: Run runtime fixture suites at -O2
+      env:
+        CT_TEST_OPT: -O2
+      run: |
+        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests_O2"
+        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests_O2"
+        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests_O2"
+
+    # The IR the passes meet changes with each LLVM: random modules from that version's
+    # llvm-stress check that they still leave valid IR.
+    - name: Fuzz the passes with llvm-stress
+      env:
+        LLVM_STRESS: /usr/lib/llvm-${{ matrix.llvm }}/bin/llvm-stress
+      run: bash test/run_pass_fuzz.sh "${RUNNER_TEMP}/ct_pass_fuzz"

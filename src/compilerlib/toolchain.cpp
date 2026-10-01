@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "compilerlib/toolchain.hpp"
+#include "clang_compat.hpp"
 #include "toolchain_internal.hpp"
 
-#include <clang/Driver/Driver.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Object/Archive.h>
 #include <llvm/Object/Binary.h>
@@ -336,7 +336,7 @@ namespace compilerlib
             }
             if (!clang_path.empty())
             {
-                std::string resource = clang::driver::Driver::GetResourcesPath(clang_path);
+                std::string resource = clang_compat::resourcesPath(clang_path);
                 if (!resource.empty() && llvm::sys::fs::exists(resource))
                     return resource;
             }

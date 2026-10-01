@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "compilerlib/instrumentation/alloc.hpp"
 #include "alloc_internal.hpp"
+#include "capture_compat.hpp"
 #include "compilerlib/instrumentation/common.hpp"
 #include "compilerlib/attributes.hpp"
 #include "runtime_abi.hpp"
 
-#include <llvm/Analysis/CaptureTracking.h>
 #include <llvm/Analysis/ValueTracking.h>
+#include <llvm/Config/llvm-config.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
@@ -34,6 +35,17 @@ namespace compilerlib
 {
     namespace
     {
+
+        // A conditional branch, which LLVM 23 gives its own instruction class.
+        CT_NODISCARD bool isConditionalBranch(const llvm::User* user)
+        {
+#if LLVM_VERSION_MAJOR >= 23
+            return llvm::isa<llvm::CondBrInst>(user);
+#else
+            const auto* branch = llvm::dyn_cast<llvm::BranchInst>(user);
+            return branch && branch->isConditional();
+#endif
+        }
 
         CT_NODISCARD llvm::Function* getCalledFunction(llvm::CallBase& call)
         {
@@ -457,10 +469,8 @@ namespace compilerlib
                                                          "escape: call", alloca, loadUser);
                                     return finish(state);
                                 }
-                                auto captureKind = llvm::DetermineUseCaptureKind(
-                                    loadUse,
-                                    [&](llvm::Value*, const llvm::DataLayout&) { return false; });
-                                if (captureKind != llvm::UseCaptureKind::NO_CAPTURE)
+                                if (capture_compat::useCapture(loadUse) !=
+                                    capture_compat::UseCapture::None)
                                 {
                                     state = promoteState(state, EscapeState::EscapedCall,
                                                          "escape: call", alloca, loadUser);
@@ -624,12 +634,9 @@ namespace compilerlib
                         (void)cmp;
                         continue;
                     }
-                    if (auto* br = llvm::dyn_cast<llvm::BranchInst>(user))
+                    if (isConditionalBranch(user))
                     {
-                        if (br->isConditional())
-                        {
-                            continue;
-                        }
+                        continue;
                     }
                     if (llvm::isa<llvm::SwitchInst>(user))
                     {
@@ -873,13 +880,10 @@ namespace compilerlib
                     {
                         continue;
                     }
-                    if (auto* br = llvm::dyn_cast<llvm::BranchInst>(user))
+                    if (isConditionalBranch(user))
                     {
-                        if (br->isConditional())
-                        {
-                            // Using the value only as a branch condition is non-escaping.
-                            continue;
-                        }
+                        // Using the value only as a branch condition is non-escaping.
+                        continue;
                     }
                     if (llvm::isa<llvm::SwitchInst>(user))
                     {
@@ -956,13 +960,12 @@ namespace compilerlib
                             return state;
                         }
 
-                        auto captureKind = llvm::DetermineUseCaptureKind(
-                            use, [&](llvm::Value*, const llvm::DataLayout&) { return false; });
-                        if (captureKind == llvm::UseCaptureKind::NO_CAPTURE)
+                        const capture_compat::UseCapture capture = capture_compat::useCapture(use);
+                        if (capture == capture_compat::UseCapture::None)
                         {
                             continue;
                         }
-                        if (captureKind == llvm::UseCaptureKind::PASSTHROUGH)
+                        if (capture == capture_compat::UseCapture::Passthrough)
                         {
                             if (call->getType()->isPointerTy() && visited.insert(call).second)
                             {
@@ -1486,7 +1489,7 @@ namespace compilerlib
         llvm::LLVMContext& context = module.getContext();
         const llvm::DataLayout& layout = module.getDataLayout();
         EscapeAnalysisContext escapeCtx(layout);
-        llvm::Type* voidPtrTy = llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
+        llvm::Type* voidPtrTy = llvm::PointerType::get(context, 0);
         llvm::Type* sizeTy = layout.getIntPtrType(context);
         llvm::FunctionCallee ctMalloc = CT_RUNTIME_CALLEE(module, __ct_malloc);
         llvm::FunctionCallee ctMallocUnreachable =

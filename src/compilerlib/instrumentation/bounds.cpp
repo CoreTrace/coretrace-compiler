@@ -2,13 +2,13 @@
 #include "compilerlib/instrumentation/bounds.hpp"
 #include "compilerlib/instrumentation/common.hpp"
 #include "compilerlib/attributes.hpp"
+#include "capture_compat.hpp"
 #include "runtime_abi.hpp"
 
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SetVector.h>
 #include <llvm/ADT/SmallVector.h>
-#include <llvm/Analysis/CaptureTracking.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
@@ -244,8 +244,8 @@ namespace compilerlib
         }
 
         // The variable a stack object holds, from its debug declaration; null without full
-        // debug information. LLVM 19 moved declarations from intrinsics to records, and
-        // LLVM 18 renamed the intrinsic lookup.
+        // debug information. LLVM 19 moved declarations from intrinsics to records, LLVM 22
+        // removed the intrinsics, and LLVM 18 renamed the intrinsic lookup.
         CT_NODISCARD const llvm::DILocalVariable* declaredVariable(llvm::AllocaInst& object)
         {
 #if LLVM_VERSION_MAJOR >= 19
@@ -256,12 +256,16 @@ namespace compilerlib
                 return records.front()->getVariable();
             }
 #endif
+#if LLVM_VERSION_MAJOR >= 22
+            return nullptr;
+#else
 #if LLVM_VERSION_MAJOR >= 18
             llvm::TinyPtrVector<llvm::DbgDeclareInst*> declares = llvm::findDbgDeclares(&object);
 #else
             llvm::TinyPtrVector<llvm::DbgDeclareInst*> declares = llvm::FindDbgDeclareUses(&object);
 #endif
             return declares.empty() ? nullptr : declares.front()->getVariable();
+#endif
         }
 
         // Where a stack object comes from, as "file:line": its variable's declaration when
@@ -419,7 +423,7 @@ namespace compilerlib
     {
         llvm::LLVMContext& context = module.getContext();
         const llvm::DataLayout& layout = module.getDataLayout();
-        llvm::Type* voidPtrTy = llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
+        llvm::Type* voidPtrTy = llvm::PointerType::get(context, 0);
         llvm::Type* sizeTy = layout.getIntPtrType(context);
         llvm::Type* intTy = llvm::Type::getInt32Ty(context);
 
@@ -443,8 +447,7 @@ namespace compilerlib
             {
                 auto* object = llvm::dyn_cast<llvm::AllocaInst>(&inst);
                 if (object && stackObjectSize(*object, layout) &&
-                    llvm::PointerMayBeCaptured(object, /*ReturnCaptures=*/true,
-                                               /*StoreCaptures=*/true))
+                    capture_compat::pointerMayBeCaptured(object))
                 {
                     stackObjects.insert(object);
                 }

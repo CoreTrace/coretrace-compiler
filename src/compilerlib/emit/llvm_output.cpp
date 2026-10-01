@@ -119,15 +119,14 @@ namespace compilerlib::emit
                                                                  const clang::CompilerInstance& ci,
                                                                  std::string& error)
         {
-            std::string targetTriple = module.getTargetTriple();
-
-            if (targetTriple.empty())
-                targetTriple = llvm::sys::getDefaultTargetTriple();
-            module.setTargetTriple(targetTriple);
+            llvm::Triple targetTriple(module.getTargetTriple());
+            if (targetTriple.str().empty())
+                targetTriple = llvm::Triple(llvm::sys::getDefaultTargetTriple());
+            module.setTargetTriple(llvm_compat::tripleArgument(targetTriple));
 
             std::string targetError;
-            const llvm::Target* target =
-                llvm::TargetRegistry::lookupTarget(targetTriple, targetError);
+            const llvm::Target* target = llvm::TargetRegistry::lookupTarget(
+                llvm_compat::tripleArgument(targetTriple), targetError);
             if (!target)
             {
                 error = targetError;
@@ -143,8 +142,8 @@ namespace compilerlib::emit
             // explicitly set the relocation model to PIC.
             llvm::Reloc::Model relocModel = llvm::Reloc::PIC_;
             std::unique_ptr<llvm::TargetMachine> targetMachine(target->createTargetMachine(
-                targetTriple, ci.getTargetOpts().CPU, buildTargetFeatures(ci), options, relocModel,
-                std::nullopt, codegenLevel));
+                llvm_compat::tripleArgument(targetTriple), ci.getTargetOpts().CPU,
+                buildTargetFeatures(ci), options, relocModel, std::nullopt, codegenLevel));
             if (!targetMachine)
             {
                 error = "failed to create target machine";
