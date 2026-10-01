@@ -41,6 +41,7 @@ flags_for() {
     ct_new_delete_sized.cpp) echo "--ct-modules=alloc -fsized-deallocation" ;;
     # Without a log line per allocation: that is a million lines here.
     ct_threads_stress.c) echo "--ct-modules=alloc,bounds --ct-no-alloc-trace" ;;
+    ct_fork_threads.c) echo "--ct-modules=alloc --ct-no-alloc-trace" ;;
     *)                 echo "--ct-modules=alloc" ;;
   esac
 }
@@ -101,6 +102,7 @@ expect_stdout() {
     ct_bounds_freed_address_reuse.c) echo "sum=" ;;
     ct_leak_static_destructor.cpp|ct_leak_destructor_function.c) echo "ok" ;;
     ct_threads_stress.c) echo "damaged=0" ;;
+    ct_fork_threads.c) echo "hung=0" ;;
     *) echo "" ;;
   esac
 }
@@ -150,6 +152,7 @@ TESTS=(
   ct_bounds_heap_use_after_free.c
   ct_realloc_zero.c
   ct_threads_stress.c
+  ct_fork_threads.c
   ct_new_delete.cpp
   ct_new_delete_sized.cpp
   ct_new_delete_variants.cpp

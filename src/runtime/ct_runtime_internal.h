@@ -131,6 +131,12 @@ CT_NOINSTR void ct_maybe_install_backtrace(void);
 CT_NOINSTR void ct_init_env_once(void);
 CT_NOINSTR void ct_lock_acquire(void);
 CT_NOINSTR void ct_lock_release(void);
+CT_NOINSTR void ct_shadow_lock_acquire(void);
+CT_NOINSTR void ct_shadow_lock_release(void);
+// Held while a line goes through the logger, which takes its own locks inside: fork() waits
+// on it, so that no other thread is writing a line when the child is created (#133).
+CT_NOINSTR void ct_log_lock_acquire(void);
+CT_NOINSTR void ct_log_lock_release(void);
 CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t size,
                                             const char* site, unsigned char kind);
 CT_NODISCARD CT_NOINSTR int ct_table_remove(void* ptr, size_t* size_out, size_t* req_size_out,
@@ -257,6 +263,20 @@ CT_NOINSTR inline void ct_write_prefix_nolock(CTLevel level)
     ct_write_raw(" ", 1);
 }
 
+struct CtLogLockGuard
+{
+    CT_NOINSTR CtLogLockGuard()
+    {
+        ct_log_lock_acquire();
+    }
+    CT_NOINSTR ~CtLogLockGuard()
+    {
+        ct_log_lock_release();
+    }
+    CtLogLockGuard(const CtLogLockGuard&) = delete;
+    CtLogLockGuard& operator=(const CtLogLockGuard&) = delete;
+};
+
 template <typename... Args>
 CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... args)
 {
@@ -273,6 +293,7 @@ CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... arg
             return;
         }
 
+        CtLogLockGuard lock;
         coretrace::write_log_line(level, {}, msg, std::source_location::current());
     }
     catch (...)
