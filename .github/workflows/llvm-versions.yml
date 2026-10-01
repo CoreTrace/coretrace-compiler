@@ -48,7 +48,8 @@ jobs:
           -DCMAKE_C_COMPILER=clang-${{ matrix.llvm }} -DCMAKE_CXX_COMPILER=clang++-${{ matrix.llvm }} \
           -DLLVM_DIR="${LLVM_DIR}" -DClang_DIR="${Clang_DIR}" \
           -DUSE_SHARED_LIB=OFF
-        cmake --build build
+        # -k 0: every compile error of this LLVM version, not only the first ones.
+        cmake --build build -- -k 0
 
     - name: Run unit tests
       run: ctest --test-dir build --output-on-failure
