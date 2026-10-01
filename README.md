@@ -16,8 +16,9 @@ an in-memory mode for tooling pipelines.
 
 ## Build
 
-Requirements: CMake, a C++20 compiler and LLVM/Clang 16 to 20. CI builds everything with LLVM 20
-on Linux, macOS and Windows, and `compilerlib` and `cc` with LLVM 16 on Ubuntu 22.04.
+Requirements: CMake, a C++20 compiler and LLVM/Clang 16 to 23. CI builds everything with LLVM 20
+on Linux, macOS and Windows, and the LLVM versions workflow builds and tests everything with each
+of LLVM 16 to 23 on Ubuntu 24.04, one job per version.
 
 Quick build:
 
