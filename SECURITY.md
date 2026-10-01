@@ -12,9 +12,11 @@ and ship in the next release; earlier minor versions do not receive backports.
 
 ## Reporting a vulnerability
 
-Report privately, by e-mail to hugo.payet@epitech.eu, a maintainer listed in
-[AUTHORS.md](AUTHORS.md). Please do not open a public issue or pull request about a
-suspected vulnerability.
+Report privately, through GitHub's
+[private vulnerability reporting](https://github.com/CoreTrace/coretrace-compiler/security/advisories/new)
+(the **Report a vulnerability** button on the repository's **Security** tab), or by
+e-mail to hugo.payet@epitech.eu, a maintainer listed in [AUTHORS.md](AUTHORS.md).
+Please do not open a public issue or pull request about a suspected vulnerability.
 
 A report is most useful with:
 
