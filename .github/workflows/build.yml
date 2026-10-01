@@ -121,6 +121,11 @@ jobs:
         bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests_O2"
         bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests_O2"
 
+    # Random modules from llvm-stress through the passes, which must leave valid IR.
+    - name: Fuzz the passes with llvm-stress (Linux/macOS)
+      if: runner.os == 'Linux' || runner.os == 'macOS'
+      run: bash test/run_pass_fuzz.sh "${RUNNER_TEMP}/ct_pass_fuzz"
+
     - name: Docker tests (multi-arch, Linux)
       if: runner.os == 'Linux' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch')
       run: |
