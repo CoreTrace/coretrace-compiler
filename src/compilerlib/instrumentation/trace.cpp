@@ -41,7 +41,7 @@ namespace compilerlib
     void instrumentModule(llvm::Module& module)
     {
         llvm::LLVMContext& context = module.getContext();
-        llvm::Type* voidPtrTy = llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
+        llvm::Type* voidPtrTy = llvm::PointerType::get(context, 0);
         llvm::Type* i64Ty = llvm::Type::getInt64Ty(context);
         llvm::Type* doubleTy = llvm::Type::getDoubleTy(context);
 

@@ -423,7 +423,7 @@ namespace compilerlib
     {
         llvm::LLVMContext& context = module.getContext();
         const llvm::DataLayout& layout = module.getDataLayout();
-        llvm::Type* voidPtrTy = llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
+        llvm::Type* voidPtrTy = llvm::PointerType::get(context, 0);
         llvm::Type* sizeTy = layout.getIntPtrType(context);
         llvm::Type* intTy = llvm::Type::getInt32Ty(context);
 
