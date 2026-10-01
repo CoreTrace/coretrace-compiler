@@ -61,6 +61,9 @@
     X(void,  __ct_delete_array_nothrow,   (void* ptr, const char* site))                          \
     X(void,  __ct_delete_destroying,      (void* ptr, const char* site))                          \
     X(void,  __ct_delete_array_destroying,(void* ptr, const char* site))                          \
+    /* Called by each module that tracks allocations, before its static                */        \
+    /* initializers, so that the leak report runs after the exit-time code.            */        \
+    X(void,  __ct_schedule_leak_report,  (void))                                                  \
     /* Compile-time proven unreachable allocations, released at function exit. */                \
     X(void,  __ct_autofree,              (void* ptr))                                             \
     X(void,  __ct_autofree_delete,       (void* ptr))                                             \

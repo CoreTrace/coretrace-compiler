@@ -25,6 +25,7 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Triple.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
+#include <llvm/Transforms/Utils/ModuleUtils.h>
 
 #include <cstdlib>
 #include <functional>
@@ -1477,6 +1478,9 @@ namespace compilerlib
 
     } // namespace
 
+    // Lower than the priorities a program may give its own constructors (101 and above).
+    constexpr int kScheduleLeakReportPriority = 1;
+
     void wrapAllocCalls(llvm::Module& module)
     {
         llvm::LLVMContext& context = module.getContext();
@@ -2034,6 +2038,14 @@ namespace compilerlib
                                     getSiteString(module, *call, siteCache, unknownSite)});
             }
         }
+
+        // Before any static initializer of the module, which may register exit-time code
+        // that releases blocks: the leak report must run after that code.
+        llvm::FunctionCallee scheduleLeakReport =
+            CT_RUNTIME_CALLEE(module, __ct_schedule_leak_report);
+        llvm::appendToGlobalCtors(module,
+                                  llvm::cast<llvm::Function>(scheduleLeakReport.getCallee()),
+                                  kScheduleLeakReportPriority);
     }
 
 } // namespace compilerlib

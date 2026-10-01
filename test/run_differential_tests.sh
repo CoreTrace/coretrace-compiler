@@ -40,6 +40,7 @@ TESTS=(
   differential/error_unwinding.c
   differential/containers.cpp
   differential/local_variables.c
+  differential/constructor_order.c
   ct_alloc_growth.c
   ct_bounds_container_of_valid.c
   ct_bounds_stack_valid.c

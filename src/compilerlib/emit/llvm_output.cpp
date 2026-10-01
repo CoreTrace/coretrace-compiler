@@ -135,6 +135,9 @@ namespace compilerlib::emit
             }
 
             llvm::TargetOptions options;
+            // Without it, AsmPrinter reverses the constructors, sorted by priority, for the
+            // legacy .ctors scheme: on Mach-O, the order they run in (#131).
+            options.UseInitArray = ci.getCodeGenOpts().UseInitArray;
             auto codegenLevel = toCodeGenOptLevel(ci.getCodeGenOpts().OptimizationLevel);
             // For position-independent code (needed for instrumented code and PIE executables),
             // explicitly set the relocation model to PIC.
