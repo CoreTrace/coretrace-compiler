@@ -3,6 +3,7 @@
 #include "compilerlib/attributes.hpp"
 #include "compilerlib/toolchain.hpp"
 
+#include "compilerlib/frontend/no_instrument_action.hpp"
 #include "compilerlib/frontend/optnone_action.hpp"
 #include "compilerlib/instrumentation/alloc.hpp"
 #include "compilerlib/instrumentation/bounds.hpp"
@@ -57,6 +58,10 @@ namespace compilerlib
     namespace
     {
         constexpr llvm::StringRef kTargetTriple = LLVM_DEFAULT_TARGET_TRIPLE;
+
+        // Code generation for the instrumentation passes: the functions the user declared
+        // no_instrument_function reach them with an attribute they honour.
+        using InstrumentedCodegenAction = frontend::NoInstrumentAction<clang::EmitLLVMOnlyAction>;
 
         struct DiagsSaver : clang::DiagnosticConsumer
         {
@@ -534,10 +539,10 @@ namespace compilerlib
 
                 if (ctx_.runtimeConfig.optnone_enabled)
                 {
-                    return runCodegenWithModule<frontend::OptNoneAction<clang::EmitLLVMOnlyAction>>(
+                    return runCodegenWithModule<frontend::OptNoneAction<InstrumentedCodegenAction>>(
                         *ci, handleModule, error);
                 }
-                return runCodegenWithModule<clang::EmitLLVMOnlyAction>(*ci, handleModule, error);
+                return runCodegenWithModule<InstrumentedCodegenAction>(*ci, handleModule, error);
             }
 
             CompileResult runSingle(const clang::driver::Command& job,
@@ -634,12 +639,12 @@ namespace compilerlib
                         if (ctx_.runtimeConfig.optnone_enabled)
                         {
                             ok = runCodegenWithModule<
-                                frontend::OptNoneAction<clang::EmitLLVMOnlyAction>>(
+                                frontend::OptNoneAction<InstrumentedCodegenAction>>(
                                 *ci, handleModule, actionError);
                         }
                         else
                         {
-                            ok = runCodegenWithModule<clang::EmitLLVMOnlyAction>(*ci, handleModule,
+                            ok = runCodegenWithModule<InstrumentedCodegenAction>(*ci, handleModule,
                                                                                  actionError);
                         }
                         if (!ok)
@@ -776,9 +781,9 @@ namespace compilerlib
                     };
                     const bool ok = ctx_.runtimeConfig.optnone_enabled
                                         ? runCodegenWithModule<
-                                              frontend::OptNoneAction<clang::EmitLLVMOnlyAction>>(
+                                              frontend::OptNoneAction<InstrumentedCodegenAction>>(
                                               ci, handleModule, error)
-                                        : runCodegenWithModule<clang::EmitLLVMOnlyAction>(
+                                        : runCodegenWithModule<InstrumentedCodegenAction>(
                                               ci, handleModule, error);
                     if (!ok)
                         return false;
