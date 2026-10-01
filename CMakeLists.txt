@@ -77,7 +77,7 @@ function(coretrace_patch_llvm_diaguids replacement_path)
 endfunction()
 
 find_package(LLVM REQUIRED CONFIG)
-# compilerlib builds against LLVM 16 to 20; CI builds with 16 and 20.
+# compilerlib builds against LLVM 16 to 23; the LLVM versions workflow builds each of them.
 if(LLVM_VERSION_MAJOR LESS 16)
   message(FATAL_ERROR "CoreTrace Compiler needs LLVM 16 or later; ${LLVM_DIR} is LLVM ${LLVM_PACKAGE_VERSION}")
 endif()
@@ -340,6 +340,11 @@ else()
     clangParse
     clangSema
   )
+  # LLVM 22 moved the driver's option table and resource directory lookup out of
+  # clangDriver.
+  if(LLVM_VERSION_MAJOR GREATER_EQUAL 22)
+    list(APPEND CT_CLANG_LINK_LIBS clangOptions)
+  endif()
 endif()
 
 target_include_directories(compilerlib_static
