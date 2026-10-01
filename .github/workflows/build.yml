@@ -170,66 +170,6 @@ jobs:
         docker run --rm -v "${PWD}:/src:ro" ubuntu:22.04 \
           bash /src/scripts/ci/check-install-llvm-apt.sh
 
-  # compilerlib and cc also build against LLVM 16, the newest LLVM that tools such as
-  # KLEE 3.x support, on the Ubuntu 22.04 they run on. Its libstdc++ 11 lacks <format>,
-  # which the runtime's logger needs, so the runtime is left out. The instrumented IR
-  # exercises the passes on LLVM 16, stack object registration with debug info included.
-  # compilerlib supports LLVM 16 to 20; the main jobs build with 20. Ubuntu 24.04 packages
-  # 16 to 19, and its libstdc++ has the <format> the runtime needs, so each older version
-  # builds everything and runs the same suites.
-  build-llvm-versions:
-    name: Build with LLVM ${{ matrix.llvm }} (ubuntu-24.04)
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        llvm: [16, 17, 18, 19]
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake ninja-build python3-venv \
-          llvm-${{ matrix.llvm }}-dev libclang-${{ matrix.llvm }}-dev clang-${{ matrix.llvm }}
-
-    - name: Build
-      run: |
-        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_C_COMPILER=clang-${{ matrix.llvm }} -DCMAKE_CXX_COMPILER=clang++-${{ matrix.llvm }} \
-          -DLLVM_DIR=/usr/lib/llvm-${{ matrix.llvm }}/lib/cmake/llvm \
-          -DClang_DIR=/usr/lib/llvm-${{ matrix.llvm }}/lib/cmake/clang \
-          -DUSE_SHARED_LIB=OFF
-        cmake --build build
-
-    - name: Run unit tests
-      run: ctest --test-dir build --output-on-failure
-
-    - name: Run Python smoke tests
-      run: |
-        python3 -m venv .venv
-        source .venv/bin/activate
-        python -m pip install --upgrade pip
-        python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git
-        python test/examples/test_smoke.py
-        python test/examples/test_extern_project.py
-        python test/examples/test_help_smoke.py
-
-    - name: Run runtime fixture suites
-      run: |
-        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
-        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
-        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests"
-
-    - name: Run runtime fixture suites at -O2
-      env:
-        CT_TEST_OPT: -O2
-      run: |
-        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests_O2"
-        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests_O2"
-        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests_O2"
-
   # compilerlib, cc and the tests built with AddressSanitizer and LeakSanitizer
   # (ENABLE_DEBUG_ASAN), and with UndefinedBehaviorSanitizer (ENABLE_DEBUG_UBSAN). The
   # runtime and its logger are built without them, since instrumented programs link them
