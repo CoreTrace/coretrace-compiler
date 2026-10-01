@@ -11,12 +11,12 @@
 #include "compilerlib/instrumentation/trace.hpp"
 #include "compilerlib/instrumentation/vtable.hpp"
 #include "args_internal.hpp"
+#include "clang_compat.hpp"
 #include "emit/llvm_output.hpp"
 
 #include <clang/Frontend/FrontendActions.h>
 #include <clang/Driver/Compilation.h>
 #include <clang/Driver/Driver.h>
-#include <clang/Driver/Options.h>
 #include <mutex>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/TextDiagnosticBuffer.h>
@@ -178,6 +178,8 @@ namespace compilerlib
             std::string clang_sysroot;
             RuntimeArchives runtime_archives;
             llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs;
+            // Options of the driver's diagnostics engine, which must outlive it.
+            clang_compat::DiagnosticOptionsStorage driver_diagnostic_options;
             DiagsSaver dc;
             std::string driver_diagnostics;
 
@@ -380,20 +382,23 @@ namespace compilerlib
             // Argument errors are buffered until the invocation's diagnostic options, such as
             // colors or the output format, are known.
             auto* parseBuffer = new clang::TextDiagnosticBuffer;
-            clang::DiagnosticsEngine parseDiags(new clang::DiagnosticIDs,
-                                                new clang::DiagnosticOptions, parseBuffer);
+            clang_compat::DiagnosticOptionsStorage parseOptions;
+            clang::DiagnosticsEngine parseDiags(new clang::DiagnosticIDs, parseOptions.get(),
+                                                parseBuffer);
             const bool parsed = clang::CompilerInvocation::CreateFromArgs(
                 ci->getInvocation(), llvm::ArrayRef<const char*>(argv).drop_front(2), parseDiags,
                 argv[0]);
 
             std::string text;
             llvm::raw_string_ostream stream(text);
-            auto* printer = new clang::TextDiagnosticPrinter(stream, &ci->getDiagnosticOpts());
-#if LLVM_VERSION_MAJOR >= 20
-            ci->createDiagnostics(*ctx.fs, printer, /*ShouldOwnClient=*/true);
-#else
-            ci->createDiagnostics(printer, /*ShouldOwnClient=*/true);
+            auto* printer =
+                new clang::TextDiagnosticPrinter(stream, clang_compat::diagnosticOptions(*ci));
+#if LLVM_VERSION_MAJOR >= 22
+            // As cc1_main: the invocation's file system, its overlays included, which the
+            // frontend action otherwise creates itself from LLVM 22 on.
+            ci->createVirtualFileSystem(ctx.fs, parseBuffer);
 #endif
+            clang_compat::createDiagnostics(*ci, ctx.fs, printer, /*shouldOwnClient=*/true);
             ci->setVerboseOutputStream(stream);
             parseBuffer->FlushDiagnostics(ci->getDiagnostics());
 
@@ -434,8 +439,8 @@ namespace compilerlib
                     // assemble .s sources, have no library entry point and stay subprocesses,
                     // and -fno-integrated-cc1 keeps every job out of process, as with clang.
                     const bool integrated =
-                        ownedComp->getArgs().hasFlag(clang::driver::options::OPT_fintegrated_cc1,
-                                                     clang::driver::options::OPT_fno_integrated_cc1,
+                        ownedComp->getArgs().hasFlag(clang_compat::options::OPT_fintegrated_cc1,
+                                                     clang_compat::options::OPT_fno_integrated_cc1,
                                                      /*Default=*/true);
                     for (clang::driver::Command& job : ownedComp->getJobs())
                         job.InProcess = integrated && isCc1Command(job.getArguments());
@@ -815,24 +820,13 @@ namespace compilerlib
             CT_NODISCARD std::unique_ptr<clang::CompilerInstance>
             makeCompilerInstance(const llvm::opt::ArgStringList& ccArgs)
             {
-                auto invoc = std::make_unique<clang::CompilerInvocation>();
+                auto invoc = std::make_shared<clang::CompilerInvocation>();
                 clang::CompilerInvocation::CreateFromArgs(*invoc, ccArgs, driverDiags_);
 
-                auto ci = std::make_unique<clang::CompilerInstance>();
-                ci->setInvocation(std::move(invoc));
-
-// Adaptation to different LLVM/Clang versions
-// - LLVM 16–19: createDiagnostics(Consumer, ShouldOwnClient)
-// - LLVM 20+: the overloads without a VFS have been removed, you must pass the VFS.
-#if LLVM_VERSION_MAJOR >= 20
-                ci->createDiagnostics(*ctx_.fs, &ctx_.dc, false);
-#else
-                ci->createDiagnostics(&ctx_.dc, false);
-#endif
-
+                auto ci = clang_compat::makeCompilerInstance(std::move(invoc));
+                clang_compat::createDiagnostics(*ci, ctx_.fs, &ctx_.dc, /*shouldOwnClient=*/false);
                 ci->getDiagnostics().getDiagnosticOptions().ShowCarets = false;
-                ci->createFileManager(ctx_.fs);
-                ci->createSourceManager(ci->getFileManager());
+                clang_compat::createFileAndSourceManagers(*ci, ctx_.fs);
                 ci->getCodeGenOpts().DisableFree = false;
                 ci->getFrontendOpts().DisableFree = false;
 
@@ -881,11 +875,8 @@ namespace compilerlib
         CT_NODISCARD llvm::IntrusiveRefCntPtr<clang::DiagnosticsEngine>
         createDriverDiagnostics(CompileContext& ctx)
         {
-            return clang::CompilerInstance::createDiagnostics(
-#if LLVM_VERSION_MAJOR >= 20
-                *ctx.fs,
-#endif
-                new clang::DiagnosticOptions, &ctx.dc, false);
+            return clang_compat::createDiagnostics(*ctx.fs, ctx.driver_diagnostic_options, &ctx.dc,
+                                                   /*shouldOwnClient=*/false);
         }
 
         // Jobs on this path run as subprocesses, so their stderr is redirected to one
