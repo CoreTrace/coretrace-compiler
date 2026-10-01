@@ -119,6 +119,23 @@ if(ENABLE_DEBUG_ASAN)
   endif()
 endif()
 
+option(ENABLE_DEBUG_UBSAN "Enable debug symbols and UndefinedBehaviorSanitizer" OFF)
+
+if(ENABLE_DEBUG_UBSAN)
+  if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+  endif()
+
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
+    # Fatal, so that undefined behaviour fails the test that reaches it.
+    set(UBSAN_FLAGS -fsanitize=undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
+    add_compile_options(-g ${UBSAN_FLAGS})
+    add_link_options(${UBSAN_FLAGS})
+  else()
+    message(WARNING "ENABLE_DEBUG_UBSAN is ON but UBSAN flags are only set for Clang/GNU compilers.")
+  endif()
+endif()
+
 set(LIB_SOURCES
   src/compilerlib/args.cpp
   src/compilerlib/compiler.cpp
@@ -207,6 +224,11 @@ if(CORETRACE_COMPILER_BUILD_RUNTIME)
     # runtime, so neither may be built with it.
     target_compile_options(ct_instrument_runtime PRIVATE -fno-sanitize=address)
     target_compile_options(coretrace_logger PRIVATE -fno-sanitize=address)
+  endif()
+  if(ENABLE_DEBUG_UBSAN)
+    # Nor with UndefinedBehaviorSanitizer's.
+    target_compile_options(ct_instrument_runtime PRIVATE -fno-sanitize=undefined)
+    target_compile_options(coretrace_logger PRIVATE -fno-sanitize=undefined)
   endif()
 endif()
 
