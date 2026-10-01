@@ -18,6 +18,7 @@ add_executable(compilerlib_unit_tests
   bounds_pass_test.cpp
   compile_test.cpp
   toolchain_test.cpp
+  vtable_pass_test.cpp
 )
 target_include_directories(compilerlib_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 # Fixtures that compile_test.cpp compiles in process.
