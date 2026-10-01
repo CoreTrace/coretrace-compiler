@@ -28,14 +28,16 @@ namespace compilerlib
         }
 
         // A definition the passes may modify: not runtime-internal, not opted out, and
-        // not an available_externally copy, which is discarded for the real body.
+        // not an available_externally copy, which is discarded for the real body. A function
+        // opts out with disable_sanitizer_instrumentation, which the frontend also gives the
+        // functions declared no_instrument_function.
         CT_NODISCARD bool isModifiableDefinition(const llvm::Function& func)
         {
             if (func.isDeclaration())
                 return false;
             if (func.getName().starts_with("__ct_"))
                 return false;
-            if (func.hasFnAttribute("no_instrument_function") ||
+            if (func.hasFnAttribute(llvm::Attribute::DisableSanitizerInstrumentation) ||
                 func.hasFnAttribute(llvm::Attribute::Naked))
             {
                 return false;
