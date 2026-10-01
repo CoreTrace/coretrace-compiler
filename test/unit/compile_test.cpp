@@ -2,6 +2,7 @@
 #include "compilerlib/compiler.h"
 
 #include <llvm/AsmParser/Parser.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -173,6 +174,110 @@ int main(void)
         // does not record, and the stack object's declaration.
         EXPECT_NE(result.llvmIR.find("sub/dir/sites.c:8"), std::string::npos) << result.llvmIR;
         EXPECT_NE(result.llvmIR.find("sub/dir/sites.c:6\\00"), std::string::npos) << result.llvmIR;
+    }
+
+    // Functions that opt out of instrumentation, either way, and the ones beside them.
+    constexpr const char* kNoInstrumentC =
+        R"(__attribute__((no_instrument_function)) int quiet(int* values, int index)
+{
+    return values[index];
+}
+
+__attribute__((disable_sanitizer_instrumentation)) int quiet_too(int* values, int index)
+{
+    return values[index];
+}
+
+int loud(int* values, int index)
+{
+    return values[index];
+}
+)";
+
+    constexpr const char* kNoInstrumentCxx = R"(struct Holder
+{
+    __attribute__((no_instrument_function)) int quiet(int* values, int index);
+};
+
+int Holder::quiet(int* values, int index)
+{
+    return values[index];
+}
+
+namespace
+{
+    __attribute__((no_instrument_function)) int quiet_internal(int* values, int index)
+    {
+        return values[index];
+    }
+} // namespace
+
+int loud(int* values, int index)
+{
+    Holder holder;
+    return holder.quiet(values, index) + quiet_internal(values, index) + values[index];
+}
+)";
+
+    // For each function of `ir` defined with a name containing `part`: whether it calls into
+    // the runtime.
+    std::vector<bool> callsRuntime(const std::string& ir, const std::string& part)
+    {
+        llvm::LLVMContext context;
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> module = llvm::parseAssemblyString(ir, error, context);
+        std::vector<bool> result;
+        if (!module)
+        {
+            ADD_FAILURE() << error.getMessage().str();
+            return result;
+        }
+        for (const llvm::Function& func : *module)
+        {
+            if (func.isDeclaration() || func.getName().find(part) == llvm::StringRef::npos)
+            {
+                continue;
+            }
+            bool calls = false;
+            for (const llvm::BasicBlock& block : func)
+            {
+                for (const llvm::Instruction& inst : block)
+                {
+                    const auto* call = llvm::dyn_cast<llvm::CallBase>(&inst);
+                    const llvm::Function* callee = call ? call->getCalledFunction() : nullptr;
+                    calls |= callee && callee->getName().starts_with("__ct_");
+                }
+            }
+            result.push_back(calls);
+        }
+        return result;
+    }
+
+    TEST_F(CompileTest, NoInstrumentFunctionIsLeftAlone)
+    {
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-S", "-emit-llvm", "--ct-modules=trace,alloc,bounds",
+                                  writeSource("quiet.c", kNoInstrumentC)},
+                                 compilerlib::OutputMode::ToMemory, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_EQ(callsRuntime(result.llvmIR, "quiet"), (std::vector<bool>{false, false}))
+            << result.llvmIR;
+        EXPECT_EQ(callsRuntime(result.llvmIR, "loud"), std::vector<bool>{true}) << result.llvmIR;
+    }
+
+    // A member function defined out of its class, whose definition inherits the attribute of
+    // its declaration, and a function of internal linkage. Inline functions and templates
+    // are never instrumented.
+    TEST_F(CompileTest, NoInstrumentFunctionIsLeftAloneInCxx)
+    {
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-S", "-emit-llvm", "--ct-modules=trace,alloc,bounds",
+                                  writeSource("quiet.cpp", kNoInstrumentCxx)},
+                                 compilerlib::OutputMode::ToMemory, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_EQ(callsRuntime(result.llvmIR, "quiet"), (std::vector<bool>{false, false}))
+            << result.llvmIR;
+        EXPECT_EQ(callsRuntime(result.llvmIR, "loud"), std::vector<bool>{true}) << result.llvmIR;
     }
 
     // A unit compiled the way an analyser compiles it: unoptimised, with debug information.
