@@ -86,7 +86,9 @@ define linkonce_odr void @library_release(ptr %block) !dbg !18 {
             ASSERT_FALSE(llvm::verifyModule(*module_, &stream)) << stream.str();
         }
 
-        // Names of the functions @function calls, in order.
+        // Names of the functions @function calls, in order, including those called with
+        // another function type than they are declared with, as clang calls Objective-C
+        // selector stubs.
         std::vector<std::string> callees(const char* function) const
         {
             std::vector<std::string> names;
@@ -94,7 +96,8 @@ define linkonce_odr void @library_release(ptr %block) !dbg !18 {
             {
                 if (auto* call = llvm::dyn_cast<llvm::CallBase>(&inst))
                 {
-                    if (llvm::Function* callee = call->getCalledFunction())
+                    if (auto* callee = llvm::dyn_cast<llvm::Function>(
+                            call->getCalledOperand()->stripPointerCasts()))
                         names.push_back(callee->getName().str());
                 }
             }
@@ -298,5 +301,31 @@ done:
 }
 )");
         EXPECT_EQ(callees("conditional"), std::vector<std::string>{"__ct_malloc"});
+    }
+
+    using ObjcAllocationTest = InstrumentedModuleTest;
+
+    // From Clang 23, Apple targets send messages through selector stubs,
+    // objc_msgSend$<selector>: the receiver comes first and no selector argument is
+    // passed. An allocation sent through a stub is tracked, another message is not.
+    TEST_F(ObjcAllocationTest, AllocationSentThroughASelectorStubIsTracked)
+    {
+        instrument(R"(
+target triple = "arm64-apple-macosx15.0.0"
+
+declare ptr @"objc_msgSend$new"(ptr, ptr, ...)
+declare ptr @"objc_msgSend$class"(ptr, ptr, ...)
+declare ptr @"objc_msgSend$allocWithZone:"(ptr, ptr, ...)
+
+define void @make(ptr %class, ptr %zone) {
+  %byNew = call ptr @"objc_msgSend$new"(ptr %class, ptr undef)
+  %metaclass = call ptr @"objc_msgSend$class"(ptr %byNew, ptr undef)
+  %byZone = call ptr @"objc_msgSend$allocWithZone:"(ptr %metaclass, ptr undef, ptr %zone)
+  ret void
+}
+)");
+        EXPECT_EQ(callees("make"), (std::vector<std::string>{
+                                       "objc_msgSend$new", "__ct_objc_track", "objc_msgSend$class",
+                                       "objc_msgSend$allocWithZone:", "__ct_objc_track"}));
     }
 } // namespace
