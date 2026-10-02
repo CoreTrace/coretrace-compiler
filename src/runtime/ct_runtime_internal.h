@@ -22,6 +22,7 @@
 #include <windows.h>
 #include <process.h>
 #else
+#include <sched.h>
 #include <unistd.h>
 #endif
 
@@ -73,6 +74,26 @@ inline bool ct_msvc_atomic_compare_exchange(volatile int* object, int* expected,
 #else
 #define CT_NOINSTR __attribute__((no_instrument_function))
 #endif
+
+// Takes a lock word the runtime spins on, rather than a mutex, so that it can be taken
+// where blocking is not allowed. A waiter spins a few times, then yields the processor
+// between attempts: with more threads than processors, a waiter that only spins can keep
+// the holder from running, and every thread waits for whole time slices.
+CT_NOINSTR inline void ct_spin_lock_acquire(int* lock)
+{
+    constexpr unsigned kSpinsBeforeYield = 64;
+    for (unsigned attempt = 1; __atomic_exchange_n(lock, 1, __ATOMIC_ACQUIRE) != 0; ++attempt)
+    {
+        if (attempt >= kSpinsBeforeYield)
+        {
+#if defined(_WIN32)
+            SwitchToThread();
+#else
+            sched_yield();
+#endif
+        }
+    }
+}
 
 using CTColor = coretrace::Color;
 using CTLevel = coretrace::Level;
