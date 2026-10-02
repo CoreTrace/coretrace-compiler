@@ -53,6 +53,9 @@ pull request.
   lock another thread held (#134, #133).
 - **`setjmp`/`longjmp`.** Frames left by `longjmp` no longer fill the registry of stack
   objects until stack checks stop (#137, #135).
+- **Contention.** Threads waiting for the runtime's allocation or shadow lock yield the
+  processor after a few attempts instead of spinning: with more threads than processors,
+  a multithreaded program ran up to four times slower (#151).
 
 ### Tests and CI
 
