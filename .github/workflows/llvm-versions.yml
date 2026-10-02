@@ -179,6 +179,9 @@ jobs:
   # The official archive of each version, pinned to a minor release, built with its
   # clang-cl by scripts/build-windows.ps1. The runtime fixture suites are not ported to
   # Windows yet: the job runs the unit tests and the smoke tests only.
+  #
+  # The newest version here is 22: the LLVM 23 archive links LLVMSupport with zlib and
+  # zstd, which it does not ship, so CMake cannot configure against it alone (#149).
   windows:
     name: Windows / LLVM ${{ matrix.llvm }}
     runs-on: windows-2022
@@ -190,8 +193,8 @@ jobs:
             version: 19.1.7
           - llvm: 20
             version: 20.1.0
-          - llvm: 23
-            version: 23.1.2
+          - llvm: 22
+            version: 22.1.8
     env:
       LLVM_VERSION: ${{ matrix.version }}
 
