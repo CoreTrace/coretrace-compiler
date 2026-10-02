@@ -36,9 +36,7 @@ static int ct_shadow_table_full_logged = 0;
 
 CT_NOINSTR void ct_shadow_lock_acquire(void)
 {
-    while (__atomic_exchange_n(&ct_shadow_lock, 1, __ATOMIC_ACQUIRE) != 0)
-    {
-    }
+    ct_spin_lock_acquire(&ct_shadow_lock);
 }
 
 CT_NOINSTR void ct_shadow_lock_release(void)

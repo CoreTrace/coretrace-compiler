@@ -45,9 +45,7 @@ extern "C"
 
 CT_NOINSTR void ct_lock_acquire(void)
 {
-    while (__atomic_exchange_n(&ct_alloc_lock, 1, __ATOMIC_ACQUIRE) != 0)
-    {
-    }
+    ct_spin_lock_acquire(&ct_alloc_lock);
 }
 
 CT_NOINSTR void ct_lock_release(void)

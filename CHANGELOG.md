@@ -58,6 +58,9 @@ pull request.
 - **Objective-C with Clang 23.** Allocations sent through selector stubs
   (`objc_msgSend$new`, `objc_msgSend$allocWithZone:`), which Clang 23 emits for Apple
   targets, are tracked (#147).
+- **Contention.** Threads waiting for the runtime's allocation or shadow lock yield the
+  processor after a few attempts instead of spinning: with more threads than processors,
+  a multithreaded program ran up to four times slower (#151).
 
 ### Tests and CI
 
