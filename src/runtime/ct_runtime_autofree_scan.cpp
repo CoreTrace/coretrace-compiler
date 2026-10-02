@@ -398,6 +398,38 @@ CT_NOINSTR static void ct_scan_range_for_marks(const void* begin, const void* en
     }
 }
 
+// Calls scan on copies of [begin, end), made through the kernel a chunk at a time: a page
+// that is not mapped or not readable fails the copy instead of faulting. Such pages are
+// those of a PROT_NONE mapping, and those of the stack of a thread that is exiting, which
+// the kernel unmaps while the thread can still be suspended. False when a page could not
+// be copied; scan returns false to stop early.
+template <typename Scan>
+CT_NODISCARD CT_NOINSTR static bool ct_scan_copied_range(const void* begin, const void* end,
+                                                         Scan&& scan)
+{
+    constexpr uintptr_t align_mask = sizeof(uintptr_t) - 1;
+    uintptr_t words[512];
+    const uintptr_t finish = reinterpret_cast<uintptr_t>(end);
+    for (uintptr_t at = (reinterpret_cast<uintptr_t>(begin) + align_mask) & ~align_mask;
+         at < finish; at += sizeof(words))
+    {
+        const mach_vm_size_t chunk = std::min<uintptr_t>(sizeof(words), finish - at);
+        mach_vm_size_t copied = 0;
+        if (mach_vm_read_overwrite(mach_task_self(), at, chunk,
+                                   reinterpret_cast<mach_vm_address_t>(words),
+                                   &copied) != KERN_SUCCESS)
+        {
+            return false;
+        }
+        if (!scan(static_cast<const void*>(words),
+                  static_cast<const void*>(reinterpret_cast<const char*>(words) + copied)))
+        {
+            break;
+        }
+    }
+    return true;
+}
+
 #if defined(__APPLE__)
 CT_NODISCARD CT_NOINSTR static int ct_thread_get_sp(thread_t thread, uintptr_t* sp_out)
 {
@@ -687,8 +719,20 @@ CT_NODISCARD CT_NOINSTR static int ct_scan_thread_stack_for_ptr(const struct ct_
 {
     const void* begin = nullptr;
     const void* end = nullptr;
-    return ct_thread_stack_in_use(thread, &begin, &end) &&
-           ct_scan_range_for_ptr(base, size, begin, end, start_ns);
+    if (!ct_thread_stack_in_use(thread, &begin, &end))
+    {
+        return 0;
+    }
+    int found = 0;
+    const bool copied = ct_scan_copied_range(begin, end,
+                                             [&](const void* words, const void* words_end)
+                                             {
+                                                 found = ct_scan_range_for_ptr(base, size, words,
+                                                                               words_end, start_ns);
+                                                 return !found;
+                                             });
+    // A page that could not be read may hold the reference.
+    return copied ? found : 1;
 }
 
 CT_NOINSTR static void ct_scan_thread_stack_for_marks(const struct ct_scan_thread& thread,
@@ -696,9 +740,22 @@ CT_NOINSTR static void ct_scan_thread_stack_for_marks(const struct ct_scan_threa
 {
     const void* begin = nullptr;
     const void* end = nullptr;
-    if (ct_thread_stack_in_use(thread, &begin, &end))
+    if (!ct_thread_stack_in_use(thread, &begin, &end))
     {
-        ct_scan_range_for_marks(begin, end, start_ns, timed_out);
+        return;
+    }
+    const bool copied =
+        ct_scan_copied_range(begin, end,
+                             [&](const void* words, const void* words_end)
+                             {
+                                 ct_scan_range_for_marks(words, words_end, start_ns, timed_out);
+                                 return !(timed_out && *timed_out);
+                             });
+    // A page that could not be read may hold the only reference to a block: the pass
+    // releases nothing, as when it runs out of time.
+    if (!copied && timed_out)
+    {
+        *timed_out = 1;
     }
 }
 
@@ -1106,28 +1163,20 @@ CT_NODISCARD CT_NOINSTR static bool ct_scan_list_blocks(void)
     return true;
 }
 
-// A mapping may be unreadable (PROT_NONE): its words are copied through the kernel, which
-// fails on such a page instead of faulting. That page may hold the only reference to a
-// block, so the pass is then marked incomplete.
+// A mapping may be unreadable (PROT_NONE): its words are copied through the kernel. Such a
+// page may hold the only reference to a block, so the pass is then marked incomplete.
 CT_NOINSTR static void ct_scan_mapping_for_marks(const struct ct_alloc_entry& entry,
                                                  uint64_t start_ns, int* incomplete)
 {
-    uintptr_t words[512];
-    const uintptr_t begin = reinterpret_cast<uintptr_t>(entry.ptr);
-    const uintptr_t end = begin + entry.size;
-    for (uintptr_t at = begin; at < end && !*incomplete; at += sizeof(words))
+    const char* begin = static_cast<const char*>(entry.ptr);
+    if (!ct_scan_copied_range(begin, begin + entry.size,
+                              [&](const void* words, const void* words_end)
+                              {
+                                  ct_scan_range_for_marks(words, words_end, start_ns, incomplete);
+                                  return !*incomplete;
+                              }))
     {
-        const mach_vm_size_t chunk = std::min<uintptr_t>(sizeof(words), end - at);
-        mach_vm_size_t copied = 0;
-        if (mach_vm_read_overwrite(mach_task_self(), at, chunk,
-                                   reinterpret_cast<mach_vm_address_t>(words),
-                                   &copied) != KERN_SUCCESS)
-        {
-            *incomplete = 1;
-            return;
-        }
-        ct_scan_range_for_marks(words, reinterpret_cast<const char*>(words) + copied, start_ns,
-                                incomplete);
+        *incomplete = 1;
     }
 }
 
