@@ -284,6 +284,11 @@ for t in "${TESTS[@]}"; do
   else
     echo "  FAIL"
     FAIL=$((FAIL + 1))
+    # The run's stderr stays on the machine that ran the suite: show its end, for CI.
+    err_log="${OUT_DIR}/${t%.*}.err.log"
+    if [[ -f "${err_log}" ]]; then
+      tail -n 20 "${err_log}" | sed 's/^/    | /'
+    fi
   fi
 done
 
