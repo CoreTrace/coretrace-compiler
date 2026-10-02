@@ -55,6 +55,9 @@ pull request.
   objects until stack checks stop (#137, #135).
 - **Auto-free scan.** It no longer crashes reading the stack of a thread that is exiting,
   which the kernel unmaps while the thread can still be suspended (#150, #148).
+- **Contention.** Threads waiting for the runtime's allocation or shadow lock yield the
+  processor after a few attempts instead of spinning: with more threads than processors,
+  a multithreaded program ran up to four times slower (#151).
 
 ### Tests and CI
 
