@@ -25,7 +25,10 @@ first checks that the installed LLVM is the version the job is named after:
 | --- | --- | --- | --- |
 | Linux (Ubuntu 24.04) | 16 to 23 | the same version's clang; GCC for LLVM 20 | unit, smoke, install, runtime fixtures at `-O0` and `-O2`, pass fuzzing |
 | macOS 15 | 19, 20, 23 (Homebrew) | AppleClang | unit, smoke, install, runtime fixtures at `-O0` and `-O2`, pass fuzzing |
-| Windows (Server 2022) | 19.1.7, 20.1.0, 23.1.2 (official archives) | the archive's clang-cl | unit, smoke, install |
+| Windows (Server 2022) | 19.1.7, 20.1.0, 22.1.8 (official archives) | the archive's clang-cl | unit, smoke, install |
+
+On Windows, the LLVM 23 archive needs zlib and zstd, which it does not ship, to be found by
+CMake: building against it is not covered yet (#149).
 
 The Build workflow adds, with LLVM 20 on Linux: AddressSanitizer, LeakSanitizer and
 UndefinedBehaviorSanitizer builds, a build without the runtime, and multi-arch Docker tests on
