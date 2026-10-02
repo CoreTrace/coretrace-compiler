@@ -51,6 +51,15 @@ def assert_stderr_contains(text: str) -> Assertion:
                 f"stderr does not contain '{text}'\nstderr:\n{res.run.stderr}")
     return Assertion(name=f"stderr_contains_{text}", check=_check)
 
+def assert_output_contains(text: str) -> Assertion:
+    """On stdout or on stderr: which one depends on the tool cc runs, such as the linker."""
+    def _check(res) -> None:
+        output = (res.run.stdout or "") + (res.run.stderr or "")
+        require(text in output,
+                f"output does not contain '{text}'\nstdout:\n{res.run.stdout}\n"
+                f"stderr:\n{res.run.stderr}")
+    return Assertion(name=f"output_contains_{text}", check=_check)
+
 def assert_run_artifact(path: str, expected_exit: int | None, stderr_contains: str | list[str],
                         env: dict[str, str] | None = None,
                         stderr_excludes: list[str] | None = None) -> Assertion:
@@ -976,9 +985,11 @@ def main() -> int:
         ),
         assertions=[
             assert_exit_code(1),
-            # link.exe reports unresolved symbols on stdout, which cc passes through
-            # untouched; ld and ld64 report them on stderr.
-            assert_stdout_contains("never_defined")
+            # cc passes the linker's report through untouched. On Windows the driver
+            # links with link.exe, which reports unresolved symbols on stdout, or from
+            # LLVM 22 with lld-link, which reports them on stderr; ld and ld64 report
+            # them on stderr.
+            assert_output_contains("never_defined")
             if platform.os == OS.WINDOWS
             else assert_stderr_contains("never_defined"),
         ],

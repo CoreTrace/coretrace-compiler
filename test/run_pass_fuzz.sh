@@ -4,7 +4,10 @@
 # Feeds random modules from llvm-stress, which LLVM ships, through the instrumentation
 # passes. cc --instrument takes LLVM IR as input and fails when the passes crash or leave
 # invalid IR, which it verifies. Each module is instrumented with several sets of options;
-# a module that fails is kept, with the options, for replay.
+# a module that fails is kept, with the options, for replay. llvm-stress also finds bugs in
+# LLVM's own code generation (LLVM 19 crashes on some modules for arm64): a module that
+# cc cannot compile without --instrument either is reported as skipped, not as a failure
+# of the passes.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,8 +45,19 @@ FLAG_SETS=(
   "--ct-modules=all --ct-vcall-trace --ct-vtable-diag --ct-shadow"
 )
 
+# The options of a set without the instrumentation ones (--ct-*).
+plain_flags_of() {
+  local word
+  local plain=""
+  for word in $1; do
+    [[ "${word}" == --ct-* ]] || plain+="${plain:+ }${word}"
+  done
+  echo "${plain}"
+}
+
 RUNS=0
 FAILURES=0
+SKIPPED=0
 last_seed=$((CT_FUZZ_FIRST_SEED + CT_FUZZ_SEEDS - 1))
 for seed in $(seq "${CT_FUZZ_FIRST_SEED}" "${last_seed}"); do
   # Sizes from 50 to 1999 instructions, spread over the seeds.
@@ -55,14 +69,24 @@ for seed in $(seq "${CT_FUZZ_FIRST_SEED}" "${last_seed}"); do
     # shellcheck disable=SC2086
     if ! "${CC_BIN}" --instrument ${flags} -c "${module}" -o "${OUT_DIR}/stress.o" \
       >"${OUT_DIR}/compile.log" 2>&1; then
-      FAILURES=$((FAILURES + 1))
       cp "${module}" "${OUT_DIR}/seed_${seed}.ll"
+      # shellcheck disable=SC2046
+      if ! "${CC_BIN}" $(plain_flags_of "${flags}") -c "${module}" -o "${OUT_DIR}/plain.o" \
+        >"${OUT_DIR}/plain.log" 2>&1; then
+        SKIPPED=$((SKIPPED + 1))
+        echo "SKIP: seed ${seed}, size ${size}, ${flags}: cc fails without --instrument too" \
+          "(module in ${OUT_DIR}/seed_${seed}.ll)"
+        continue
+      fi
+      FAILURES=$((FAILURES + 1))
       echo "FAIL: seed ${seed}, size ${size}, ${flags} (module in ${OUT_DIR}/seed_${seed}.ll)"
-      grep -v "overriding the module target triple" "${OUT_DIR}/compile.log" | head -5
+      # A crash can leave no output, which grep reports with its exit status.
+      grep -v "overriding the module target triple" "${OUT_DIR}/compile.log" | head -5 || true
     fi
   done
 done
 
 echo ""
-echo "Summary: ${RUNS} instrumented modules, ${FAILURES} failed"
+echo "Summary: ${RUNS} instrumented modules, ${FAILURES} failed, ${SKIPPED} skipped" \
+  "(not compiled without --instrument either)"
 [[ "${FAILURES}" -eq 0 ]]

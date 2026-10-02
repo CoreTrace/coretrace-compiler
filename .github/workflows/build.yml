@@ -8,126 +8,40 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-env:
-  # Keep on the same commit as CORETRACE_LOGGER_GIT_TAG in CMakeLists.txt.
-  CORETRACE_LOG_REF: 624688ad5e5d00a1d04fd72909d43fe6d948575b
-
+# The checks that do not depend on the operating system and LLVM version, which the LLVM
+# versions workflow covers one combination per job.
 jobs:
-  build:
-    name: Build on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+  # Computed once per run, from the Conventional Commits since the last tag.
+  semver:
+    name: Compute next version (SemVer)
+    runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
 
-    - name: Install dependencies (Linux)
-      if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake
-        # Install LLVM and Clang 20 from apt.llvm.org with retries (the mirror has
-        # short outages); the same script builds the Docker test image.
-        sudo bash scripts/ci/install-llvm-apt.sh 20 llvm-20 llvm-20-dev clang-20 libclang-20-dev
-        echo "LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm" >> $GITHUB_ENV
-        echo "Clang_DIR=/usr/lib/llvm-20/lib/cmake/clang" >> $GITHUB_ENV
-
     - name: Compute next version (SemVer)
-      id: semver
-      run: |
-        python3 scripts/ci/semver_check.py
+      run: python3 scripts/ci/semver_check.py
 
-    - name: Set up QEMU (Linux)
-      if: runner.os == 'Linux'
+  # The Docker test image builds and tests the project on amd64 and arm64 (under QEMU).
+  docker:
+    name: Docker tests (multi-arch, Linux)
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
       with:
         platforms: arm64
 
-    - name: Set up Docker Buildx (Linux)
-      if: runner.os == 'Linux'
+    - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Install dependencies (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        brew install cmake llvm@20
-        echo "LLVM_DIR=$(brew --prefix llvm@20)/lib/cmake/llvm" >> $GITHUB_ENV
-        echo "Clang_DIR=$(brew --prefix llvm@20)/lib/cmake/clang" >> $GITHUB_ENV
-        echo "$(brew --prefix llvm@20)/bin" >> $GITHUB_PATH
-
-    - name: Configure and Build (Linux/macOS)
-      if: runner.os == 'Linux' || runner.os == 'macOS'
-      run: |
-        mkdir -p build && cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release \
-                -DLLVM_DIR=${{ env.LLVM_DIR }} \
-                -DClang_DIR=${{ env.Clang_DIR }} \
-                -DUSE_SHARED_LIB=OFF
-        cmake --build . --config Release
-
-    - name: Test compiler (Linux/macOS)
-      if: runner.os == 'Linux' || runner.os == 'macOS'
-      run: |
-        cd build
-        echo 'int main() { return 0; }' > test.cc
-        ./cc -S -emit-llvm test.cc
-
-        # Vérifier que le fichier LLVM IR a été généré
-        if [ -f "test.ll" ]; then
-          echo "Test réussi: Fichier LLVM IR généré avec succès"
-          cat test.ll | head -n 10
-        else
-          echo "Test échoué: Fichier LLVM IR non généré"
-          exit 1
-        fi
-
-    - name: Run unit tests (Linux/macOS)
-      if: runner.os == 'Linux' || runner.os == 'macOS'
-      run: |
-        ctest --test-dir build --output-on-failure
-
-    - name: Run Python smoke tests (Linux/macOS)
-      if: runner.os == 'Linux' || runner.os == 'macOS'
-      run: |
-        python3 -m venv .venv
-        source .venv/bin/activate
-        python -m pip install --upgrade pip
-        python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git
-        python test/examples/test_smoke.py
-        python3 test/examples/test_extern_project.py
-        python3 test/examples/test_help_smoke.py
-        python3 test/examples/test_install_layout.py
-
-    - name: Run runtime fixture suites (Linux/macOS)
-      if: runner.os == 'Linux' || runner.os == 'macOS'
-      run: |
-        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
-        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
-        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests"
-
-    # The passes instrument the optimized IR: the same suites, built at -O2, check that
-    # the diagnostics survive the optimizer and that instrumented code still behaves.
-    - name: Run runtime fixture suites at -O2 (Linux/macOS)
-      if: runner.os == 'Linux' || runner.os == 'macOS'
-      env:
-        CT_TEST_OPT: -O2
-      run: |
-        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests_O2"
-        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests_O2"
-        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests_O2"
-
-    # Random modules from llvm-stress through the passes, which must leave valid IR.
-    - name: Fuzz the passes with llvm-stress (Linux/macOS)
-      if: runner.os == 'Linux' || runner.os == 'macOS'
-      run: bash test/run_pass_fuzz.sh "${RUNNER_TEMP}/ct_pass_fuzz"
-
-    - name: Docker tests (multi-arch, Linux)
-      if: runner.os == 'Linux' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch')
+    - name: Docker tests (multi-arch)
       run: |
         docker buildx build --platform linux/amd64 -f test/docker/Dockerfile . --progress=plain --output=type=cacheonly
         docker buildx build --platform linux/arm64 -f test/docker/Dockerfile . --progress=plain --output=type=cacheonly
@@ -215,174 +129,3 @@ jobs:
         bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
         bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
         bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests"
-
-  build-windows:
-    name: Build on Windows (pinned LLVM 20.1.0)
-    runs-on: windows-2022
-
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
-    - name: Resolve dependency ref
-      shell: pwsh
-      run: |
-        $ErrorActionPreference = "Stop"
-        $ref = if ($env:GITHUB_HEAD_REF) { $env:GITHUB_HEAD_REF } else { $env:GITHUB_REF_NAME }
-        "DEPENDENCY_REF=$ref" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-    - name: Checkout coretrace-log matching ref
-      id: checkout_logger_ref
-      continue-on-error: true
-      uses: actions/checkout@v4
-      with:
-        repository: CoreTrace/coretrace-log
-        ref: ${{ env.DEPENDENCY_REF }}
-        path: deps/coretrace-log
-        fetch-depth: 1
-
-    - name: Checkout coretrace-log pinned fallback
-      if: steps.checkout_logger_ref.outcome == 'failure'
-      uses: actions/checkout@v4
-      with:
-        repository: CoreTrace/coretrace-log
-        ref: ${{ env.CORETRACE_LOG_REF }}
-        path: deps/coretrace-log
-        fetch-depth: 1
-
-    - name: Install LLVM 20.1.0 archive with 7-Zip
-      shell: pwsh
-      run: |
-        $ErrorActionPreference = "Stop"
-
-        $llvmVersion = "20.1.0"
-        $archiveName = "clang+llvm-$llvmVersion-x86_64-pc-windows-msvc.tar.xz"
-        $archiveUrl = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$llvmVersion/$archiveName"
-        $archivePath = Join-Path $env:RUNNER_TEMP $archiveName
-        $extractRoot = Join-Path $env:RUNNER_TEMP "llvm-extract"
-        $installRoot = "C:\Program Files\LLVM-$llvmVersion"
-        $sevenZip = "${env:ProgramFiles}\7-Zip\7z.exe"
-        $tarPath = Join-Path $env:RUNNER_TEMP "clang+llvm-$llvmVersion-x86_64-pc-windows-msvc.tar"
-
-        if (-not (Test-Path $sevenZip)) {
-          throw "7z.exe not found at $sevenZip"
-        }
-
-        Write-Host "Downloading LLVM archive from $archiveUrl"
-        Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath
-        Write-Host "Download finished"
-        Get-Item $archivePath | Select-Object FullName, Length | Format-Table -AutoSize
-
-        if (Test-Path $extractRoot) {
-          Remove-Item -Recurse -Force $extractRoot
-        }
-        New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
-
-        if (Test-Path $tarPath) {
-          Remove-Item -Force $tarPath
-        }
-
-        Write-Host "Extracting .xz to .tar with 7-Zip"
-        & $sevenZip x $archivePath "-o$env:RUNNER_TEMP" -y
-        if ($LASTEXITCODE -ne 0) {
-          throw "7-Zip failed while extracting .xz archive"
-        }
-
-        if (-not (Test-Path $tarPath)) {
-          throw "Expected tar file not found after xz extraction: $tarPath"
-        }
-
-        Write-Host "Extracting .tar to $extractRoot"
-        & $sevenZip x $tarPath "-o$extractRoot" -y
-        if ($LASTEXITCODE -ne 0) {
-          throw "7-Zip failed while extracting .tar archive"
-        }
-
-        Write-Host "Listing extracted directories"
-        Get-ChildItem $extractRoot -Directory | Select-Object Name, FullName | Format-Table -AutoSize
-
-        $extractedDir = Get-ChildItem $extractRoot -Directory | Select-Object -First 1
-        if (-not $extractedDir) {
-          throw "Failed to find extracted LLVM directory under $extractRoot"
-        }
-
-        if (Test-Path $installRoot) {
-          Remove-Item -Recurse -Force $installRoot
-        }
-        Move-Item -Path $extractedDir.FullName -Destination $installRoot
-
-        $clangClPath = Join-Path $installRoot "bin\clang-cl.exe"
-        $llvmCmakeDir = Join-Path $installRoot "lib\cmake\llvm"
-        $clangCmakeDir = Join-Path $installRoot "lib\cmake\clang"
-        $llvmConfigPath = Join-Path $llvmCmakeDir "LLVMConfig.cmake"
-        $clangConfigPath = Join-Path $clangCmakeDir "ClangConfig.cmake"
-
-        Write-Host "Checking extracted LLVM files"
-        Write-Host "clang-cl path: $clangClPath"
-        Write-Host "LLVMConfig path: $llvmConfigPath"
-        Write-Host "ClangConfig path: $clangConfigPath"
-
-        if (-not (Test-Path $clangClPath)) {
-          throw "clang-cl.exe not found after LLVM archive extraction: $clangClPath"
-        }
-        if (-not (Test-Path $llvmConfigPath)) {
-          throw "LLVMConfig.cmake not found after LLVM archive extraction: $llvmConfigPath"
-        }
-        if (-not (Test-Path $clangConfigPath)) {
-          throw "ClangConfig.cmake not found after LLVM archive extraction: $clangConfigPath"
-        }
-
-        $clangVersion = (& $clangClPath --version) -join " "
-        if ($clangVersion -notmatch "clang version 20\.1\.0") {
-          throw "Unexpected clang-cl version. Got: $clangVersion"
-        }
-
-        "LLVM_CMAKE_DIR=$llvmCmakeDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        "LLVM_DIR=$llvmCmakeDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        "Clang_DIR=$clangCmakeDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-    - name: Configure + Build + Install
-      shell: pwsh
-      run: |
-        $ErrorActionPreference = "Stop"
-        powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 `
-          -LLVMDir "${env:LLVM_CMAKE_DIR}" `
-          -LoggerSourceDir "${PWD}\deps\coretrace-log" `
-          -Configuration Release `
-          -BuildTests
-
-    - name: Smoke test
-      shell: pwsh
-      run: |
-        $ErrorActionPreference = "Stop"
-        Set-Content -Path test.cc -Value 'int main() { return 0; }'
-        .\dist\windows\bin\cc.exe -S -emit-llvm test.cc
-        if (-not (Test-Path test.ll)) {
-          throw "test.ll was not produced"
-        }
-        Get-Content test.ll -TotalCount 10
-
-    - name: Run unit tests (Windows)
-      shell: pwsh
-      run: |
-        ctest --test-dir build-win -C Release --output-on-failure --no-tests=error
-
-    - name: Run Python smoke tests (Windows)
-      shell: pwsh
-      run: |
-        $ErrorActionPreference = "Stop"
-        # Without this, a failing native command does not stop the script and the step
-        # reports only the exit code of the last one, which hid failing suites.
-        $PSNativeCommandUseErrorActionPreference = $true
-        python -m venv .venv
-        .\.venv\Scripts\python -m pip install --upgrade pip
-        .\.venv\Scripts\python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git
-        $env:CORETRACE_COMPILER_TEST_CC = (Resolve-Path .\dist\windows\bin\cc.exe).Path
-        $env:CORETRACE_LOGGER_SOURCE_DIR = (Resolve-Path .\deps\coretrace-log).Path
-        .\.venv\Scripts\python .\test\examples\test_smoke.py
-        .\.venv\Scripts\python .\test\examples\test_extern_project.py
-        .\.venv\Scripts\python .\test\examples\test_help_smoke.py
-        # The install test installs a build tree, so it needs the compiler from build-win.
-        $env:CORETRACE_COMPILER_TEST_CC = (Resolve-Path .\build-win\Release\cc.exe).Path
-        .\.venv\Scripts\python .\test\examples\test_install_layout.py

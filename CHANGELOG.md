@@ -55,6 +55,9 @@ pull request.
   objects until stack checks stop (#137, #135).
 - **Auto-free scan.** It no longer crashes reading the stack of a thread that is exiting,
   which the kernel unmaps while the thread can still be suspended (#150, #148).
+- **Objective-C with Clang 23.** Allocations sent through selector stubs
+  (`objc_msgSend$new`, `objc_msgSend$allocWithZone:`), which Clang 23 emits for Apple
+  targets, are tracked (#147).
 - **Contention.** Threads waiting for the runtime's allocation or shadow lock yield the
   processor after a few attempts instead of spinning: with more threads than processors,
   a multithreaded program ran up to four times slower (#151).
@@ -70,6 +73,13 @@ pull request.
   stderr restoration, and the runtime suites print the end of a failing run's log (#150).
 - The LLVM versions workflow builds everything with each of LLVM 16 to 23, one job per
   version, and runs every suite and the fuzzer with it (#145).
+- One job per system and LLVM version: Linux with 16 to 23 (GCC builds the project with
+  LLVM 20), macOS with 19, 20 and 23, Windows with 19, 20 and 22. Each job first checks
+  that the LLVM it installed is the version in its name; the relocated install test runs
+  in every job (#147, #146).
+- The fuzzer reports a module that `cc` cannot compile without `--instrument` either, a
+  bug in LLVM's own code generation, as skipped instead of failed, and no longer stops at
+  the first failing module (#147).
 
 ## v0.10.0 (2026-09-29)
 

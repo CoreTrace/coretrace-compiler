@@ -1,31 +1,47 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# compilerlib supports LLVM 16 to 23. Each version gets its own job, which builds
-# everything with that LLVM and runs every suite, so a failure names the version.
-# The Build workflow covers the platforms (Linux, macOS, Windows) with LLVM 20.
+# One job per operating system and LLVM version, so a failure names both. The API
+# differences between LLVM versions do not depend on the system: Linux builds with every
+# supported version, 16 to 23. macOS and Windows build with the oldest and the newest
+# version they package, since what can break there is the packaging (Homebrew, the SDK,
+# the content of the Windows archive). The Build workflow keeps the specialized checks.
 #
-# Ubuntu 24.04 packages LLVM 16 to 19, and its libstdc++ has the <format> the runtime's
-# logger needs; apt.llvm.org packages 20 and later (it has no noble-16).
+# Each job first checks that the LLVM it installed is the version in its name.
 name: LLVM versions
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, feat/*, feature/* ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
 
+env:
+  # Keep on the same commit as CORETRACE_LOGGER_GIT_TAG in CMakeLists.txt.
+  CORETRACE_LOG_REF: 624688ad5e5d00a1d04fd72909d43fe6d948575b
+
 jobs:
-  llvm:
-    name: LLVM ${{ matrix.llvm }} (ubuntu-24.04)
+  # Ubuntu 24.04 packages LLVM 16 to 19, and its libstdc++ has the <format> the runtime's
+  # logger needs; apt.llvm.org packages 20 and later (it has no noble-16). Each version
+  # builds the project with its own clang, except LLVM 20, which builds it with GCC: the
+  # only GCC build of the project.
+  linux:
+    name: Linux / LLVM ${{ matrix.llvm }}${{ matrix.gcc && ' (GCC)' || '' }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         llvm: [16, 17, 18, 19, 20, 21, 22, 23]
+        include:
+          - llvm: 20
+            gcc: true
     env:
+      LLVM_PREFIX: /usr/lib/llvm-${{ matrix.llvm }}
       LLVM_DIR: /usr/lib/llvm-${{ matrix.llvm }}/lib/cmake/llvm
       Clang_DIR: /usr/lib/llvm-${{ matrix.llvm }}/lib/cmake/clang
+      # Not CC/CXX: CMake would also take them for the projects the tests build.
+      HOST_CC: ${{ matrix.gcc && 'gcc' || format('clang-{0}', matrix.llvm) }}
+      HOST_CXX: ${{ matrix.gcc && 'g++' || format('clang++-{0}', matrix.llvm) }}
 
     steps:
     - uses: actions/checkout@v4
@@ -40,19 +56,23 @@ jobs:
         else
           sudo apt-get install -y ${packages}
         fi
-        clang-${{ matrix.llvm }} --version
+
+    - name: Check the LLVM version
+      run: |
+        bash scripts/ci/check-llvm-version.sh ${{ matrix.llvm }} "${LLVM_PREFIX}"
+        "${HOST_CXX}" --version | head -n 1
 
     - name: Build
       run: |
         cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_C_COMPILER=clang-${{ matrix.llvm }} -DCMAKE_CXX_COMPILER=clang++-${{ matrix.llvm }} \
+          -DCMAKE_C_COMPILER="${HOST_CC}" -DCMAKE_CXX_COMPILER="${HOST_CXX}" \
           -DLLVM_DIR="${LLVM_DIR}" -DClang_DIR="${Clang_DIR}" \
           -DUSE_SHARED_LIB=OFF
-        # -k 0: every compile error of this LLVM version, not only the first ones.
+        # -k 0: every compile error of this combination, not only the first ones.
         cmake --build build -- -k 0
 
     - name: Run unit tests
-      run: ctest --test-dir build --output-on-failure
+      run: ctest --test-dir build --output-on-failure --no-tests=error
 
     - name: Run Python smoke tests
       run: |
@@ -63,6 +83,79 @@ jobs:
         python test/examples/test_smoke.py
         python test/examples/test_extern_project.py
         python test/examples/test_help_smoke.py
+        python test/examples/test_install_layout.py
+
+    - name: Run runtime fixture suites
+      run: |
+        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
+        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
+        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests"
+
+    # The passes instrument the optimized IR: the same suites, built at -O2, check that
+    # the diagnostics survive the optimizer and that instrumented code still behaves.
+    - name: Run runtime fixture suites at -O2
+      env:
+        CT_TEST_OPT: -O2
+      run: |
+        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests_O2"
+        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests_O2"
+        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests_O2"
+
+    # The IR the passes meet changes with each LLVM: random modules from that version's
+    # llvm-stress check that they still leave valid IR.
+    - name: Fuzz the passes with llvm-stress
+      env:
+        LLVM_STRESS: /usr/lib/llvm-${{ matrix.llvm }}/bin/llvm-stress
+      run: bash test/run_pass_fuzz.sh "${RUNNER_TEMP}/ct_pass_fuzz"
+
+  # Homebrew's llvm@N; the project is built with AppleClang, the compiler of macOS users.
+  macos:
+    name: macOS / LLVM ${{ matrix.llvm }}
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        llvm: [19, 20, 23]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install LLVM ${{ matrix.llvm }}
+      run: |
+        brew install cmake llvm@${{ matrix.llvm }}
+        prefix="$(brew --prefix llvm@${{ matrix.llvm }})"
+        echo "LLVM_PREFIX=${prefix}" >> "$GITHUB_ENV"
+        echo "LLVM_DIR=${prefix}/lib/cmake/llvm" >> "$GITHUB_ENV"
+        echo "Clang_DIR=${prefix}/lib/cmake/clang" >> "$GITHUB_ENV"
+        echo "${prefix}/bin" >> "$GITHUB_PATH"
+
+    - name: Check the LLVM version
+      run: |
+        bash scripts/ci/check-llvm-version.sh ${{ matrix.llvm }} "${LLVM_PREFIX}"
+        /usr/bin/clang++ --version | head -n 1
+
+    - name: Build
+      run: |
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+          -DLLVM_DIR="${LLVM_DIR}" -DClang_DIR="${Clang_DIR}" \
+          -DUSE_SHARED_LIB=OFF
+        # -k: every compile error of this combination, not only the first ones.
+        cmake --build build --parallel -- -k
+
+    - name: Run unit tests
+      run: ctest --test-dir build --output-on-failure --no-tests=error
+
+    - name: Run Python smoke tests
+      run: |
+        python3 -m venv .venv
+        source .venv/bin/activate
+        python -m pip install --upgrade pip
+        python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git
+        python test/examples/test_smoke.py
+        python test/examples/test_extern_project.py
+        python test/examples/test_help_smoke.py
+        python test/examples/test_install_layout.py
 
     - name: Run runtime fixture suites
       run: |
@@ -78,9 +171,197 @@ jobs:
         bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests_O2"
         bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests_O2"
 
-    # The IR the passes meet changes with each LLVM: random modules from that version's
-    # llvm-stress check that they still leave valid IR.
     - name: Fuzz the passes with llvm-stress
-      env:
-        LLVM_STRESS: /usr/lib/llvm-${{ matrix.llvm }}/bin/llvm-stress
-      run: bash test/run_pass_fuzz.sh "${RUNNER_TEMP}/ct_pass_fuzz"
+      run: |
+        LLVM_STRESS="${LLVM_PREFIX}/bin/llvm-stress" \
+          bash test/run_pass_fuzz.sh "${RUNNER_TEMP}/ct_pass_fuzz"
+
+  # The official archive of each version, pinned to a minor release, built with its
+  # clang-cl by scripts/build-windows.ps1. The runtime fixture suites are not ported to
+  # Windows yet: the job runs the unit tests and the smoke tests only.
+  #
+  # The newest version here is 22: the LLVM 23 archive links LLVMSupport with zlib and
+  # zstd, which it does not ship, so CMake cannot configure against it alone (#149).
+  windows:
+    name: Windows / LLVM ${{ matrix.llvm }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - llvm: 19
+            version: 19.1.7
+          - llvm: 20
+            version: 20.1.0
+          - llvm: 22
+            version: 22.1.8
+    env:
+      LLVM_VERSION: ${{ matrix.version }}
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Resolve dependency ref
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $ref = if ($env:GITHUB_HEAD_REF) { $env:GITHUB_HEAD_REF } else { $env:GITHUB_REF_NAME }
+        "DEPENDENCY_REF=$ref" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Checkout coretrace-log matching ref
+      id: checkout_logger_ref
+      continue-on-error: true
+      uses: actions/checkout@v4
+      with:
+        repository: CoreTrace/coretrace-log
+        ref: ${{ env.DEPENDENCY_REF }}
+        path: deps/coretrace-log
+        fetch-depth: 1
+
+    - name: Checkout coretrace-log pinned fallback
+      if: steps.checkout_logger_ref.outcome == 'failure'
+      uses: actions/checkout@v4
+      with:
+        repository: CoreTrace/coretrace-log
+        ref: ${{ env.CORETRACE_LOG_REF }}
+        path: deps/coretrace-log
+        fetch-depth: 1
+
+    - name: Install LLVM ${{ matrix.version }} archive with 7-Zip
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+
+        $llvmVersion = $env:LLVM_VERSION
+        $archiveName = "clang+llvm-$llvmVersion-x86_64-pc-windows-msvc.tar.xz"
+        $archiveUrl = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$llvmVersion/$archiveName"
+        $archivePath = Join-Path $env:RUNNER_TEMP $archiveName
+        $extractRoot = Join-Path $env:RUNNER_TEMP "llvm-extract"
+        $installRoot = "C:\Program Files\LLVM-$llvmVersion"
+        $sevenZip = "${env:ProgramFiles}\7-Zip\7z.exe"
+        $tarPath = Join-Path $env:RUNNER_TEMP "clang+llvm-$llvmVersion-x86_64-pc-windows-msvc.tar"
+
+        if (-not (Test-Path $sevenZip)) {
+          throw "7z.exe not found at $sevenZip"
+        }
+
+        Write-Host "Downloading LLVM archive from $archiveUrl"
+        Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath
+        Write-Host "Download finished"
+        Get-Item $archivePath | Select-Object FullName, Length | Format-Table -AutoSize
+
+        if (Test-Path $extractRoot) {
+          Remove-Item -Recurse -Force $extractRoot
+        }
+        New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+
+        if (Test-Path $tarPath) {
+          Remove-Item -Force $tarPath
+        }
+
+        Write-Host "Extracting .xz to .tar with 7-Zip"
+        & $sevenZip x $archivePath "-o$env:RUNNER_TEMP" -y
+        if ($LASTEXITCODE -ne 0) {
+          throw "7-Zip failed while extracting .xz archive"
+        }
+
+        if (-not (Test-Path $tarPath)) {
+          throw "Expected tar file not found after xz extraction: $tarPath"
+        }
+
+        Write-Host "Extracting .tar to $extractRoot"
+        & $sevenZip x $tarPath "-o$extractRoot" -y
+        if ($LASTEXITCODE -ne 0) {
+          throw "7-Zip failed while extracting .tar archive"
+        }
+
+        Write-Host "Listing extracted directories"
+        Get-ChildItem $extractRoot -Directory | Select-Object Name, FullName | Format-Table -AutoSize
+
+        $extractedDir = Get-ChildItem $extractRoot -Directory | Select-Object -First 1
+        if (-not $extractedDir) {
+          throw "Failed to find extracted LLVM directory under $extractRoot"
+        }
+
+        if (Test-Path $installRoot) {
+          Remove-Item -Recurse -Force $installRoot
+        }
+        Move-Item -Path $extractedDir.FullName -Destination $installRoot
+
+        $clangClPath = Join-Path $installRoot "bin\clang-cl.exe"
+        $llvmCmakeDir = Join-Path $installRoot "lib\cmake\llvm"
+        $clangCmakeDir = Join-Path $installRoot "lib\cmake\clang"
+        $llvmConfigPath = Join-Path $llvmCmakeDir "LLVMConfig.cmake"
+        $clangConfigPath = Join-Path $clangCmakeDir "ClangConfig.cmake"
+
+        Write-Host "Checking extracted LLVM files"
+        Write-Host "clang-cl path: $clangClPath"
+        Write-Host "LLVMConfig path: $llvmConfigPath"
+        Write-Host "ClangConfig path: $clangConfigPath"
+
+        if (-not (Test-Path $clangClPath)) {
+          throw "clang-cl.exe not found after LLVM archive extraction: $clangClPath"
+        }
+        if (-not (Test-Path $llvmConfigPath)) {
+          throw "LLVMConfig.cmake not found after LLVM archive extraction: $llvmConfigPath"
+        }
+        if (-not (Test-Path $clangConfigPath)) {
+          throw "ClangConfig.cmake not found after LLVM archive extraction: $clangConfigPath"
+        }
+
+        $clangVersion = (& $clangClPath --version) -join " "
+        Write-Host "clang-cl: $clangVersion"
+        if ($clangVersion -notmatch "clang version $([regex]::Escape($llvmVersion))\b") {
+          throw "Unexpected clang-cl version. Got: $clangVersion"
+        }
+
+        "LLVM_CMAKE_DIR=$llvmCmakeDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "LLVM_DIR=$llvmCmakeDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "Clang_DIR=$clangCmakeDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Configure + Build + Install
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 `
+          -LLVMDir "${env:LLVM_CMAKE_DIR}" `
+          -LoggerSourceDir "${PWD}\deps\coretrace-log" `
+          -Configuration Release `
+          -BuildTests
+
+    - name: Smoke test
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        Set-Content -Path test.cc -Value 'int main() { return 0; }'
+        .\dist\windows\bin\cc.exe -S -emit-llvm test.cc
+        if (-not (Test-Path test.ll)) {
+          throw "test.ll was not produced"
+        }
+        Get-Content test.ll -TotalCount 10
+
+    - name: Run unit tests (Windows)
+      shell: pwsh
+      run: |
+        ctest --test-dir build-win -C Release --output-on-failure --no-tests=error
+
+    - name: Run Python smoke tests (Windows)
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        # Without this, a failing native command does not stop the script and the step
+        # reports only the exit code of the last one, which hid failing suites.
+        $PSNativeCommandUseErrorActionPreference = $true
+        python -m venv .venv
+        .\.venv\Scripts\python -m pip install --upgrade pip
+        .\.venv\Scripts\python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git
+        $env:CORETRACE_COMPILER_TEST_CC = (Resolve-Path .\dist\windows\bin\cc.exe).Path
+        $env:CORETRACE_LOGGER_SOURCE_DIR = (Resolve-Path .\deps\coretrace-log).Path
+        .\.venv\Scripts\python .\test\examples\test_smoke.py
+        .\.venv\Scripts\python .\test\examples\test_extern_project.py
+        .\.venv\Scripts\python .\test\examples\test_help_smoke.py
+        # The install test installs a build tree, so it needs the compiler from build-win.
+        $env:CORETRACE_COMPILER_TEST_CC = (Resolve-Path .\build-win\Release\cc.exe).Path
+        .\.venv\Scripts\python .\test\examples\test_install_layout.py
