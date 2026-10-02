@@ -1403,13 +1403,17 @@ namespace compilerlib
         }
 
         // An Objective-C object allocation whose receiver, the class, is the first argument.
+        // The message is sent through objc_msgSend with a selector reference, or through a
+        // selector stub, objc_msgSend$<selector>, which Apple targets use from Clang 23.
         CT_NODISCARD bool isObjcAllocation(const llvm::CallBase& call, llvm::StringRef callee)
         {
             if (call.arg_size() == 0 || !call.getType()->isPointerTy())
                 return false;
             if (isObjcAllocFunctionName(callee))
                 return true;
-            return callee == "objc_msgSend" && isObjcAllocSelector(objcSelectorName(call));
+            if (callee == "objc_msgSend")
+                return isObjcAllocSelector(objcSelectorName(call));
+            return callee.consume_front("objc_msgSend$") && isObjcAllocSelector(callee);
         }
 
         // First instruction to run once `call` has returned normally. An invoke's normal
