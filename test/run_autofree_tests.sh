@@ -248,7 +248,14 @@ for t in "${TESTS[@]}"; do
   case "${rc}" in
     0) PASS=$((PASS + 1)) ;;
     2) SKIP=$((SKIP + 1)) ;;
-    *) FAIL=$((FAIL + 1)) ;;
+    *)
+      FAIL=$((FAIL + 1))
+      # The run log stays on the machine that ran the suite: show its end, for CI.
+      run_log="${OUT_DIR}/${t%.*}.run.log"
+      if [[ -f "${run_log}" ]]; then
+        tail -n 20 "${run_log}" | sed 's/^/    | /'
+      fi
+      ;;
   esac
 done
 

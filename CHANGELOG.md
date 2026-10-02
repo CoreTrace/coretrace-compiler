@@ -53,6 +53,8 @@ pull request.
   lock another thread held (#134, #133).
 - **`setjmp`/`longjmp`.** Frames left by `longjmp` no longer fill the registry of stack
   objects until stack checks stop (#137, #135).
+- **Auto-free scan.** It no longer crashes reading the stack of a thread that is exiting,
+  which the kernel unmaps while the thread can still be suspended (#150, #148).
 - **Contention.** Threads waiting for the runtime's allocation or shadow lock yield the
   processor after a few attempts instead of spinning: with more threads than processors,
   a multithreaded program ran up to four times slower (#151).
@@ -64,6 +66,8 @@ pull request.
 - UndefinedBehaviorSanitizer joins AddressSanitizer in CI (`ENABLE_DEBUG_UBSAN`)
   (#140).
 - The passes are fuzzed with `llvm-stress` on Linux and macOS (#141).
+- The fixture of a scan pass during a blocked log write no longer races with its own
+  stderr restoration, and the runtime suites print the end of a failing run's log (#150).
 - The LLVM versions workflow builds everything with each of LLVM 16 to 23, one job per
   version, and runs every suite and the fuzzer with it (#145).
 
