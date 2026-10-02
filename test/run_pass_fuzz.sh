@@ -58,7 +58,8 @@ for seed in $(seq "${CT_FUZZ_FIRST_SEED}" "${last_seed}"); do
       FAILURES=$((FAILURES + 1))
       cp "${module}" "${OUT_DIR}/seed_${seed}.ll"
       echo "FAIL: seed ${seed}, size ${size}, ${flags} (module in ${OUT_DIR}/seed_${seed}.ll)"
-      grep -v "overriding the module target triple" "${OUT_DIR}/compile.log" | head -5
+      # A crash can leave no output, which grep reports with its exit status.
+      grep -v "overriding the module target triple" "${OUT_DIR}/compile.log" | head -5 || true
     fi
   done
 done
