@@ -398,6 +398,7 @@ CT_NOINSTR static void ct_scan_range_for_marks(const void* begin, const void* en
     }
 }
 
+#if defined(__APPLE__)
 // Calls scan on copies of [begin, end), made through the kernel a chunk at a time: a page
 // that is not mapped or not readable fails the copy instead of faulting. Such pages are
 // those of a PROT_NONE mapping, and those of the stack of a thread that is exiting, which
@@ -430,7 +431,6 @@ CT_NODISCARD CT_NOINSTR static bool ct_scan_copied_range(const void* begin, cons
     return true;
 }
 
-#if defined(__APPLE__)
 CT_NODISCARD CT_NOINSTR static int ct_thread_get_sp(thread_t thread, uintptr_t* sp_out)
 {
 #if defined(__aarch64__) || defined(__arm64__)
