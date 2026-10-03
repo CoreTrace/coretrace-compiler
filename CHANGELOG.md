@@ -33,8 +33,10 @@ pull request.
   (#138, #122).
 - **Builtins in instrumented code.** From LLVM 18, only the allocation functions the
   instrumentation rewrites lose their builtin status, instead of every C library function:
-  clang optimizes calls such as `memcpy` and `memset` again (#154, #136). LLVM 16 and 17
-  keep `-fno-builtin` (#153).
+  clang optimizes calls such as `memcpy` and `memset` again, and explicit `memcpy`, `memset`
+  and `memmove` calls become memory intrinsics, which the bounds module checks (#154, #136).
+  LLVM 16 and 17 keep `-fno-builtin`; the README's "LLVM versions" section lists what that
+  costs (#153).
 - **Conservative auto-free scan** (`CT_AUTOFREE_SCAN`, macOS). With its default
   settings, a pass now completes and releases the blocks no root reaches, directly or
   through other tracked blocks; before, no pass completed and nothing was released
