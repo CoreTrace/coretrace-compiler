@@ -1491,6 +1491,37 @@ namespace compilerlib
     // Lower than the priorities a program may give its own constructors (101 and above).
     constexpr int kScheduleLeakReportPriority = 1;
 
+    void keepTrackedAllocationCalls(llvm::Module& module)
+    {
+        for (llvm::Function& func : module)
+        {
+            for (llvm::BasicBlock& block : func)
+            {
+                for (llvm::Instruction& inst : block)
+                {
+                    auto* call = llvm::dyn_cast<llvm::CallBase>(&inst);
+                    if (!call || !call->getAttributes().hasFnAttr(llvm::Attribute::Builtin))
+                    {
+                        continue;
+                    }
+                    llvm::Function* callee = getCalledFunction(*call);
+                    if (!callee)
+                    {
+                        continue;
+                    }
+                    bool isArray = false;
+                    OperatorNewKind newKind = OperatorNewKind::Normal;
+                    OperatorDeleteKind deleteKind = OperatorDeleteKind::Normal;
+                    if (isOperatorNewName(callee->getName(), isArray, newKind) ||
+                        isOperatorDeleteName(callee->getName(), isArray, deleteKind))
+                    {
+                        call->removeFnAttr(llvm::Attribute::Builtin);
+                    }
+                }
+            }
+        }
+    }
+
     void wrapAllocCalls(llvm::Module& module)
     {
         llvm::LLVMContext& context = module.getContext();
