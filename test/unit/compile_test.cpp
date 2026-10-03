@@ -2,6 +2,8 @@
 #include "compilerlib/compiler.h"
 
 #include <llvm/AsmParser/Parser.h>
+#include <llvm/Config/llvm-config.h>
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -278,6 +280,269 @@ int loud(int* values, int index)
         EXPECT_EQ(callsRuntime(result.llvmIR, "quiet"), (std::vector<bool>{false, false}))
             << result.llvmIR;
         EXPECT_EQ(callsRuntime(result.llvmIR, "loud"), std::vector<bool>{true}) << result.llvmIR;
+    }
+
+    // The functions that the definitions of `ir` whose name contains `part` call, by name,
+    // including those called with another function type than they are declared with.
+    std::vector<std::string> callees(const std::string& ir, const std::string& part)
+    {
+        llvm::LLVMContext context;
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> module = llvm::parseAssemblyString(ir, error, context);
+        std::vector<std::string> names;
+        if (!module)
+        {
+            ADD_FAILURE() << error.getMessage().str();
+            return names;
+        }
+        for (const llvm::Function& func : *module)
+        {
+            if (func.isDeclaration() || func.getName().find(part) == llvm::StringRef::npos)
+            {
+                continue;
+            }
+            for (const llvm::BasicBlock& block : func)
+            {
+                for (const llvm::Instruction& inst : block)
+                {
+                    const auto* call = llvm::dyn_cast<llvm::CallBase>(&inst);
+                    const auto* callee = call ? llvm::dyn_cast<llvm::Function>(
+                                                    call->getCalledOperand()->stripPointerCasts())
+                                              : nullptr;
+                    if (callee)
+                    {
+                        names.push_back(callee->getName().str());
+                    }
+                }
+            }
+        }
+        return names;
+    }
+
+    // Whether `names` holds the runtime entry point `entry`, or its variant for a result the
+    // program never uses.
+    bool hasRuntimeEntry(const std::vector<std::string>& names, const std::string& entry)
+    {
+        return std::any_of(names.begin(), names.end(), [&](const std::string& name)
+                           { return name == entry || name == entry + "_unreachable"; });
+    }
+
+    // setjmp returns twice, and LLVM keeps transformations such as tail calls away from its
+    // callers only when the call carries returns_twice. A blanket -fno-builtin dropped it
+    // from instrumented code (#136). LLVM 16 and 17 keep that flag: they have no hook to
+    // keep operator new and delete calls from being removed before the passes run.
+    constexpr const char* kSetjmp = R"(#include <setjmp.h>
+
+static jmp_buf recover;
+int use(int value);
+
+int jump(int value)
+{
+    if (setjmp(recover))
+    {
+        return use(value);
+    }
+    return use(value + 1);
+}
+)";
+
+    TEST_F(CompileTest, SetjmpReturnsTwiceInInstrumentedCode)
+    {
+#if LLVM_VERSION_MAJOR < 18
+        GTEST_SKIP() << "LLVM 16 and 17 compile instrumented code with -fno-builtin (#136)";
+#endif
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-O2", "-S", "-emit-llvm", writeSource("jump.c", kSetjmp)},
+                                 compilerlib::OutputMode::ToMemory, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+
+        llvm::LLVMContext context;
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> module =
+            llvm::parseAssemblyString(result.llvmIR, error, context);
+        ASSERT_NE(module, nullptr) << error.getMessage().str();
+        int setjmpCalls = 0;
+        for (const llvm::Function& func : *module)
+        {
+            for (const llvm::BasicBlock& block : func)
+            {
+                for (const llvm::Instruction& inst : block)
+                {
+                    const auto* call = llvm::dyn_cast<llvm::CallInst>(&inst);
+                    const llvm::Function* callee = call ? call->getCalledFunction() : nullptr;
+                    if (!callee || callee->getName().find("setjmp") == llvm::StringRef::npos)
+                    {
+                        continue;
+                    }
+                    ++setjmpCalls;
+                    EXPECT_TRUE(call->hasFnAttr(llvm::Attribute::ReturnsTwice)) << result.llvmIR;
+                    EXPECT_FALSE(call->isTailCall()) << result.llvmIR;
+                }
+            }
+        }
+        EXPECT_EQ(setjmpCalls, 1) << result.llvmIR;
+    }
+
+    // At -O2, clang may remove an allocation released in the same function, unless the
+    // allocation function is not a builtin for it, or, for operator new, the call is not
+    // marked as one it may omit. Each pair here would be removed: the pass must still see
+    // and track every allocation.
+    constexpr const char* kElidableCAllocations = R"(typedef __SIZE_TYPE__ size_t;
+void* malloc(size_t size);
+void* calloc(size_t count, size_t size);
+void* realloc(void* block, size_t size);
+void* aligned_alloc(size_t alignment, size_t size);
+int posix_memalign(void** block, size_t alignment, size_t size);
+void free(void* block);
+
+int viaMalloc(void)
+{
+    char* block = malloc(4);
+    block[0] = 1;
+    int value = block[0];
+    free(block);
+    return value;
+}
+
+int viaCalloc(void)
+{
+    char* block = calloc(4, 1);
+    int value = block[1];
+    free(block);
+    return value;
+}
+
+int viaRealloc(void)
+{
+    char* block = realloc(0, 4);
+    block[0] = 2;
+    int value = block[0];
+    free(block);
+    return value;
+}
+
+int viaAlignedAlloc(void)
+{
+    char* block = aligned_alloc(16, 16);
+    block[0] = 3;
+    int value = block[0];
+    free(block);
+    return value;
+}
+
+int viaPosixMemalign(void)
+{
+    void* block = 0;
+    if (posix_memalign(&block, 16, 16) != 0)
+    {
+        return 0;
+    }
+    ((char*)block)[0] = 4;
+    int value = ((char*)block)[0];
+    free(block);
+    return value;
+}
+)";
+
+    TEST_F(CompileTest, ElidableCAllocationsStayTrackedAtO2)
+    {
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-O2", "-S", "-emit-llvm", "--ct-modules=alloc",
+                                  writeSource("elidable.c", kElidableCAllocations)},
+                                 compilerlib::OutputMode::ToMemory, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaMalloc"), "__ct_malloc"))
+            << result.llvmIR;
+        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaCalloc"), "__ct_calloc"))
+            << result.llvmIR;
+        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaRealloc"), "__ct_realloc"))
+            << result.llvmIR;
+        EXPECT_TRUE(
+            hasRuntimeEntry(callees(result.llvmIR, "viaAlignedAlloc"), "__ct_aligned_alloc"))
+            << result.llvmIR;
+        EXPECT_TRUE(
+            hasRuntimeEntry(callees(result.llvmIR, "viaPosixMemalign"), "__ct_posix_memalign"))
+            << result.llvmIR;
+    }
+
+    constexpr const char* kElidableCxxAllocations = R"(namespace std
+{
+    struct nothrow_t
+    {
+    };
+    extern const nothrow_t nothrow;
+} // namespace std
+
+void* operator new(__SIZE_TYPE__ size, const std::nothrow_t&) noexcept;
+void* operator new[](__SIZE_TYPE__ size, const std::nothrow_t&) noexcept;
+
+int viaNew()
+{
+    int* block = new int(1);
+    int value = *block;
+    delete block;
+    return value;
+}
+
+int viaNewArray()
+{
+    int* block = new int[4]();
+    int value = block[1];
+    delete[] block;
+    return value;
+}
+
+int viaNothrowNew()
+{
+    int* block = new (std::nothrow) int(2);
+    int value = block ? *block : 0;
+    delete block;
+    return value;
+}
+
+int viaNothrowNewArray()
+{
+    int* block = new (std::nothrow) int[4]();
+    int value = block ? block[1] : 0;
+    delete[] block;
+    return value;
+}
+
+// Aligned operator new is not tracked: the runtime allocates through the unaligned one.
+struct alignas(64) Wide
+{
+    char bytes[64];
+};
+
+int viaAlignedNew()
+{
+    Wide* block = new Wide();
+    int value = block->bytes[0];
+    delete block;
+    return value;
+}
+)";
+
+    TEST_F(CompileTest, ElidableCxxAllocationsStayTrackedAtO2)
+    {
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-O2", "-S", "-emit-llvm", "--ct-modules=alloc",
+                                  writeSource("elidable.cpp", kElidableCxxAllocations)},
+                                 compilerlib::OutputMode::ToMemory, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaNewv"), "__ct_new"))
+            << result.llvmIR;
+        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaNewArrayv"), "__ct_new_array"))
+            << result.llvmIR;
+        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaNothrowNewv"), "__ct_new_nothrow"))
+            << result.llvmIR;
+        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaNothrowNewArrayv"),
+                                    "__ct_new_array_nothrow"))
+            << result.llvmIR;
+        for (const std::string& callee : callees(result.llvmIR, "viaAlignedNewv"))
+        {
+            EXPECT_FALSE(llvm::StringRef(callee).starts_with("__ct_new")) << result.llvmIR;
+        }
     }
 
     // A unit compiled the way an analyser compiles it: unoptimised, with debug information.
