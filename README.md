@@ -30,10 +30,8 @@ first checks that the installed LLVM is the version the job is named after:
 On Windows, the LLVM 23 archive needs zlib and zstd, which it does not ship, to be found by
 CMake: building against it is not covered yet (#149).
 
-With LLVM 16 and 17, instrumented code is compiled with `-fno-builtin`: `setjmp` loses the
-`returns_twice` attribute that keeps the optimizer from transformations such as tail calls
-around it, and calls to the C library are not optimized (#153). From LLVM 18, only the
-allocation functions the instrumentation rewrites lose their builtin status.
+Instrumented code behaves differently with LLVM 16 and 17: see
+[LLVM versions](#llvm-versions).
 
 The Build workflow adds, with LLVM 20 on Linux: AddressSanitizer, LeakSanitizer and
 UndefinedBehaviorSanitizer builds, a build without the runtime, and multi-arch Docker tests on
@@ -198,6 +196,62 @@ Notes:
 - Vtable tooling requires C++ and an Itanium ABI (macOS/Linux).
 - Clang automatically adds `optnone` at `-O0`. Use `--ct-optnone` to force the attribute even when
   passing `-Xclang -disable-O0-optnone`.
+
+## LLVM versions
+
+CoreTrace Compiler builds and instruments with LLVM 16 to 23. Most behaviour is the same on
+every version; this section lists what differs, and why.
+
+### How instrumented code is compiled
+
+The instrumentation passes run on the optimized IR, after clang's optimizations. With
+`--instrument`, the compiler adds to clang's arguments:
+
+- `-gline-tables-only`, unless debug information is already requested: the passes record the
+  source location of each allocation;
+- `-fPIE` on Linux, unless `-fPIC` or `-fPIE` is given;
+- one `-fno-builtin-<name>` per C allocation function the alloc module rewrites (`malloc`,
+  `calloc`, `realloc`, `aligned_alloc`, `posix_memalign`, `free`). Otherwise clang may remove or
+  merge their calls before the passes run, and the allocations would go untracked.
+
+The C++ standard also lets the optimizer omit the allocation of a new-expression, and clang
+marks those `operator new` and `operator delete` calls to allow it. `-fno-builtin-<name>` cannot
+name these operators. From LLVM 18, a pass at the start of clang's optimization pipeline removes
+that mark from the calls the alloc module tracks, so that they are still there when it runs.
+
+### LLVM 16 and 17
+
+Clang only lets a library run a pass at the start of its optimization pipeline from LLVM 18. On
+LLVM 16 and 17, instrumented code is therefore compiled with the blanket `-fno-builtin`, which
+also keeps `new`/`delete` pairs, but turns off every C library builtin. This has three
+consequences, which LLVM 18 and later do not have:
+
+- **`setjmp` and the other functions that return twice** (`sigsetjmp`, `getcontext`, `vfork`…)
+  lose the `returns_twice` attribute. With optimizations on, LLVM may then apply
+  transformations that assume the call returns once, such as turning it into a tail call or
+  reusing a stack slot across it. A local variable read after `longjmp` can be wrong. No such
+  failure has been observed at run time, but nothing rules it out. The bounds module recognizes
+  these functions by name, so its record of stack objects stays correct.
+- **Explicit `memcpy`, `memset` and `memmove` calls are not bounds-checked.** They stay calls to
+  the C library, while the bounds module checks the memory intrinsics that clang emits for
+  them from LLVM 18.
+- **Calls to the C library are not optimized**, for instance `memcpy` is not expanded inline.
+
+If a program uses `setjmp`/`longjmp`, instrument it with LLVM 18 or later, or compile the files
+that use them at `-O0`, where these transformations do not run. `cc --version` prints the LLVM
+version the compiler was built with. #153 tracks a fix for these two versions.
+
+### Other notes per version
+
+- **Windows with LLVM 23**: building CoreTrace Compiler against the official archive is not
+  covered yet. The archive needs zlib and zstd, which it does not ship (#149).
+- **Clang 23, Apple targets**: Objective-C messages go through selector stubs such as
+  `objc_msgSend$new`. The alloc module recognizes them, so the objects are tracked as with
+  earlier versions.
+- **LLVM 19, arm64**: LLVM's own AArch64 code generator crashes on some IR at `-O0`, with or
+  without `--instrument`. This is an LLVM bug: plain `clang -c` crashes on the same input.
+  The pass fuzzer reports such modules as skipped; in CI, it has met this crash with LLVM 19
+  only.
 
 ## Objective-C and Objective-C++
 
