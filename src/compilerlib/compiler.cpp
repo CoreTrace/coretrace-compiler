@@ -12,6 +12,7 @@
 #include "compilerlib/instrumentation/vtable.hpp"
 #include "args_internal.hpp"
 #include "clang_compat.hpp"
+#include "instrumentation/alloc_internal.hpp"
 #include "emit/llvm_output.hpp"
 
 #include <clang/Frontend/FrontendActions.h>
@@ -190,6 +191,21 @@ namespace compilerlib
             }
         };
 
+        // -fno-builtin-<name> for each C allocation function the allocation pass rewrites.
+        const std::vector<std::string>& noBuiltinAllocationOptions()
+        {
+            static const std::vector<std::string> options = []
+            {
+                std::vector<std::string> result;
+                for (const CAllocFunctionName& entry : cAllocFunctionNames())
+                {
+                    result.push_back("-fno-builtin-" + entry.name.str());
+                }
+                return result;
+            }();
+            return options;
+        }
+
         class ArgBuilder
         {
           public:
@@ -244,9 +260,19 @@ namespace compilerlib
                     {
                         ctx_.clang_args.push_back("-gline-tables-only");
                     }
-                    ctx_.clang_args.push_back("-fno-builtin");
-                    ctx_.clang_args.push_back("-fno-builtin-malloc");
-                    ctx_.clang_args.push_back("-fno-builtin-free");
+                    // Clang must not treat the allocation functions as builtins, or it could
+                    // remove or merge their calls before the passes run. From LLVM 18, only
+                    // they lose that status, and keepTrackedAllocationCalls keeps the calls
+                    // to operator new and delete. LLVM 16 and 17 have no hook for that pass:
+                    // they disable every builtin, which costs setjmp its returns_twice (#153).
+                    if (!clang_compat::kHasPipelineStartPass)
+                    {
+                        ctx_.clang_args.push_back("-fno-builtin");
+                    }
+                    for (const std::string& option : noBuiltinAllocationOptions())
+                    {
+                        ctx_.clang_args.push_back(option.c_str());
+                    }
                     // Ensure position-independent code for Linux targets
                     // to avoid relocation errors with PIE-enabled distributions
                     if (targetTriple.isOSLinux())
@@ -829,6 +855,11 @@ namespace compilerlib
                 clang_compat::createFileAndSourceManagers(*ci, ctx_.fs);
                 ci->getCodeGenOpts().DisableFree = false;
                 ci->getFrontendOpts().DisableFree = false;
+                if (ctx_.instrument)
+                {
+                    clang_compat::runAtPipelineStart(ci->getCodeGenOpts(),
+                                                     &keepTrackedAllocationCalls);
+                }
 
                 return ci;
             }

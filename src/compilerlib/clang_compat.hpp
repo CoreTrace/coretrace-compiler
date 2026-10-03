@@ -5,6 +5,7 @@
 // compilerlib: not installed, not part of the public API.
 #pragma once
 
+#include <clang/Basic/CodeGenOptions.h>
 #include <clang/Basic/Diagnostic.h>
 #include <clang/Basic/DiagnosticOptions.h>
 #include <clang/Frontend/CompilerInstance.h>
@@ -12,7 +13,14 @@
 #include <llvm/ADT/IntrusiveRefCntPtr.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Config/llvm-config.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IR/PassManager.h>
 #include <llvm/Support/VirtualFileSystem.h>
+
+#if LLVM_VERSION_MAJOR >= 18
+#include <llvm/Passes/OptimizationLevel.h>
+#include <llvm/Passes/PassBuilder.h>
+#endif
 
 #if LLVM_VERSION_MAJOR >= 22
 #include <clang/Options/OptionUtils.h>
@@ -34,6 +42,40 @@ namespace compilerlib::clang_compat
 #else
     namespace options = clang::driver::options;
 #endif
+
+    // Whether clang can run a pass of compilerlib at the start of its optimization pipeline,
+    // before any optimization: CodeGenOptions::PassBuilderCallbacks, from LLVM 18.
+    inline constexpr bool kHasPipelineStartPass = LLVM_VERSION_MAJOR >= 18;
+
+    // A function on a module, as a pass of the new pass manager.
+    struct ModuleFunctionPass : llvm::PassInfoMixin<ModuleFunctionPass>
+    {
+        void (*function)(llvm::Module&);
+
+        llvm::PreservedAnalyses run(llvm::Module& module, llvm::ModuleAnalysisManager&)
+        {
+            function(module);
+            return llvm::PreservedAnalyses::none();
+        }
+    };
+
+    // Runs `function` on each module at the start of clang's optimization pipeline. Does
+    // nothing without kHasPipelineStartPass.
+    inline void runAtPipelineStart(clang::CodeGenOptions& options, void (*function)(llvm::Module&))
+    {
+#if LLVM_VERSION_MAJOR >= 18
+        options.PassBuilderCallbacks.push_back(
+            [function](llvm::PassBuilder& builder)
+            {
+                builder.registerPipelineStartEPCallback(
+                    [function](llvm::ModulePassManager& passes, llvm::OptimizationLevel)
+                    { passes.addPass(ModuleFunctionPass{{}, function}); });
+            });
+#else
+        (void)options;
+        (void)function;
+#endif
+    }
 
     // The resource directory of the clang at clangPath, as that clang computes it.
     inline std::string resourcesPath(llvm::StringRef clangPath)
