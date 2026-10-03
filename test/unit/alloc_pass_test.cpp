@@ -20,6 +20,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -301,6 +302,51 @@ done:
 }
 )");
         EXPECT_EQ(callees("conditional"), std::vector<std::string>{"__ct_malloc"});
+    }
+
+    // Clang marks a new-expression's operator new and delete calls builtin; before
+    // optimization, the calls the pass tracks lose that mark. Aligned operator new is not
+    // tracked, and keeps it.
+    TEST(KeepTrackedAllocationCalls, UnmarksTrackedOperatorCallsOnly)
+    {
+        llvm::LLVMContext context;
+        llvm::SMDiagnostic parseError;
+        std::unique_ptr<llvm::Module> module = llvm::parseAssemblyString(R"(
+declare nonnull ptr @_Znwm(i64) nobuiltin
+declare void @_ZdlPvm(ptr, i64) nobuiltin
+declare nonnull ptr @_ZnwmSt11align_val_t(i64, i64) nobuiltin
+declare ptr @malloc(i64)
+
+define void @allocate() {
+  %object = call ptr @_Znwm(i64 4) #0
+  call void @_ZdlPvm(ptr %object, i64 4) #0
+  %wide = call ptr @_ZnwmSt11align_val_t(i64 64, i64 64) #0
+  %block = call ptr @malloc(i64 4)
+  ret void
+}
+
+attributes #0 = { builtin }
+)",
+                                                                         parseError, context);
+        ASSERT_NE(module, nullptr) << parseError.getMessage().str();
+        compilerlib::keepTrackedAllocationCalls(*module);
+
+        std::vector<std::pair<std::string, bool>> builtinCalls;
+        for (llvm::Instruction& inst : llvm::instructions(*module->getFunction("allocate")))
+        {
+            if (auto* call = llvm::dyn_cast<llvm::CallBase>(&inst))
+            {
+                builtinCalls.emplace_back(
+                    call->getCalledFunction()->getName().str(),
+                    call->getAttributes().hasFnAttr(llvm::Attribute::Builtin));
+            }
+        }
+        EXPECT_EQ(builtinCalls, (std::vector<std::pair<std::string, bool>>{
+                                    {"_Znwm", false},
+                                    {"_ZdlPvm", false},
+                                    {"_ZnwmSt11align_val_t", true},
+                                    {"malloc", false},
+                                }));
     }
 
     using ObjcAllocationTest = InstrumentedModuleTest;

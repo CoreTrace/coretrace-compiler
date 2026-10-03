@@ -178,7 +178,9 @@ namespace compilerlib
                 return ReturnAllocKind::None;
             }
             llvm::StringRef name = callee->getName();
-            if ((name == "malloc" || name == "calloc" || name == "aligned_alloc") &&
+            const std::optional<CAllocFunction> function = cAllocFunctionNamed(name);
+            if ((function == CAllocFunction::Malloc || function == CAllocFunction::Calloc ||
+                 function == CAllocFunction::AlignedAlloc) &&
                 (isMallocLike(*callee) || isCallocLike(*callee) || isAlignedAllocLike(*callee)))
             {
                 return ReturnAllocKind::MallocLike;
@@ -315,7 +317,7 @@ namespace compilerlib
         // only where allocations are.
         CT_NODISCARD bool isReleaseCall(const llvm::Function& callee, llvm::StringRef name)
         {
-            if (name == "free")
+            if (cAllocFunctionNamed(name) == CAllocFunction::Free)
                 return isFreeLike(callee);
             if (isMunmapLikeName(name))
                 return isMunmapLike(callee);
@@ -372,7 +374,8 @@ namespace compilerlib
                 return false;
             }
             llvm::StringRef name = callee->getName();
-            const bool isMemalign = (name == "posix_memalign" && isPosixMemalignLike(*callee)) ||
+            const bool isMemalign = (cAllocFunctionNamed(name) == CAllocFunction::PosixMemalign &&
+                                     isPosixMemalignLike(*callee)) ||
                                     name == CT_RUNTIME_SYMBOL(__ct_posix_memalign);
             if (!isMemalign)
             {
@@ -1488,6 +1491,37 @@ namespace compilerlib
     // Lower than the priorities a program may give its own constructors (101 and above).
     constexpr int kScheduleLeakReportPriority = 1;
 
+    void keepTrackedAllocationCalls(llvm::Module& module)
+    {
+        for (llvm::Function& func : module)
+        {
+            for (llvm::BasicBlock& block : func)
+            {
+                for (llvm::Instruction& inst : block)
+                {
+                    auto* call = llvm::dyn_cast<llvm::CallBase>(&inst);
+                    if (!call || !call->getAttributes().hasFnAttr(llvm::Attribute::Builtin))
+                    {
+                        continue;
+                    }
+                    llvm::Function* callee = getCalledFunction(*call);
+                    if (!callee)
+                    {
+                        continue;
+                    }
+                    bool isArray = false;
+                    OperatorNewKind newKind = OperatorNewKind::Normal;
+                    OperatorDeleteKind deleteKind = OperatorDeleteKind::Normal;
+                    if (isOperatorNewName(callee->getName(), isArray, newKind) ||
+                        isOperatorDeleteName(callee->getName(), isArray, deleteKind))
+                    {
+                        call->removeFnAttr(llvm::Attribute::Builtin);
+                    }
+                }
+            }
+        }
+    }
+
     void wrapAllocCalls(llvm::Module& module)
     {
         llvm::LLVMContext& context = module.getContext();
@@ -1618,67 +1652,62 @@ namespace compilerlib
                         objcAllocCalls.push_back(call);
                         continue;
                     }
-                    if (name == "malloc")
+                    if (const std::optional<CAllocFunction> function = cAllocFunctionNamed(name))
                     {
-                        if (isMallocLike(*callee))
+                        switch (*function)
                         {
-                            mallocCalls.push_back(call);
-                            allocSites.push_back({call, nullptr, ReturnAllocKind::MallocLike});
-                            if (isEffectivelyUnused(call, layout))
-                                instantAutoFreeValues.insert(call);
-                        }
-                        continue;
-                    }
-                    if (name == "calloc")
-                    {
-                        if (isCallocLike(*callee))
-                        {
-                            callocCalls.push_back(call);
-                            allocSites.push_back({call, nullptr, ReturnAllocKind::MallocLike});
-                            if (isEffectivelyUnused(call, layout))
-                                instantAutoFreeValues.insert(call);
-                        }
-                        continue;
-                    }
-                    if (name == "posix_memalign")
-                    {
-                        if (isPosixMemalignLike(*callee))
-                        {
-                            posixMemalignCalls.push_back(call);
-                            if (auto* outAlloca = llvm::dyn_cast<llvm::AllocaInst>(
-                                    call->getArgOperand(0)->stripPointerCasts()))
+                        case CAllocFunction::Malloc:
+                            if (isMallocLike(*callee))
                             {
-                                allocSites.push_back(
-                                    {nullptr, outAlloca, ReturnAllocKind::MallocLike});
+                                mallocCalls.push_back(call);
+                                allocSites.push_back({call, nullptr, ReturnAllocKind::MallocLike});
+                                if (isEffectivelyUnused(call, layout))
+                                    instantAutoFreeValues.insert(call);
                             }
-                        }
-                        continue;
-                    }
-                    if (name == "realloc")
-                    {
-                        if (isReallocLike(*callee))
-                        {
-                            reallocCalls.push_back(call);
-                            allocSites.push_back({call, nullptr, ReturnAllocKind::MallocLike});
-                        }
-                        continue;
-                    }
-                    if (name == "aligned_alloc")
-                    {
-                        if (isAlignedAllocLike(*callee))
-                        {
-                            alignedAllocCalls.push_back(call);
-                            allocSites.push_back({call, nullptr, ReturnAllocKind::MallocLike});
-                            if (isEffectivelyUnused(call, layout))
-                                instantAutoFreeValues.insert(call);
-                        }
-                        continue;
-                    }
-                    if (name == "free")
-                    {
-                        if (isFreeLike(*callee))
-                        {
-                            freeCalls.push_back(call);
+                            break;
+                        case CAllocFunction::Calloc:
+                            if (isCallocLike(*callee))
+                            {
+                                callocCalls.push_back(call);
+                                allocSites.push_back({call, nullptr, ReturnAllocKind::MallocLike});
+                                if (isEffectivelyUnused(call, layout))
+                                    instantAutoFreeValues.insert(call);
+                            }
+                            break;
+                        case CAllocFunction::PosixMemalign:
+                            if (isPosixMemalignLike(*callee))
+                            {
+                                posixMemalignCalls.push_back(call);
+                                if (auto* outAlloca = llvm::dyn_cast<llvm::AllocaInst>(
+                                        call->getArgOperand(0)->stripPointerCasts()))
+                                {
+                                    allocSites.push_back(
+                                        {nullptr, outAlloca, ReturnAllocKind::MallocLike});
+                                }
+                            }
+                            break;
+                        case CAllocFunction::Realloc:
+                            if (isReallocLike(*callee))
+                            {
+                                reallocCalls.push_back(call);
+                                allocSites.push_back({call, nullptr, ReturnAllocKind::MallocLike});
+                            }
+                            break;
+                        case CAllocFunction::AlignedAlloc:
+                            if (isAlignedAllocLike(*callee))
+                            {
+                                alignedAllocCalls.push_back(call);
+                                allocSites.push_back({call, nullptr, ReturnAllocKind::MallocLike});
+                                if (isEffectivelyUnused(call, layout))
+                                    instantAutoFreeValues.insert(call);
+                            }
+                            break;
+                        case CAllocFunction::Free:
+                            if (isFreeLike(*callee))
+                            {
+                                freeCalls.push_back(call);
+                            }
+                            break;
                         }
                         continue;
                     }

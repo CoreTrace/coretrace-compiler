@@ -31,6 +31,10 @@ pull request.
   `__attribute__((no_instrument_function))` or
   `__attribute__((disable_sanitizer_instrumentation))` is no longer instrumented
   (#138, #122).
+- **Builtins in instrumented code.** From LLVM 18, only the allocation functions the
+  instrumentation rewrites lose their builtin status, instead of every C library function:
+  clang optimizes calls such as `memcpy` and `memset` again (#154, #136). LLVM 16 and 17
+  keep `-fno-builtin` (#153).
 - **Conservative auto-free scan** (`CT_AUTOFREE_SCAN`, macOS). With its default
   settings, a pass now completes and releases the blocks no root reaches, directly or
   through other tracked blocks; before, no pass completed and nothing was released
@@ -61,6 +65,8 @@ pull request.
 - **Contention.** Threads waiting for the runtime's allocation or shadow lock yield the
   processor after a few attempts instead of spinning: with more threads than processors,
   a multithreaded program ran up to four times slower (#151).
+- **`setjmp` in instrumented code.** From LLVM 18, the call keeps `returns_twice`, which
+  keeps the optimizer from transformations such as tail calls around it (#154, #136).
 
 ### Tests and CI
 

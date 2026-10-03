@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <set>
+#include <string>
 
 namespace
 {
@@ -182,6 +183,34 @@ namespace
             compilerlib::isOperatorNewName("??2@YAPEAX_KW4align_val_t@std@@@Z", isArray, newKind));
         EXPECT_FALSE(compilerlib::isOperatorDeleteName("??3@YAXPEAX_KW4align_val_t@std@@@Z",
                                                        isArray, deleteKind));
+    }
+
+    TEST(CAllocFunctionNames, RecognizesEachFunctionByItsExactName)
+    {
+        using compilerlib::CAllocFunction;
+        EXPECT_EQ(compilerlib::cAllocFunctionNamed("malloc"), CAllocFunction::Malloc);
+        EXPECT_EQ(compilerlib::cAllocFunctionNamed("calloc"), CAllocFunction::Calloc);
+        EXPECT_EQ(compilerlib::cAllocFunctionNamed("realloc"), CAllocFunction::Realloc);
+        EXPECT_EQ(compilerlib::cAllocFunctionNamed("aligned_alloc"), CAllocFunction::AlignedAlloc);
+        EXPECT_EQ(compilerlib::cAllocFunctionNamed("posix_memalign"),
+                  CAllocFunction::PosixMemalign);
+        EXPECT_EQ(compilerlib::cAllocFunctionNamed("free"), CAllocFunction::Free);
+        // Neither the runtime's entry points nor other libc functions.
+        EXPECT_EQ(compilerlib::cAllocFunctionNamed("__ct_malloc"), std::nullopt);
+        EXPECT_EQ(compilerlib::cAllocFunctionNamed("strdup"), std::nullopt);
+        EXPECT_EQ(compilerlib::cAllocFunctionNamed("mmap"), std::nullopt);
+    }
+
+    // The table lists each name once: the compiler derives one -fno-builtin option per entry.
+    TEST(CAllocFunctionNames, ListsEachNameOnce)
+    {
+        std::set<std::string> names;
+        for (const compilerlib::CAllocFunctionName& entry : compilerlib::cAllocFunctionNames())
+        {
+            EXPECT_TRUE(names.insert(entry.name.str()).second) << entry.name.str();
+            EXPECT_EQ(compilerlib::cAllocFunctionNamed(entry.name), entry.function);
+        }
+        EXPECT_EQ(names.size(), 6u);
     }
 
     TEST(FreeLikeNames, CoversRuntimeReleaseEntryPoints)
