@@ -4,16 +4,6 @@ CoreTrace Compiler is a Clang/LLVM-based wrapper that can emit LLVM IR, build bi
 instrument code with runtime checks (alloc/bounds/trace/vtable). It can run in a file-based mode or
 an in-memory mode for tooling pipelines.
 
-## Project documents
-
-- [CONTRIBUTING.md](CONTRIBUTING.md): commit conventions and development setup.
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): expected conduct, and how to report a
-  breach.
-- [AUTHORS.md](AUTHORS.md): maintainers and contributors.
-- [CHANGELOG.md](CHANGELOG.md): notable changes per release.
-- [SECURITY.md](SECURITY.md): supported versions, and how to report a vulnerability.
-- [LICENSE](LICENSE): Apache License 2.0.
-
 ## Build
 
 Requirements: CMake, a C++20 compiler and LLVM/Clang 16 to 23.
