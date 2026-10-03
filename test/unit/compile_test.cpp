@@ -282,9 +282,9 @@ int loud(int* values, int index)
         EXPECT_EQ(callsRuntime(result.llvmIR, "loud"), std::vector<bool>{true}) << result.llvmIR;
     }
 
-    // The functions that the definitions of `ir` whose name contains `part` call, by name,
-    // including those called with another function type than they are declared with.
-    std::vector<std::string> callees(const std::string& ir, const std::string& part)
+    // The functions that the definition of `name` in `ir` calls, by name, including those
+    // called with another function type than they are declared with.
+    std::vector<std::string> callees(const std::string& ir, const std::string& name)
     {
         llvm::LLVMContext context;
         llvm::SMDiagnostic error;
@@ -295,13 +295,14 @@ int loud(int* values, int index)
             ADD_FAILURE() << error.getMessage().str();
             return names;
         }
-        for (const llvm::Function& func : *module)
+        const llvm::Function* func = module->getFunction(name);
+        if (!func || func->isDeclaration())
         {
-            if (func.isDeclaration() || func.getName().find(part) == llvm::StringRef::npos)
-            {
-                continue;
-            }
-            for (const llvm::BasicBlock& block : func)
+            ADD_FAILURE() << "no definition of " << name;
+            return names;
+        }
+        {
+            for (const llvm::BasicBlock& block : *func)
             {
                 for (const llvm::Instruction& inst : block)
                 {
@@ -465,6 +466,7 @@ int viaPosixMemalign(void)
             << result.llvmIR;
     }
 
+    // The functions are extern "C", to have one name on the Itanium and Microsoft C++ ABIs.
     constexpr const char* kElidableCxxAllocations = R"(namespace std
 {
     struct nothrow_t
@@ -476,7 +478,7 @@ int viaPosixMemalign(void)
 void* operator new(__SIZE_TYPE__ size, const std::nothrow_t&) noexcept;
 void* operator new[](__SIZE_TYPE__ size, const std::nothrow_t&) noexcept;
 
-int viaNew()
+extern "C" int viaNew()
 {
     int* block = new int(1);
     int value = *block;
@@ -484,7 +486,7 @@ int viaNew()
     return value;
 }
 
-int viaNewArray()
+extern "C" int viaNewArray()
 {
     int* block = new int[4]();
     int value = block[1];
@@ -492,7 +494,7 @@ int viaNewArray()
     return value;
 }
 
-int viaNothrowNew()
+extern "C" int viaNothrowNew()
 {
     int* block = new (std::nothrow) int(2);
     int value = block ? *block : 0;
@@ -500,7 +502,7 @@ int viaNothrowNew()
     return value;
 }
 
-int viaNothrowNewArray()
+extern "C" int viaNothrowNewArray()
 {
     int* block = new (std::nothrow) int[4]();
     int value = block ? block[1] : 0;
@@ -509,16 +511,23 @@ int viaNothrowNewArray()
 }
 
 // Aligned operator new is not tracked: the runtime allocates through the unaligned one.
-struct alignas(64) Wide
+// It is called explicitly: whether a new-expression uses it depends on the target.
+namespace std
 {
-    char bytes[64];
-};
+    enum class align_val_t : __SIZE_TYPE__
+    {
+    };
+} // namespace std
 
-int viaAlignedNew()
+void* operator new(__SIZE_TYPE__ size, std::align_val_t alignment);
+void operator delete(void* block, std::align_val_t alignment) noexcept;
+
+extern "C" int viaAlignedNew()
 {
-    Wide* block = new Wide();
-    int value = block->bytes[0];
-    delete block;
+    char* block = static_cast<char*>(::operator new(64, std::align_val_t(64)));
+    block[0] = 5;
+    int value = block[0];
+    ::operator delete(block, std::align_val_t(64));
     return value;
 }
 )";
@@ -530,16 +539,17 @@ int viaAlignedNew()
                                   writeSource("elidable.cpp", kElidableCxxAllocations)},
                                  compilerlib::OutputMode::ToMemory, /*instrument=*/true);
         ASSERT_TRUE(result.success) << result.diagnostics;
-        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaNewv"), "__ct_new"))
+        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaNew"), "__ct_new")) << result.llvmIR;
+        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaNewArray"), "__ct_new_array"))
             << result.llvmIR;
-        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaNewArrayv"), "__ct_new_array"))
+        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaNothrowNew"), "__ct_new_nothrow"))
             << result.llvmIR;
-        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaNothrowNewv"), "__ct_new_nothrow"))
+        EXPECT_TRUE(
+            hasRuntimeEntry(callees(result.llvmIR, "viaNothrowNewArray"), "__ct_new_array_nothrow"))
             << result.llvmIR;
-        EXPECT_TRUE(hasRuntimeEntry(callees(result.llvmIR, "viaNothrowNewArrayv"),
-                                    "__ct_new_array_nothrow"))
-            << result.llvmIR;
-        for (const std::string& callee : callees(result.llvmIR, "viaAlignedNewv"))
+        const std::vector<std::string> alignedCallees = callees(result.llvmIR, "viaAlignedNew");
+        EXPECT_FALSE(alignedCallees.empty()) << result.llvmIR;
+        for (const std::string& callee : alignedCallees)
         {
             EXPECT_FALSE(llvm::StringRef(callee).starts_with("__ct_new")) << result.llvmIR;
         }
