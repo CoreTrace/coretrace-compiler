@@ -5,6 +5,35 @@
 
 namespace compilerlib
 {
+    namespace
+    {
+        constexpr CAllocFunctionName kCAllocFunctionNames[] = {
+            {"malloc", CAllocFunction::Malloc},
+            {"calloc", CAllocFunction::Calloc},
+            {"realloc", CAllocFunction::Realloc},
+            {"aligned_alloc", CAllocFunction::AlignedAlloc},
+            {"posix_memalign", CAllocFunction::PosixMemalign},
+            {"free", CAllocFunction::Free},
+        };
+    } // namespace
+
+    llvm::ArrayRef<CAllocFunctionName> cAllocFunctionNames()
+    {
+        return kCAllocFunctionNames;
+    }
+
+    std::optional<CAllocFunction> cAllocFunctionNamed(llvm::StringRef name)
+    {
+        for (const CAllocFunctionName& entry : kCAllocFunctionNames)
+        {
+            if (entry.name == name)
+            {
+                return entry.function;
+            }
+        }
+        return std::nullopt;
+    }
+
     int escapeRank(EscapeState state)
     {
         switch (state)
@@ -198,8 +227,9 @@ namespace compilerlib
 
     bool isFreeLikeName(llvm::StringRef name)
     {
-        return name == "free" || name == CT_RUNTIME_SYMBOL(__ct_free) ||
-               name == CT_RUNTIME_SYMBOL(__ct_autofree) || name == CT_RUNTIME_SYMBOL(__ct_delete) ||
+        return cAllocFunctionNamed(name) == CAllocFunction::Free ||
+               name == CT_RUNTIME_SYMBOL(__ct_free) || name == CT_RUNTIME_SYMBOL(__ct_autofree) ||
+               name == CT_RUNTIME_SYMBOL(__ct_delete) ||
                name == CT_RUNTIME_SYMBOL(__ct_delete_array) ||
                name == CT_RUNTIME_SYMBOL(__ct_delete_nothrow) ||
                name == CT_RUNTIME_SYMBOL(__ct_delete_array_nothrow) ||

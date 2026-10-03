@@ -7,7 +7,10 @@
 
 #include "compilerlib/attributes.hpp"
 
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/StringRef.h>
+
+#include <optional>
 
 namespace compilerlib
 {
@@ -46,6 +49,30 @@ namespace compilerlib
         EscapedStore,
         EscapedScan
     };
+
+    // The C library allocation functions the pass rewrites, which it recognizes by their
+    // exact name. They are also the functions clang must not treat as builtins in
+    // instrumented code, or it could remove or merge their calls before the pass runs: the
+    // compiler derives its -fno-builtin-<name> options from this table. mmap, munmap, sbrk
+    // and brk are recognized by the name patterns below, and clang has no builtin for them.
+    enum class CAllocFunction
+    {
+        Malloc,
+        Calloc,
+        Realloc,
+        AlignedAlloc,
+        PosixMemalign,
+        Free
+    };
+
+    struct CAllocFunctionName
+    {
+        llvm::StringRef name;
+        CAllocFunction function;
+    };
+
+    CT_NODISCARD llvm::ArrayRef<CAllocFunctionName> cAllocFunctionNames();
+    CT_NODISCARD std::optional<CAllocFunction> cAllocFunctionNamed(llvm::StringRef name);
 
     CT_NODISCARD int escapeRank(EscapeState state);
     CT_NODISCARD const char* escapeStateName(EscapeState state);
