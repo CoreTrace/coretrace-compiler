@@ -30,6 +30,11 @@ first checks that the installed LLVM is the version the job is named after:
 On Windows, the LLVM 23 archive needs zlib and zstd, which it does not ship, to be found by
 CMake: building against it is not covered yet (#149).
 
+With LLVM 16 and 17, instrumented code is compiled with `-fno-builtin`: `setjmp` loses the
+`returns_twice` attribute that keeps the optimizer from transformations such as tail calls
+around it, and calls to the C library are not optimized (#153). From LLVM 18, only the
+allocation functions the instrumentation rewrites lose their builtin status.
+
 The Build workflow adds, with LLVM 20 on Linux: AddressSanitizer, LeakSanitizer and
 UndefinedBehaviorSanitizer builds, a build without the runtime, and multi-arch Docker tests on
 `main`.
