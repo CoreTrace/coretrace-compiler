@@ -349,9 +349,10 @@ namespace compilerlib
             }
         }
 
-        // Whether `call` may return a second time, as setjmp does after a longjmp. Instrumented
-        // code is compiled with -fno-builtin, which keeps clang from marking the C library's
-        // functions returns_twice: they are also recognized by name.
+        // Whether `call` may return a second time, as setjmp does after a longjmp. With LLVM 16
+        // and 17, instrumented code is compiled with -fno-builtin, which keeps clang from
+        // marking the C library's functions returns_twice (#153): they are also recognized by
+        // name.
         CT_NODISCARD bool returnsTwice(const llvm::CallInst& call)
         {
             if (call.hasFnAttr(llvm::Attribute::ReturnsTwice))
