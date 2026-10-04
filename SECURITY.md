@@ -7,8 +7,8 @@ and ship in the next release; earlier minor versions do not receive backports.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.10.x  | yes       |
-| < 0.10  | no        |
+| 0.11.x  | yes       |
+| < 0.11  | no        |
 
 ## Reporting a vulnerability
 
