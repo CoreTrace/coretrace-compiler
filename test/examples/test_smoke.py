@@ -187,6 +187,7 @@ def main() -> int:
     alloc_site_src = FIXTURES / "alloc_site.c"
     new_delete_src = FIXTURES / "new_delete.cpp"
     exit_frees_src = FIXTURES / "exit_frees.cpp"
+    exit_terminator_src = FIXTURES / "exit_terminator.c"
     crash_src = FIXTURES / "crash.c"
     trace_threads_src = FIXTURES / "trace_threads.cpp"
     trace_objc_src = FIXTURES / "trace_objc.m"
@@ -1109,7 +1110,7 @@ def main() -> int:
             copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src,
                                leak_src, overflow_src, broken_src, codegen_error_src,
                                undefined_ref_src,
-                               alloc_site_src, new_delete_src, exit_frees_src, crash_src,
+                               alloc_site_src, new_delete_src, exit_frees_src, exit_terminator_src, crash_src,
                                trace_threads_src, trace_objc_src, leak_objc_src,
                                new_delete_objc_src, objc_alloc_forms_src, objc_objects_src,
                                objcxx_objects_src, objc_autofree_scan_src,
