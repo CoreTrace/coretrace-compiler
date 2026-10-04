@@ -127,13 +127,28 @@ expect_stdout() {
 FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-overflow"
                   "mutex lock failed" "terminating due to")
 
-# Fixtures whose failure is a known, tracked defect. The suite still runs them and
-# reports XFAIL; an unexpected pass is reported as XPASS and fails the suite so the
-# entry gets removed once the defect is fixed.
+# Fixtures whose failure is a known, tracked defect, and the one failure expected of them,
+# as check_one classifies it. Only that failure is reported as XFAIL: any other one, such
+# as a compile error, a timeout, a crash or another wrong output, still fails the suite.
+# An unexpected pass is reported as XPASS and fails the suite too, so that the entry is
+# removed once the defect is fixed.
+#   leak-report: the program runs correctly, but the leak report lists blocks the fixture
+#                allocated, and only those.
 known_failure() {
   case "$1" in
-    *) return 1 ;;
+    # Exit-time code of objects linked before the first instrumented one runs after the
+    # report on macOS, where initializers run in link order (#152).
+    ct_leak_exit_uninstrumented_first.cpp)
+      [[ "$(uname -s)" == Darwin ]] && echo leak-report && return 0
+      ;;
+    # The executable's exit-time code, the report included, runs before that of the
+    # shared libraries it depends on (#158).
+    ct_leak_exit_shared_library.cpp)
+      echo leak-report
+      return 0
+      ;;
   esac
+  return 1
 }
 
 # Fixtures that cannot be checked deterministically.
@@ -198,8 +213,12 @@ SKIP=0
 XFAIL=0
 XPASS=0
 
+# Why the last check_one failed: "leak-report" (see known_failure), or "other".
+CHECK_FAILURE=""
+
 check_one() {
   local test_file="$1"
+  CHECK_FAILURE=other
   local base="${test_file%.*}"
   local bin="${OUT_DIR}/${base}"
   local compile_log="${OUT_DIR}/${base}.compile.log"
@@ -274,13 +293,15 @@ check_one() {
     fi
   done
 
+  # An unexpected leak report is reported after the other checks, which must pass for it
+  # to be the only failure.
+  local leak_report=0
   local leaks
   leaks="$(expect_leaks "${test_file}")"
   case "${leaks}" in
     none)
       if grep -q "ct: leaks detected" "${err_log}"; then
-        echo "  unexpected leak report (see ${err_log})"
-        return 1
+        leak_report=1
       fi
       ;;
     any) ;;
@@ -303,6 +324,18 @@ check_one() {
     echo "  stdout does not contain '${needle}' (see ${out_log})"
     return 1
   fi
+  if [[ "${leak_report}" -eq 1 ]]; then
+    echo "  unexpected leak report (see ${err_log})"
+    # Only blocks the fixture allocated: a leak from elsewhere is another defect.
+    local reported fixture_blocks
+    reported="$(grep -c "ct: leak ptr=" "${err_log}" || true)"
+    fixture_blocks="$(grep -c "ct: leak ptr=.* alloc_site=[^ ]*${test_file}:" "${err_log}" || true)"
+    if [[ "${reported}" -gt 0 && "${reported}" -eq "${fixture_blocks}" ]]; then
+      CHECK_FAILURE=leak-report
+    fi
+    return 1
+  fi
+  CHECK_FAILURE=""
   return 0
 }
 
@@ -313,27 +346,29 @@ for t in "${TESTS[@]}"; do
     SKIP=$((SKIP + 1))
     continue
   fi
-  if known_failure "${t}"; then
+  if expected="$(known_failure "${t}")"; then
     if check_one "${t}"; then
       echo "  XPASS: known failure now passes, remove it from known_failure"
       XPASS=$((XPASS + 1))
-    else
-      echo "  XFAIL"
-      XFAIL=$((XFAIL + 1))
+      continue
     fi
-    continue
-  fi
-  if check_one "${t}"; then
+    if [[ "${CHECK_FAILURE}" == "${expected}" ]]; then
+      echo "  XFAIL (${expected})"
+      XFAIL=$((XFAIL + 1))
+      continue
+    fi
+    echo "  expected only a ${expected} failure, got another one"
+  elif check_one "${t}"; then
     echo "  OK"
     PASS=$((PASS + 1))
-  else
-    echo "  FAIL"
-    FAIL=$((FAIL + 1))
-    # The run's stderr stays on the machine that ran the suite: show its end, for CI.
-    err_log="${OUT_DIR}/${t%.*}.err.log"
-    if [[ -f "${err_log}" ]]; then
-      tail -n 20 "${err_log}" | sed 's/^/    | /'
-    fi
+    continue
+  fi
+  echo "  FAIL"
+  FAIL=$((FAIL + 1))
+  # The run's stderr stays on the machine that ran the suite: show its end, for CI.
+  err_log="${OUT_DIR}/${t%.*}.err.log"
+  if [[ -f "${err_log}" ]]; then
+    tail -n 20 "${err_log}" | sed 's/^/    | /'
   fi
 done
 
