@@ -12,7 +12,12 @@ From v0.8.0 on, each release also has detailed notes on the
 [releases page](https://github.com/CoreTrace/coretrace-compiler/releases), citing every
 pull request.
 
-## Unreleased
+## v0.11.0 (2026-10-04)
+
+Builds with LLVM 21 to 23, tests every system and LLVM version combination in its own CI
+job, and keeps `returns_twice` on `setjmp` in instrumented code. The runtime's leak report
+runs after the program's own exit-time code, and the conservative auto-free scan, `fork()`
+and `setjmp`/`longjmp` no longer hang, crash or exhaust the runtime.
 
 ### Features
 
@@ -23,10 +28,11 @@ pull request.
 - **Runtime ABI.** Two entry points are added, `__ct_schedule_leak_report` and
   `__ct_stack_depth` (#132, #137). Objects instrumented by this version need its
   runtime; objects instrumented by 0.10.0 still link with it.
-- **Leak report timing.** The report now runs after the program's own exit-time code:
-  destructors of global objects, exit handlers and destructor functions (#132, #130).
+- **Leak report timing.** The report now runs after the destructors of global objects,
+  the `atexit` handlers and the destructor functions of instrumented modules (#132, #130).
   Blocks they release are no longer reported as leaks. Every module the alloc pass
-  instruments gets a constructor of priority 1 for that.
+  instruments gets a constructor of priority 1 for that. Exit-time code of other modules
+  may still run after it (#152).
 - **Opting out of instrumentation.** A function declared
   `__attribute__((no_instrument_function))` or
   `__attribute__((disable_sanitizer_instrumentation))` is no longer instrumented
@@ -49,8 +55,10 @@ pull request.
   loop or a branch, which failed compilations with the default modules (#128, #125,
   #126).
 - **Auto-free scan.** It no longer allocates, logs or calls dyld while other threads
-  are suspended, which could hang a multithreaded program (#123, #118), and no longer
-  reads the stack of a thread that exited (#129).
+  are suspended, which could hang a multithreaded program (#123, #118). It no longer
+  reads the stack of a thread that exited (#129), nor crashes reading the stack of a
+  thread that is exiting, which the kernel unmaps while the thread can still be
+  suspended (#150, #148).
 - **Constructor order on macOS.** Instrumented objects ran the constructors and
   destructors of a file in reverse priority order (#132, part of #131).
 - **Windows.** A global object that allocates in its constructor no longer crashes the
@@ -59,8 +67,6 @@ pull request.
   lock another thread held (#134, #133).
 - **`setjmp`/`longjmp`.** Frames left by `longjmp` no longer fill the registry of stack
   objects until stack checks stop (#137, #135).
-- **Auto-free scan.** It no longer crashes reading the stack of a thread that is exiting,
-  which the kernel unmaps while the thread can still be suspended (#150, #148).
 - **Objective-C with Clang 23.** Allocations sent through selector stubs
   (`objc_msgSend$new`, `objc_msgSend$allocWithZone:`), which Clang 23 emits for Apple
   targets, are tracked (#147).
@@ -88,6 +94,13 @@ pull request.
 - The fuzzer reports a module that `cc` cannot compile without `--instrument` either, a
   bug in LLVM's own code generation, as skipped instead of failed, and no longer stops at
   the first failing module (#147).
+
+### Documentation
+
+- Code of conduct, authors, changelog and security policy files (#143, #144); private
+  vulnerability reporting is enabled on the repository.
+- The README's "LLVM versions" section lists what differs between LLVM versions, the
+  limitations of LLVM 16 and 17 among them (#155).
 
 ## v0.10.0 (2026-09-29)
 
