@@ -46,6 +46,18 @@ flags_for() {
   esac
 }
 
+# Units built apart from a fixture, which run exit-time code the instrumentation does not
+# see: "plain:<file>" is compiled without --instrument and linked before the fixture,
+# "shared:<file>" is built into a shared library, without --instrument, that the fixture
+# links with.
+companion_for() {
+  case "$1" in
+    ct_leak_exit_uninstrumented_first.cpp) echo "plain:ct_leak_exit_uninstrumented_first_plain.cpp" ;;
+    ct_leak_exit_shared_library.cpp) echo "shared:ct_leak_exit_shared_library_lib.cpp" ;;
+    *) echo "" ;;
+  esac
+}
+
 # Expected exit code of the instrumented program.
 expect_exit() {
   echo 0
@@ -102,7 +114,8 @@ expect_stdout() {
     ct_bounds_stack_longjmp.c) echo "recovered=1000" ;;
     ct_bounds_stack_deep_valid.c) echo "again=" ;;
     ct_bounds_freed_address_reuse.c) echo "sum=" ;;
-    ct_leak_static_destructor.cpp|ct_leak_destructor_function.c) echo "ok" ;;
+    ct_leak_static_destructor.cpp|ct_leak_destructor_function.c|\
+    ct_leak_exit_uninstrumented_first.cpp|ct_leak_exit_shared_library.cpp) echo "ok" ;;
     ct_threads_stress.c) echo "damaged=0" ;;
     ct_fork_threads.c) echo "hung=0" ;;
     *) echo "" ;;
@@ -164,6 +177,8 @@ TESTS=(
   ct_double_delete_site.cpp
   ct_leak_static_destructor.cpp
   ct_leak_destructor_function.c
+  ct_leak_exit_uninstrumented_first.cpp
+  ct_leak_exit_shared_library.cpp
   ct_shadow_pages.c
   ct_vtable_basic.cpp
   ct_vtable_interface.cpp
@@ -193,10 +208,40 @@ check_one() {
   local flags
   flags="$(flags_for "${test_file}")"
 
+  local before=()
+  local after=()
+  local companion
+  companion="$(companion_for "${test_file}")"
+  if [[ -n "${companion}" ]]; then
+    local unit="${ROOT_DIR}/test/${companion#*:}"
+    case "${companion}" in
+      plain:*)
+        # shellcheck disable=SC2086
+        "${CC_BIN}" ${CT_TEST_OPT:+"${CT_TEST_OPT}"} -c "${unit}" -o "${OUT_DIR}/${base}_plain.o" \
+          >"${compile_log}" 2>&1 || {
+            echo "  companion compile failed (see ${compile_log})"
+            return 1
+          }
+        before=("${OUT_DIR}/${base}_plain.o")
+        ;;
+      shared:*)
+        local library="${OUT_DIR}/lib${base}.so"
+        [[ "$(uname -s)" == Darwin ]] && library="${OUT_DIR}/lib${base}.dylib"
+        # shellcheck disable=SC2086
+        "${CC_BIN}" ${CT_TEST_OPT:+"${CT_TEST_OPT}"} -shared -fPIC "${unit}" -o "${library}" \
+          >"${compile_log}" 2>&1 || {
+            echo "  companion compile failed (see ${compile_log})"
+            return 1
+          }
+        after=("${library}" "-Wl,-rpath,${OUT_DIR}")
+        ;;
+    esac
+  fi
+
   # shellcheck disable=SC2086
   "${CC_BIN}" --instrument ${CT_TEST_OPT:+"${CT_TEST_OPT}"} ${flags} \
-    "${ROOT_DIR}/test/${test_file}" -o "${bin}" \
-    >"${compile_log}" 2>&1 || {
+    ${before[@]+"${before[@]}"} "${ROOT_DIR}/test/${test_file}" ${after[@]+"${after[@]}"} \
+    -o "${bin}" >>"${compile_log}" 2>&1 || {
       echo "  compile failed (see ${compile_log})"
       return 1
     }
