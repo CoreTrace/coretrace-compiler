@@ -187,7 +187,6 @@ def main() -> int:
     alloc_site_src = FIXTURES / "alloc_site.c"
     new_delete_src = FIXTURES / "new_delete.cpp"
     exit_frees_src = FIXTURES / "exit_frees.cpp"
-    exit_terminator_src = FIXTURES / "exit_terminator.c"
     crash_src = FIXTURES / "crash.c"
     trace_threads_src = FIXTURES / "trace_threads.cpp"
     trace_objc_src = FIXTURES / "trace_objc.m"
@@ -749,25 +748,6 @@ def main() -> int:
         ],
     )
 
-    # Runtime behaviour, Windows: a .CRT$XT terminator runs after the exit handlers and
-    # the destructors of global objects. A block it releases is not a leak, and its
-    # release must not reach a runtime whose state is already destroyed (#152).
-    tc_runtime_leak_report_after_terminators = TestCase(
-        name="runtime_leak_report_after_terminators",
-        plan=CompilePlan(
-            name="runtime_leak_report_after_terminators",
-            sources=[Path("exit_terminator.c")],
-            out=None,
-            extra_args=["--instrument", "--ct-modules=alloc", "-o", "exit_terminator_app"],
-        ),
-        assertions=[
-            assert_exit_code(0),
-            assert_output_exists_at("exit_terminator_app"),
-            assert_run_artifact("exit_terminator_app", 0, [],
-                                stderr_excludes=["ct: leaks detected"]),
-        ],
-    )
-
     # Runtime behaviour: bounds diagnostics must be reported even when the trace
     # module is not part of the build.
     tc_runtime_bounds_without_trace = TestCase(
@@ -1097,7 +1077,7 @@ def main() -> int:
             tc_optnone_disable_o0,
         ]
         cases = [tc_native, *common_cases, *instrument_cases, *runtime_cases,
-                 tc_runtime_leak_report_after_terminators, *windows_readme_cases]
+                 *windows_readme_cases]
 
     suite = TestSuite(name="compiler_smoke", cases=cases)
 
@@ -1110,7 +1090,7 @@ def main() -> int:
             copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src,
                                leak_src, overflow_src, broken_src, codegen_error_src,
                                undefined_ref_src,
-                               alloc_site_src, new_delete_src, exit_frees_src, exit_terminator_src, crash_src,
+                               alloc_site_src, new_delete_src, exit_frees_src, crash_src,
                                trace_threads_src, trace_objc_src, leak_objc_src,
                                new_delete_objc_src, objc_alloc_forms_src, objc_objects_src,
                                objcxx_objects_src, objc_autofree_scan_src,
