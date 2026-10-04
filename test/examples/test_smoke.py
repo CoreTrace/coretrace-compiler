@@ -748,6 +748,25 @@ def main() -> int:
         ],
     )
 
+    # Runtime behaviour, Windows: a .CRT$XT terminator runs after the exit handlers and
+    # the destructors of global objects. A block it releases is not a leak, and its
+    # release must not reach a runtime whose state is already destroyed (#152).
+    tc_runtime_leak_report_after_terminators = TestCase(
+        name="runtime_leak_report_after_terminators",
+        plan=CompilePlan(
+            name="runtime_leak_report_after_terminators",
+            sources=[Path("exit_terminator.c")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=alloc", "-o", "exit_terminator_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("exit_terminator_app"),
+            assert_run_artifact("exit_terminator_app", 0, [],
+                                stderr_excludes=["ct: leaks detected"]),
+        ],
+    )
+
     # Runtime behaviour: bounds diagnostics must be reported even when the trace
     # module is not part of the build.
     tc_runtime_bounds_without_trace = TestCase(
@@ -1077,7 +1096,7 @@ def main() -> int:
             tc_optnone_disable_o0,
         ]
         cases = [tc_native, *common_cases, *instrument_cases, *runtime_cases,
-                 *windows_readme_cases]
+                 tc_runtime_leak_report_after_terminators, *windows_readme_cases]
 
     suite = TestSuite(name="compiler_smoke", cases=cases)
 
