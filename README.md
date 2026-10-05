@@ -203,12 +203,14 @@ What the tests check, in CI:
 | Destructor functions (`__attribute__((destructor))`) of default priority, in instrumented code | yes | yes | not tested |
 | The same in objects compiled without `--instrument` and linked before the instrumented ones | yes | **no** (#152) | not tested |
 | The same in a shared library the program links with | **no** (#158) | **no** (#158) | not tested |
-| A terminator placed in `.CRT$XT` | — | — | **no**: the program crashes (#159) |
+| A terminator placed in `.CRT$XTU`, in instrumented code | — | — | yes |
 
 In the cases marked **no**, the report runs before that code: the blocks it releases are listed
-as leaks. On Windows, a `.CRT$XT` terminator that releases a tracked block also crashes the
-program, because the runtime's state is already destroyed. The test suite expects exactly these
-failures, so a change in behaviour shows up.
+as leaks. The test suite expects exactly these failures, so a change in behaviour shows up.
+
+On Windows, the report is itself a terminator, in `.CRT$XTY`, and the runtime's allocation table
+and its lock are never destroyed: blocks can still be released after the destructors of every
+static object.
 
 ## LLVM versions
 
