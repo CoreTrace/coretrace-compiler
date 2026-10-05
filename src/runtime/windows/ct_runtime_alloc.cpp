@@ -5,7 +5,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <malloc.h>
-#include <mutex>
 #include <new>
 #include <unordered_map>
 #include <utility>
@@ -17,9 +16,9 @@
 #include <windows.h>
 
 // The objects of this file are constructed before the program's and destroyed after them:
-// the program's static initializers may already allocate through the table, and the leak
-// report, ct_leak_reporter's destructor, must come after the destructors of the program's
-// global objects and its exit handlers, which release blocks too.
+// the program's static initializers may already allocate through the table, and
+// ct_exit_logging's destructor must come after the destructors of the program's global
+// objects and its exit handlers.
 #pragma init_seg(lib)
 
 namespace
@@ -54,8 +53,20 @@ namespace
         unsigned char kind = CT_ALLOC_KIND_MALLOC;
     };
 
-    std::mutex ct_alloc_mutex;
-    std::unordered_map<void*, CtAllocEntry> ct_alloc_table;
+    // The table and its lock live until the process ends: .CRT$XT terminators, which the
+    // CRT runs after the destructors of every static object, may still release blocks, and
+    // the leak report runs among them (#159). The lock needs no constructor nor destructor;
+    // the table is built on first use, in storage nothing destroys.
+    SRWLOCK ct_alloc_lock = SRWLOCK_INIT;
+
+    using CtAllocTable = std::unordered_map<void*, CtAllocEntry>;
+
+    CT_NOINSTR CtAllocTable& ct_alloc_table()
+    {
+        alignas(CtAllocTable) static unsigned char storage[sizeof(CtAllocTable)];
+        static CtAllocTable* const table = new (storage) CtAllocTable();
+        return *table;
+    }
 
     CT_NODISCARD CT_NOINSTR const char* ct_kind_name(unsigned char kind)
     {
@@ -223,8 +234,8 @@ namespace
             return 0;
         }
 
-        auto it = ct_alloc_table.find(ptr);
-        if (it == ct_alloc_table.end())
+        auto it = ct_alloc_table().find(ptr);
+        if (it == ct_alloc_table().end())
         {
             return 0;
         }
@@ -469,7 +480,7 @@ namespace
                                              nullptr);
         }
 
-        auto& entry = ct_alloc_table[new_ptr];
+        auto& entry = ct_alloc_table()[new_ptr];
         entry.size = size;
         entry.req_size = size;
         entry.site = site;
@@ -530,74 +541,82 @@ namespace
             {ptr, size, static_cast<unsigned char>(ct_release_api_for_kind(kind)), kind});
     }
 
-    // Runs as a static destructor, possibly after the logger's own state is gone: only the
-    // lock-free writers, as in the POSIX leak report.
-    struct CtLeakReporter
+    // The leak report, a .CRT$XT terminator: the CRT runs it after the destructors of every
+    // static object and the program's own .CRT$XTU terminators, which release blocks too.
+    // The logger's state is gone by then, and logging off (ct_exit_logging): only the
+    // lock-free writers.
+    CT_NOINSTR void ct_report_leaks()
+    {
+        std::vector<std::pair<void*, CtAllocEntry>> leaks;
+
+        ct_lock_acquire();
+        for (const auto& [ptr, entry] : ct_alloc_table())
+        {
+            if (entry.state == CT_ENTRY_USED)
+            {
+                leaks.push_back({ptr, entry});
+            }
+        }
+        ct_lock_release();
+
+        if (leaks.empty())
+        {
+            return;
+        }
+
+        ct_write_prefix_nolock(CTLevel::Error);
+        ct_write_cstr("ct: leaks detected count=");
+        ct_write_dec(leaks.size());
+        ct_write_cstr("\n");
+
+        size_t reported = 0;
+        for (const auto& [ptr, entry] : leaks)
+        {
+            ct_write_prefix_nolock(CTLevel::Warn);
+            ct_write_cstr("ct: leak ptr=");
+            ct_write_hex(reinterpret_cast<uintptr_t>(ptr));
+            ct_write_cstr(" size=");
+            ct_write_dec(entry.size);
+            ct_write_cstr(" alloc_site=");
+            ct_write_cstr(ct_site_name(entry.site));
+            ct_write_cstr("\n");
+
+            if (++reported >= 32)
+            {
+                ct_write_prefix_nolock(CTLevel::Warn);
+                ct_write_cstr("ct: leak list truncated\n");
+                break;
+            }
+        }
+    }
+
+    // Constructed in this file's init_seg, so destroyed after the program's static objects
+    // and before its terminators. From there on, releases do not log: the logger's state may
+    // already be destroyed.
+    struct CtExitLogging
     {
         // User-provided, so that the object is initialized dynamically, in this file's
         // init_seg: clang registers the destructor of a constant-initialized object from
-        // .CRT$XCU, with the program's own objects, whose destructors then ran after the
-        // report.
-        CT_NOINSTR CtLeakReporter() {}
+        // .CRT$XCU, with the program's own objects.
+        CT_NOINSTR CtExitLogging() {}
 
-        CT_NOINSTR ~CtLeakReporter()
+        CT_NOINSTR ~CtExitLogging()
         {
-            std::vector<std::pair<void*, CtAllocEntry>> leaks;
-
-            ct_lock_acquire();
-            for (const auto& [ptr, entry] : ct_alloc_table)
-            {
-                if (entry.state == CT_ENTRY_USED)
-                {
-                    leaks.push_back({ptr, entry});
-                }
-            }
-            ct_lock_release();
-
-            if (leaks.empty())
-            {
-                return;
-            }
-
             ct_disable_logging();
-            ct_write_prefix_nolock(CTLevel::Error);
-            ct_write_cstr("ct: leaks detected count=");
-            ct_write_dec(leaks.size());
-            ct_write_cstr("\n");
-
-            size_t reported = 0;
-            for (const auto& [ptr, entry] : leaks)
-            {
-                ct_write_prefix_nolock(CTLevel::Warn);
-                ct_write_cstr("ct: leak ptr=");
-                ct_write_hex(reinterpret_cast<uintptr_t>(ptr));
-                ct_write_cstr(" size=");
-                ct_write_dec(entry.size);
-                ct_write_cstr(" alloc_site=");
-                ct_write_cstr(ct_site_name(entry.site));
-                ct_write_cstr("\n");
-
-                if (++reported >= 32)
-                {
-                    ct_write_prefix_nolock(CTLevel::Warn);
-                    ct_write_cstr("ct: leak list truncated\n");
-                    break;
-                }
-            }
         }
     };
 
-    CtLeakReporter ct_leak_reporter;
+    CtExitLogging ct_exit_logging;
 } // namespace
 
 CT_NOINSTR void ct_lock_acquire(void)
 {
-    ct_alloc_mutex.lock();
+    AcquireSRWLockExclusive(&ct_alloc_lock);
 }
 
 CT_NOINSTR void ct_lock_release(void)
 {
-    ct_alloc_mutex.unlock();
+    ReleaseSRWLockExclusive(&ct_alloc_lock);
 }
 
 CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t size,
@@ -610,7 +629,7 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t s
 
     try
     {
-        auto& entry = ct_alloc_table[ptr];
+        auto& entry = ct_alloc_table()[ptr];
         entry.size = size;
         entry.req_size = req_size;
         entry.site = site;
@@ -627,11 +646,11 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t s
 // The allocator's side of the quarantine, see ct_runtime_quarantine.h.
 CT_NOINSTR void ct_table_forget_freed(void* ptr)
 {
-    auto it = ct_alloc_table.find(ptr);
-    if (it != ct_alloc_table.end() &&
+    auto it = ct_alloc_table().find(ptr);
+    if (it != ct_alloc_table().end() &&
         (it->second.state == CT_ENTRY_FREED || it->second.state == CT_ENTRY_AUTOFREED))
     {
-        ct_alloc_table.erase(it);
+        ct_alloc_table().erase(it);
     }
 }
 
@@ -656,8 +675,8 @@ CT_NODISCARD CT_NOINSTR int ct_table_lookup(const void* ptr, size_t* size_out, s
         return 0;
     }
 
-    auto it = ct_alloc_table.find(const_cast<void*>(ptr));
-    if (it == ct_alloc_table.end())
+    auto it = ct_alloc_table().find(const_cast<void*>(ptr));
+    if (it == ct_alloc_table().end())
     {
         return 0;
     }
@@ -693,7 +712,7 @@ CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void* ptr, void** b
     }
 
     const uintptr_t value = reinterpret_cast<uintptr_t>(ptr);
-    for (const auto& [base_ptr, entry] : ct_alloc_table)
+    for (const auto& [base_ptr, entry] : ct_alloc_table())
     {
         if (entry.state != CT_ENTRY_USED && entry.state != CT_ENTRY_FREED &&
             entry.state != CT_ENTRY_AUTOFREED)
@@ -1067,7 +1086,13 @@ extern "C"
         ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayDestroying, site);
     }
 
-    // The report is the destructor of ct_leak_reporter, constructed before the program's
-    // own static objects (init_seg above).
+    // The report is a .CRT$XTY terminator (ct_report_leaks_at_exit), which needs no
+    // scheduling.
     CT_NOINSTR void __ct_schedule_leak_report(void) {}
 }
+
+// .CRT$XTY: after the program's terminators, which take .CRT$XTU, and before the CRT's own,
+// .CRT$XTZ closing the list.
+#pragma section(".CRT$XTY", read)
+__declspec(allocate(".CRT$XTY"))
+__attribute__((used)) static void (*const ct_report_leaks_at_exit)(void) = ct_report_leaks;
