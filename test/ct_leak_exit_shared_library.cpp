@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// The leak report must come after the exit-time code of shared libraries (#152):
+// The leak report must come after the exit-time code of shared libraries (#158):
 // ct_leak_exit_shared_library_lib.cpp, built into a shared library without --instrument,
 // calls back into this program from its global object's destructor (16 bytes) and from
 // its destructor function (24 bytes), which release tracked blocks: none is a leak.

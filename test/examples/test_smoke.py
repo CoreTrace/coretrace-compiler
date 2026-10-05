@@ -751,7 +751,7 @@ def main() -> int:
 
     # Runtime behaviour, Windows: a .CRT$XT terminator runs after the exit handlers and
     # the destructors of global objects. A block it releases is not a leak, and its
-    # release must not reach a runtime whose state is already destroyed (#152).
+    # release must not reach a runtime whose state is already destroyed (#159).
     tc_runtime_leak_report_after_terminators = TestCase(
         name="runtime_leak_report_after_terminators",
         plan=CompilePlan(
