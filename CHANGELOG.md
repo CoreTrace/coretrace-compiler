@@ -14,6 +14,13 @@ pull request.
 
 ## Unreleased
 
+### Fixes
+
+- **Windows.** A `.CRT$XT` terminator that releases a tracked block no longer crashes the
+  program, and its block is no longer reported as a leak. The runtime's allocation table and
+  its lock are never destroyed, and the leak report is a `.CRT$XTY` terminator, after the
+  program's own (#160, #159).
+
 ### Tests and CI
 
 - Fixtures check that the leak report comes after the exit-time code of objects compiled
@@ -24,7 +31,7 @@ pull request.
 ### Documentation
 
 - The README's "Leak report" section lists which exit-time code the report is checked to
-  come after, per system, and the confirmed limitations (#157, #159).
+  come after, per system, and the confirmed limitations (#157, #160).
 
 ## v0.11.0 (2026-10-04)
 
