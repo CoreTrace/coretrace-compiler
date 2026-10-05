@@ -12,6 +12,20 @@ From v0.8.0 on, each release also has detailed notes on the
 [releases page](https://github.com/CoreTrace/coretrace-compiler/releases), citing every
 pull request.
 
+## Unreleased
+
+### Tests and CI
+
+- Fixtures check that the leak report comes after the exit-time code of objects compiled
+  without `--instrument` and of shared libraries. They reproduce two known defects, on
+  macOS for the first (#152) and on Linux and macOS for the second (#158). The runtime
+  suite expects exactly these failures: any other failure of the fixtures fails it (#157).
+
+### Documentation
+
+- The README's "Leak report" section lists which exit-time code the report is checked to
+  come after, per system, and the confirmed limitations (#157, #159).
+
 ## v0.11.0 (2026-10-04)
 
 Builds with LLVM 21 to 23, tests every system and LLVM version combination in its own CI

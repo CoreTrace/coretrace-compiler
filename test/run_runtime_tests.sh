@@ -46,6 +46,18 @@ flags_for() {
   esac
 }
 
+# Units built apart from a fixture, which run exit-time code the instrumentation does not
+# see: "plain:<file>" is compiled without --instrument and linked before the fixture,
+# "shared:<file>" is built into a shared library, without --instrument, that the fixture
+# links with.
+companion_for() {
+  case "$1" in
+    ct_leak_exit_uninstrumented_first.cpp) echo "plain:ct_leak_exit_uninstrumented_first_plain.cpp" ;;
+    ct_leak_exit_shared_library.cpp) echo "shared:ct_leak_exit_shared_library_lib.cpp" ;;
+    *) echo "" ;;
+  esac
+}
+
 # Expected exit code of the instrumented program.
 expect_exit() {
   echo 0
@@ -102,7 +114,8 @@ expect_stdout() {
     ct_bounds_stack_longjmp.c) echo "recovered=1000" ;;
     ct_bounds_stack_deep_valid.c) echo "again=" ;;
     ct_bounds_freed_address_reuse.c) echo "sum=" ;;
-    ct_leak_static_destructor.cpp|ct_leak_destructor_function.c) echo "ok" ;;
+    ct_leak_static_destructor.cpp|ct_leak_destructor_function.c|\
+    ct_leak_exit_uninstrumented_first.cpp|ct_leak_exit_shared_library.cpp) echo "ok" ;;
     ct_threads_stress.c) echo "damaged=0" ;;
     ct_fork_threads.c) echo "hung=0" ;;
     *) echo "" ;;
@@ -114,13 +127,28 @@ expect_stdout() {
 FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-overflow"
                   "mutex lock failed" "terminating due to")
 
-# Fixtures whose failure is a known, tracked defect. The suite still runs them and
-# reports XFAIL; an unexpected pass is reported as XPASS and fails the suite so the
-# entry gets removed once the defect is fixed.
+# Fixtures whose failure is a known, tracked defect, and the one failure expected of them,
+# as check_one classifies it. Only that failure is reported as XFAIL: any other one, such
+# as a compile error, a timeout, a crash or another wrong output, still fails the suite.
+# An unexpected pass is reported as XPASS and fails the suite too, so that the entry is
+# removed once the defect is fixed.
+#   leak-report: the program runs correctly, but the leak report lists blocks the fixture
+#                allocated, and only those.
 known_failure() {
   case "$1" in
-    *) return 1 ;;
+    # Exit-time code of objects linked before the first instrumented one runs after the
+    # report on macOS, where initializers run in link order (#152).
+    ct_leak_exit_uninstrumented_first.cpp)
+      [[ "$(uname -s)" == Darwin ]] && echo leak-report && return 0
+      ;;
+    # The executable's exit-time code, the report included, runs before that of the
+    # shared libraries it depends on (#158).
+    ct_leak_exit_shared_library.cpp)
+      echo leak-report
+      return 0
+      ;;
   esac
+  return 1
 }
 
 # Fixtures that cannot be checked deterministically.
@@ -164,6 +192,8 @@ TESTS=(
   ct_double_delete_site.cpp
   ct_leak_static_destructor.cpp
   ct_leak_destructor_function.c
+  ct_leak_exit_uninstrumented_first.cpp
+  ct_leak_exit_shared_library.cpp
   ct_shadow_pages.c
   ct_vtable_basic.cpp
   ct_vtable_interface.cpp
@@ -183,8 +213,12 @@ SKIP=0
 XFAIL=0
 XPASS=0
 
+# Why the last check_one failed: "leak-report" (see known_failure), or "other".
+CHECK_FAILURE=""
+
 check_one() {
   local test_file="$1"
+  CHECK_FAILURE=other
   local base="${test_file%.*}"
   local bin="${OUT_DIR}/${base}"
   local compile_log="${OUT_DIR}/${base}.compile.log"
@@ -193,10 +227,40 @@ check_one() {
   local flags
   flags="$(flags_for "${test_file}")"
 
+  local before=()
+  local after=()
+  local companion
+  companion="$(companion_for "${test_file}")"
+  if [[ -n "${companion}" ]]; then
+    local unit="${ROOT_DIR}/test/${companion#*:}"
+    case "${companion}" in
+      plain:*)
+        # shellcheck disable=SC2086
+        "${CC_BIN}" ${CT_TEST_OPT:+"${CT_TEST_OPT}"} -c "${unit}" -o "${OUT_DIR}/${base}_plain.o" \
+          >"${compile_log}" 2>&1 || {
+            echo "  companion compile failed (see ${compile_log})"
+            return 1
+          }
+        before=("${OUT_DIR}/${base}_plain.o")
+        ;;
+      shared:*)
+        local library="${OUT_DIR}/lib${base}.so"
+        [[ "$(uname -s)" == Darwin ]] && library="${OUT_DIR}/lib${base}.dylib"
+        # shellcheck disable=SC2086
+        "${CC_BIN}" ${CT_TEST_OPT:+"${CT_TEST_OPT}"} -shared -fPIC "${unit}" -o "${library}" \
+          >"${compile_log}" 2>&1 || {
+            echo "  companion compile failed (see ${compile_log})"
+            return 1
+          }
+        after=("${library}" "-Wl,-rpath,${OUT_DIR}")
+        ;;
+    esac
+  fi
+
   # shellcheck disable=SC2086
   "${CC_BIN}" --instrument ${CT_TEST_OPT:+"${CT_TEST_OPT}"} ${flags} \
-    "${ROOT_DIR}/test/${test_file}" -o "${bin}" \
-    >"${compile_log}" 2>&1 || {
+    ${before[@]+"${before[@]}"} "${ROOT_DIR}/test/${test_file}" ${after[@]+"${after[@]}"} \
+    -o "${bin}" >>"${compile_log}" 2>&1 || {
       echo "  compile failed (see ${compile_log})"
       return 1
     }
@@ -229,13 +293,15 @@ check_one() {
     fi
   done
 
+  # An unexpected leak report is reported after the other checks, which must pass for it
+  # to be the only failure.
+  local leak_report=0
   local leaks
   leaks="$(expect_leaks "${test_file}")"
   case "${leaks}" in
     none)
       if grep -q "ct: leaks detected" "${err_log}"; then
-        echo "  unexpected leak report (see ${err_log})"
-        return 1
+        leak_report=1
       fi
       ;;
     any) ;;
@@ -258,6 +324,18 @@ check_one() {
     echo "  stdout does not contain '${needle}' (see ${out_log})"
     return 1
   fi
+  if [[ "${leak_report}" -eq 1 ]]; then
+    echo "  unexpected leak report (see ${err_log})"
+    # Only blocks the fixture allocated: a leak from elsewhere is another defect.
+    local reported fixture_blocks
+    reported="$(grep -c "ct: leak ptr=" "${err_log}" || true)"
+    fixture_blocks="$(grep -c "ct: leak ptr=.* alloc_site=[^ ]*${test_file}:" "${err_log}" || true)"
+    if [[ "${reported}" -gt 0 && "${reported}" -eq "${fixture_blocks}" ]]; then
+      CHECK_FAILURE=leak-report
+    fi
+    return 1
+  fi
+  CHECK_FAILURE=""
   return 0
 }
 
@@ -268,27 +346,29 @@ for t in "${TESTS[@]}"; do
     SKIP=$((SKIP + 1))
     continue
   fi
-  if known_failure "${t}"; then
+  if expected="$(known_failure "${t}")"; then
     if check_one "${t}"; then
       echo "  XPASS: known failure now passes, remove it from known_failure"
       XPASS=$((XPASS + 1))
-    else
-      echo "  XFAIL"
-      XFAIL=$((XFAIL + 1))
+      continue
     fi
-    continue
-  fi
-  if check_one "${t}"; then
+    if [[ "${CHECK_FAILURE}" == "${expected}" ]]; then
+      echo "  XFAIL (${expected})"
+      XFAIL=$((XFAIL + 1))
+      continue
+    fi
+    echo "  expected only a ${expected} failure, got another one"
+  elif check_one "${t}"; then
     echo "  OK"
     PASS=$((PASS + 1))
-  else
-    echo "  FAIL"
-    FAIL=$((FAIL + 1))
-    # The run's stderr stays on the machine that ran the suite: show its end, for CI.
-    err_log="${OUT_DIR}/${t%.*}.err.log"
-    if [[ -f "${err_log}" ]]; then
-      tail -n 20 "${err_log}" | sed 's/^/    | /'
-    fi
+    continue
+  fi
+  echo "  FAIL"
+  FAIL=$((FAIL + 1))
+  # The run's stderr stays on the machine that ran the suite: show its end, for CI.
+  err_log="${OUT_DIR}/${t%.*}.err.log"
+  if [[ -f "${err_log}" ]]; then
+    tail -n 20 "${err_log}" | sed 's/^/    | /'
   fi
 done
 

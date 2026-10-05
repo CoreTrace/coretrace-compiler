@@ -187,6 +187,29 @@ Notes:
 - Clang automatically adds `optnone` at `-O0`. Use `--ct-optnone` to force the attribute even when
   passing `-Xclang -disable-O0-optnone`.
 
+## Leak report
+
+When an instrumented program exits, the runtime lists the tracked blocks still allocated:
+`ct: leaks detected count=N`, then one `ct: leak` line per block, with the site that allocated it.
+The report is meant to run after the program's own exit-time code, so that the blocks that code
+releases are not reported.
+
+What the tests check, in CI:
+
+| Exit-time code that releases blocks | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Destructors of global objects of instrumented code | yes | yes | yes |
+| `atexit` handlers registered by instrumented code | yes | yes | not tested |
+| Destructor functions (`__attribute__((destructor))`) of default priority, in instrumented code | yes | yes | not tested |
+| The same in objects compiled without `--instrument` and linked before the instrumented ones | yes | **no** (#152) | not tested |
+| The same in a shared library the program links with | **no** (#158) | **no** (#158) | not tested |
+| A terminator placed in `.CRT$XT` | — | — | **no**: the program crashes (#159) |
+
+In the cases marked **no**, the report runs before that code: the blocks it releases are listed
+as leaks. On Windows, a `.CRT$XT` terminator that releases a tracked block also crashes the
+program, because the runtime's state is already destroyed. The test suite expects exactly these
+failures, so a change in behaviour shows up.
+
 ## LLVM versions
 
 CoreTrace Compiler builds and instruments with LLVM 16 to 23. Most behaviour is the same on
