@@ -201,7 +201,7 @@ What the tests check, in CI:
 | Destructors of global objects of instrumented code | yes | yes | yes |
 | `atexit` handlers registered by instrumented code | yes | yes | not tested |
 | Destructor functions (`__attribute__((destructor))`) of default priority, in instrumented code | yes | yes | not tested |
-| The same in objects compiled without `--instrument` and linked before the instrumented ones | yes | **no** (#152) | not tested |
+| The same in objects compiled without `--instrument` and linked before the instrumented ones | yes | **no** (#161) | not tested |
 | The same in a shared library the program links with | **no** (#158) | **no** (#158) | not tested |
 | A terminator placed in `.CRT$XTU`, in instrumented code | — | — | yes |
 

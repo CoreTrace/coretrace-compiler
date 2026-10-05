@@ -25,7 +25,7 @@ pull request.
 
 - Fixtures check that the leak report comes after the exit-time code of objects compiled
   without `--instrument` and of shared libraries. They reproduce two known defects, on
-  macOS for the first (#152) and on Linux and macOS for the second (#158). The runtime
+  macOS for the first (#161) and on Linux and macOS for the second (#158). The runtime
   suite expects exactly these failures: any other failure of the fixtures fails it (#157).
 
 ### Documentation
