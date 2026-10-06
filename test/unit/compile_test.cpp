@@ -25,6 +25,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -1185,5 +1186,106 @@ int second(int value)
         ASSERT_NE(instrumentedObject.getBinary(), nullptr);
         EXPECT_EQ(codeSections(*instrumentedObject.getBinary()),
                   codeSections(*fromIrObject.getBinary()));
+    }
+
+    // Explicit calls to the memory functions become memory intrinsics, which the bounds
+    // module checks, once clang may treat these functions as builtins (#153).
+    constexpr const char* kMemoryFunctions = R"(typedef __SIZE_TYPE__ size_t;
+void* memcpy(void* destination, const void* source, size_t size);
+void* memset(void* destination, int value, size_t size);
+void* memmove(void* destination, const void* source, size_t size);
+
+void copyBytes(char* destination, const char* source, size_t size)
+{
+    memcpy(destination, source, size);
+}
+
+void fillBytes(char* destination, size_t size)
+{
+    memset(destination, 0, size);
+}
+
+void moveBytes(char* destination, const char* source, size_t size)
+{
+    memmove(destination, source, size);
+}
+)";
+
+    TEST_F(CompileTest, MemoryFunctionsAreBoundsChecked)
+    {
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-O2", "-S", "-emit-llvm", "--ct-modules=bounds",
+                                  writeSource("memory.c", kMemoryFunctions)},
+                                 compilerlib::OutputMode::ToMemory, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        for (const char* function : {"copyBytes", "fillBytes", "moveBytes"})
+        {
+            const std::vector<std::string> called = callees(result.llvmIR, function);
+            EXPECT_NE(std::find(called.begin(), called.end(), "__ct_check_bounds"), called.end())
+                << function << " is not bounds-checked\n"
+                << result.llvmIR;
+        }
+    }
+
+    // The remarks an optimization record holds, as (kind, pass, name, function), ignoring
+    // their arguments, locations and order.
+    std::multiset<std::string> recordedRemarks(const std::string& path)
+    {
+        std::multiset<std::string> remarks;
+        std::ifstream in(path);
+        std::string line;
+        std::string kind;
+        std::string pass;
+        std::string name;
+        auto value = [](const std::string& field)
+        {
+            const size_t colon = field.find(':');
+            const size_t start = field.find_first_not_of(' ', colon + 1);
+            return start == std::string::npos ? std::string() : field.substr(start);
+        };
+        while (std::getline(in, line))
+        {
+            if (line.rfind("--- ", 0) == 0)
+                kind = line.substr(4);
+            else if (line.rfind("Pass:", 0) == 0)
+                pass = value(line);
+            else if (line.rfind("Name:", 0) == 0)
+                name = value(line);
+            else if (line.rfind("Function:", 0) == 0)
+                remarks.insert(kind + " " + pass + " " + name + " " + value(line));
+        }
+        return remarks;
+    }
+
+    // -fsave-optimization-record records the remarks of optimization and of code
+    // generation, for instrumented code as for plain code. The instrumentation passes record
+    // none, and define no function.
+    TEST_F(CompileTest, InstrumentedOptimizationRecordMatchesPlain)
+    {
+        const std::string source = writeSource("unit.c", kSectionUnit);
+        std::multiset<std::string> remarks[2];
+        for (const bool instrument : {false, true})
+        {
+            const std::string object = path(instrument ? "instrumented.o" : "plain.o");
+            compilerlib::CompileResult result =
+                compilerlib::compile({kElfTarget, "-O2", "-fsave-optimization-record", "-c", source,
+                                      "-o", object, "--ct-modules=alloc"},
+                                     compilerlib::OutputMode::ToFile, instrument);
+            ASSERT_TRUE(result.success) << result.diagnostics;
+            remarks[instrument] =
+                recordedRemarks(path(instrument ? "instrumented.opt.yaml" : "plain.opt.yaml"));
+        }
+        EXPECT_FALSE(remarks[false].empty()) << "the test's premise";
+        EXPECT_EQ(remarks[true], remarks[false]);
+    }
+
+    TEST_F(CompileTest, FailedInstrumentedCompilationLeavesNoOptimizationRecord)
+    {
+        compilerlib::CompileResult result = compilerlib::compile(
+            {kElfTarget, "-O2", "-fsave-optimization-record", "-c",
+             CT_TEST_SOURCE_DIR "/examples/fixtures/codegen_error.c", "-o", path("broken.o")},
+            compilerlib::OutputMode::ToFile, /*instrument=*/true);
+        ASSERT_FALSE(result.success);
+        EXPECT_FALSE(fs::exists(path("broken.opt.yaml")));
     }
 } // namespace
