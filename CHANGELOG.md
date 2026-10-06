@@ -14,7 +14,19 @@ pull request.
 
 ## Unreleased
 
+### Behaviour changes
+
+- **One instrumented pipeline on every LLVM version.** compilerlib runs Clang's frontend
+  without optimization, removes the builtin mark from the tracked `operator new` and `delete`
+  calls, then runs Clang's optimization pipeline once. LLVM 16 and 17 no longer compile
+  instrumented code with `-fno-builtin`: `setjmp` keeps `returns_twice`, and explicit
+  `memcpy`, `memset` and `memmove` calls are bounds-checked there too (#168, #153).
+
 ### Fixes
+
+- **Optimization records.** An instrumented object built with `-fsave-optimization-record` no
+  longer crashes the compiler, its record holds the code generation remarks as a plain
+  compilation's does, and a failed compilation leaves no record (#168, #165).
 
 - **Code generation options of instrumented code.** Instrumented objects, IR and bitcode are
   written by Clang's backend, with every code generation option of the compilation, instead of
