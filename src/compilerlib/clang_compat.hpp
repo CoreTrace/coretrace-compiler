@@ -8,6 +8,8 @@
 #include <clang/Basic/CodeGenOptions.h>
 #include <clang/Basic/Diagnostic.h>
 #include <clang/Basic/DiagnosticOptions.h>
+#include <clang/Basic/TargetInfo.h>
+#include <clang/CodeGen/BackendUtil.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/CompilerInvocation.h>
 #include <llvm/ADT/IntrusiveRefCntPtr.h>
@@ -16,6 +18,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Support/VirtualFileSystem.h>
+#include <llvm/Support/raw_ostream.h>
 
 #if LLVM_VERSION_MAJOR >= 18
 #include <llvm/Passes/OptimizationLevel.h>
@@ -74,6 +77,39 @@ namespace compilerlib::clang_compat
 #else
         (void)options;
         (void)function;
+#endif
+    }
+
+    // The file -fstack-usage writes, which LLVM 23 renamed.
+    inline const std::string& stackUsageOutput(const clang::CodeGenOptions& options)
+    {
+#if LLVM_VERSION_MAJOR >= 23
+        return options.StackUsageFile;
+#else
+        return options.StackUsageOutput;
+#endif
+    }
+
+    // Runs Clang's backend on `module` as the instance's frontend action would: its
+    // optimization pipeline unless `options` disable it, then the output `action` asks for,
+    // with the instance's target and code generation options. Diagnostics go to the
+    // instance's engine; code generation errors also go to the module's context.
+    inline void emitBackendOutput(clang::CompilerInstance& ci, clang::CodeGenOptions& options,
+                                  llvm::Module& module, clang::BackendAction action,
+                                  std::unique_ptr<llvm::raw_pwrite_stream> stream)
+    {
+        const llvm::StringRef layout = ci.getTarget().getDataLayoutString();
+#if LLVM_VERSION_MAJOR >= 20
+        clang::emitBackendOutput(ci, options, layout, &module, action,
+                                 ci.getFileManager().getVirtualFileSystemPtr(), std::move(stream));
+#elif LLVM_VERSION_MAJOR >= 17
+        clang::EmitBackendOutput(ci.getDiagnostics(), ci.getHeaderSearchOpts(), options,
+                                 ci.getTargetOpts(), ci.getLangOpts(), layout, &module, action,
+                                 ci.getFileManager().getVirtualFileSystemPtr(), std::move(stream));
+#else
+        clang::EmitBackendOutput(ci.getDiagnostics(), ci.getHeaderSearchOpts(), options,
+                                 ci.getTargetOpts(), ci.getLangOpts(), layout, &module, action,
+                                 std::move(stream));
 #endif
     }
 

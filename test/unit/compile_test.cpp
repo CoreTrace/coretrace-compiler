@@ -8,6 +8,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Object/ObjectFile.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -21,6 +22,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -933,4 +935,255 @@ int main(void)
         EXPECT_FALSE(fs::exists(path("unit.o")));
     }
 
+    // Instrumented objects are emitted by Clang's backend with the invocation's code
+    // generation options, as plain ones are (#131). The sources have no headers, so that an
+    // explicit --target checks ELF and COFF objects from any host.
+    constexpr const char* kSectionUnit = R"(int counter;
+int ratio = 3;
+
+int first(int value)
+{
+    return value + counter;
+}
+
+int second(int value)
+{
+    return value * ratio;
+}
+)";
+
+    constexpr const char* kElfTarget = "--target=x86_64-unknown-linux-gnu";
+    constexpr const char* kCoffTarget = "--target=x86_64-pc-windows-msvc";
+
+    using ObjectBinary = llvm::object::OwningBinary<llvm::object::ObjectFile>;
+
+    // The object file at `path`, or an empty binary after a test failure.
+    ObjectBinary openObject(const std::string& path)
+    {
+        llvm::Expected<ObjectBinary> binary = llvm::object::ObjectFile::createObjectFile(path);
+        if (!binary)
+        {
+            ADD_FAILURE() << path << ": " << llvm::toString(binary.takeError());
+            return {};
+        }
+        return std::move(*binary);
+    }
+
+    // The section of each symbol of `names` the object defines, by section index.
+    std::map<std::string, uint64_t> sectionsOf(const llvm::object::ObjectFile& object,
+                                               const std::vector<std::string>& names)
+    {
+        std::map<std::string, uint64_t> sections;
+        for (const llvm::object::SymbolRef& symbol : object.symbols())
+        {
+            llvm::Expected<llvm::StringRef> name = symbol.getName();
+            llvm::Expected<llvm::object::section_iterator> section = symbol.getSection();
+            if (!name || !section)
+            {
+                llvm::consumeError(name.takeError());
+                llvm::consumeError(section.takeError());
+                continue;
+            }
+            if (*section != object.section_end() &&
+                std::find(names.begin(), names.end(), name->str()) != names.end())
+            {
+                sections[name->str()] = (*section)->getIndex();
+            }
+        }
+        return sections;
+    }
+
+    bool hasSection(const llvm::object::ObjectFile& object, llvm::StringRef wanted)
+    {
+        for (const llvm::object::SectionRef& section : object.sections())
+        {
+            llvm::Expected<llvm::StringRef> name = section.getName();
+            if (name && *name == wanted)
+                return true;
+            if (!name)
+                llvm::consumeError(name.takeError());
+        }
+        return false;
+    }
+
+    class EmissionOptionsTest : public CompileTest,
+                                public ::testing::WithParamInterface<const char*>
+    {
+      protected:
+        // The object of kSectionUnit for the test's target, plain or instrumented.
+        ObjectBinary compileUnit(const char* name, bool instrument, std::vector<std::string> extra)
+        {
+            std::vector<std::string> args{
+                GetParam(), "-O2", "-c", writeSource("unit.c", kSectionUnit), "-o", path(name)};
+            args.insert(args.end(), extra.begin(), extra.end());
+            if (instrument)
+                args.push_back("--ct-modules=alloc");
+            compilerlib::CompileResult result =
+                compilerlib::compile(args, compilerlib::OutputMode::ToFile, instrument);
+            EXPECT_TRUE(result.success) << result.diagnostics;
+            return result.success ? openObject(path(name)) : ObjectBinary();
+        }
+    };
+
+    // Each function and each global of the source in a section of its own. The sections
+    // themselves are not compared with the plain object's: an instrumented object has more,
+    // such as the runtime configuration's.
+    TEST_P(EmissionOptionsTest, FunctionAndDataSectionsAreKept)
+    {
+        const std::vector<std::string> names{"first", "second", "counter", "ratio"};
+        for (const bool instrument : {false, true})
+        {
+            ObjectBinary object = compileUnit(instrument ? "instrumented.o" : "plain.o", instrument,
+                                              {"-ffunction-sections", "-fdata-sections"});
+            ASSERT_NE(object.getBinary(), nullptr);
+            const std::map<std::string, uint64_t> sections = sectionsOf(*object.getBinary(), names);
+            ASSERT_EQ(sections.size(), names.size()) << (instrument ? "instrumented" : "plain");
+            std::map<uint64_t, std::string> owners;
+            for (const auto& [name, index] : sections)
+            {
+                const auto [owner, added] = owners.emplace(index, name);
+                EXPECT_TRUE(added) << (instrument ? "instrumented" : "plain") << " object: " << name
+                                   << " shares its section with " << owner->second;
+            }
+        }
+    }
+
+    // The address-significance table that lets the linker fold identical code.
+    TEST_P(EmissionOptionsTest, AddressSignificanceTableIsKept)
+    {
+        ObjectBinary plain = compileUnit("plain.o", false, {});
+        ObjectBinary instrumented = compileUnit("instrumented.o", true, {});
+        ASSERT_NE(plain.getBinary(), nullptr);
+        ASSERT_NE(instrumented.getBinary(), nullptr);
+        ASSERT_TRUE(hasSection(*plain.getBinary(), ".llvm_addrsig")) << "the test's premise";
+        EXPECT_TRUE(hasSection(*instrumented.getBinary(), ".llvm_addrsig"));
+    }
+
+    INSTANTIATE_TEST_SUITE_P(ObjectFormats, EmissionOptionsTest,
+                             ::testing::Values(kElfTarget, kCoffTarget),
+                             [](const ::testing::TestParamInfo<const char*>& info)
+                             { return info.param == kElfTarget ? "Elf" : "Coff"; });
+
+    // The files code generation writes next to the object: split debug information
+    // (-gsplit-dwarf) and stack usage (-fstack-usage).
+    TEST_F(CompileTest, InstrumentedObjectWritesSecondaryOutputs)
+    {
+        compilerlib::CompileResult result = compilerlib::compile(
+            {kElfTarget, "-O2", "-g", "-gsplit-dwarf", "-fstack-usage", "-c",
+             writeSource("unit.c", kSectionUnit), "-o", path("unit.o"), "--ct-modules=alloc"},
+            compilerlib::OutputMode::ToFile, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(fs::exists(path("unit.o")));
+        EXPECT_TRUE(fs::exists(path("unit.dwo")));
+        EXPECT_TRUE(fs::exists(path("unit.su")));
+    }
+
+    TEST_F(CompileTest, FailedInstrumentedObjectLeavesNoSecondaryOutput)
+    {
+        compilerlib::CompileResult result = compilerlib::compile(
+            {kElfTarget, "-g", "-gsplit-dwarf", "-fstack-usage", "-c",
+             CT_TEST_SOURCE_DIR "/examples/fixtures/codegen_error.c", "-o", path("broken.o")},
+            compilerlib::OutputMode::ToFile, /*instrument=*/true);
+        ASSERT_FALSE(result.success);
+        EXPECT_FALSE(fs::exists(path("broken.o")));
+        EXPECT_FALSE(fs::exists(path("broken.dwo")));
+        EXPECT_FALSE(fs::exists(path("broken.su")));
+    }
+
+    // How many times each optimization pass of `passes` runs, from -fdebug-pass-manager.
+    std::map<std::string, int> countPasses(const std::string& log,
+                                           const std::vector<std::string>& passes)
+    {
+        std::map<std::string, int> counts;
+        for (const std::string& pass : passes)
+        {
+            const std::string needle = "Running pass: " + pass + " ";
+            for (size_t at = log.find(needle); at != std::string::npos;
+                 at = log.find(needle, at + 1))
+            {
+                ++counts[pass];
+            }
+        }
+        return counts;
+    }
+
+    // Instrumented code is optimized once, as plain code is: no step of the instrumented
+    // compilation runs the optimization pipeline again. The instrumentation passes are not
+    // pass-manager passes and print nothing here.
+    TEST_F(CompileTest, InstrumentedCompilationOptimizesOnce)
+    {
+        const std::string source = writeSource("unit.c", kSectionUnit);
+        const std::vector<std::string> passes{"SROAPass", "InstCombinePass", "GVNPass",
+                                              "SimplifyCFGPass"};
+        std::map<std::string, int> counts[2];
+        for (const bool instrument : {false, true})
+        {
+            ::testing::internal::CaptureStderr();
+            compilerlib::CompileResult result = compilerlib::compile(
+                {kElfTarget, "-O2", "-Xclang", "-fdebug-pass-manager", "-c", source, "-o",
+                 path(instrument ? "instrumented.o" : "plain.o"), "--ct-modules=alloc"},
+                compilerlib::OutputMode::ToFile, instrument);
+            const std::string log = ::testing::internal::GetCapturedStderr();
+            ASSERT_TRUE(result.success) << result.diagnostics;
+            counts[instrument] = countPasses(log + result.diagnostics, passes);
+        }
+        for (const std::string& pass : passes)
+        {
+            EXPECT_GT(counts[false][pass], 0) << pass << ": the test's premise";
+            EXPECT_EQ(counts[true][pass], counts[false][pass]) << pass;
+        }
+    }
+
+    // The instrumented IR and the instrumented object come from the same module, with the
+    // same options: compiling the IR without optimization gives the object's code. This
+    // checks option parity, not the absence of a second optimization.
+    TEST_F(CompileTest, InstrumentedObjectIsTheCodeOfTheInstrumentedIR)
+    {
+        const std::string source = writeSource("unit.c", kSectionUnit);
+        const std::vector<std::string> common{kElfTarget, "-O2", "-fPIE", "-ffunction-sections"};
+
+        std::vector<std::string> irArgs = common;
+        irArgs.insert(irArgs.end(), {"-S", "-emit-llvm", source, "--ct-modules=alloc"});
+        compilerlib::CompileResult ir =
+            compilerlib::compile(irArgs, compilerlib::OutputMode::ToMemory, /*instrument=*/true);
+        ASSERT_TRUE(ir.success) << ir.diagnostics;
+        std::ofstream(path("instrumented.ll")) << ir.llvmIR;
+
+        std::vector<std::string> fromIrArgs = common;
+        fromIrArgs.insert(fromIrArgs.end(), {"-Xclang", "-disable-llvm-passes", "-c",
+                                             path("instrumented.ll"), "-o", path("from_ir.o")});
+        compilerlib::CompileResult fromIr =
+            compilerlib::compile(fromIrArgs, compilerlib::OutputMode::ToFile);
+        ASSERT_TRUE(fromIr.success) << fromIr.diagnostics;
+
+        std::vector<std::string> objectArgs = common;
+        objectArgs.insert(objectArgs.end(),
+                          {"-c", source, "-o", path("instrumented.o"), "--ct-modules=alloc"});
+        compilerlib::CompileResult object =
+            compilerlib::compile(objectArgs, compilerlib::OutputMode::ToFile, /*instrument=*/true);
+        ASSERT_TRUE(object.success) << object.diagnostics;
+
+        auto codeSections = [](const llvm::object::ObjectFile& file)
+        {
+            std::map<std::string, std::string> code;
+            for (const llvm::object::SectionRef& section : file.sections())
+            {
+                llvm::Expected<llvm::StringRef> name = section.getName();
+                llvm::Expected<llvm::StringRef> contents = section.getContents();
+                if (name && contents && section.isText())
+                    code[name->str()] = contents->str();
+                if (!name)
+                    llvm::consumeError(name.takeError());
+                if (!contents)
+                    llvm::consumeError(contents.takeError());
+            }
+            return code;
+        };
+        ObjectBinary fromIrObject = openObject(path("from_ir.o"));
+        ObjectBinary instrumentedObject = openObject(path("instrumented.o"));
+        ASSERT_NE(fromIrObject.getBinary(), nullptr);
+        ASSERT_NE(instrumentedObject.getBinary(), nullptr);
+        EXPECT_EQ(codeSections(*instrumentedObject.getBinary()),
+                  codeSections(*fromIrObject.getBinary()));
+    }
 } // namespace

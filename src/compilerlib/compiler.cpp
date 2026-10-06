@@ -27,7 +27,6 @@
 #include <clang/CodeGen/CodeGenAction.h>
 
 #include <llvm/ADT/SmallString.h>
-#include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/IntrusiveRefCntPtr.h>
 #include <llvm/Config/llvm-config.h>
@@ -557,11 +556,14 @@ namespace compilerlib
                     switch (actionKind)
                     {
                     case clang::frontend::EmitObj:
-                        return emit::emitObjectFile(*module, *ci, outputPath, error);
+                        return emit::emitToFile(*module, *ci, emit::OutputKind::Object, outputPath,
+                                                error);
                     case clang::frontend::EmitLLVM:
-                        return emit::emitLLVMIRFile(*module, outputPath, error);
+                        return emit::emitToFile(*module, *ci, emit::OutputKind::IR, outputPath,
+                                                error);
                     case clang::frontend::EmitBC:
-                        return emit::emitBitcodeFile(*module, outputPath, error);
+                        return emit::emitToFile(*module, *ci, emit::OutputKind::Bitcode, outputPath,
+                                                error);
                     default:
                         error = "instrumentation only supports object or LLVM IR/bitcode output";
                         return false;
@@ -658,11 +660,11 @@ namespace compilerlib
                         {
                             if (ctx_.instrument && !instrument(*module, actionError))
                                 return false;
-                            std::string llvmIR;
-                            llvm::raw_string_ostream rso(llvmIR);
-                            module->print(rso, nullptr);
-                            rso.flush();
-                            result.llvmIR = std::move(llvmIR);
+                            llvm::SmallString<0> llvmIR;
+                            if (!emit::emitToBuffer(*module, *ci, emit::OutputKind::IR, llvmIR,
+                                                    actionError))
+                                return false;
+                            result.llvmIR.assign(llvmIR.begin(), llvmIR.end());
                             return true;
                         };
 
@@ -804,11 +806,9 @@ namespace compilerlib
                 {
                     auto handleModule = [&](std::unique_ptr<llvm::Module> module) -> bool
                     {
-                        if (!instrument(*module, error))
-                            return false;
-                        llvm::raw_svector_ostream stream(buffer);
-                        llvm::WriteBitcodeToFile(*module, stream);
-                        return true;
+                        return instrument(*module, error) &&
+                               emit::emitToBuffer(*module, ci, emit::OutputKind::Bitcode, buffer,
+                                                  error);
                     };
                     const bool ok = ctx_.runtimeConfig.optnone_enabled
                                         ? runCodegenWithModule<

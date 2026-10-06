@@ -16,6 +16,14 @@ pull request.
 
 ### Fixes
 
+- **Code generation options of instrumented code.** Instrumented objects, IR and bitcode are
+  written by Clang's backend, with every code generation option of the compilation, instead of
+  a target machine of compilerlib's own. `-ffunction-sections`, `-fdata-sections`, the
+  address-significance table, `-gsplit-dwarf` (`.dwo`), `-fstack-usage` (`.su`) and the
+  relocation model now apply to them as to plain objects; a failed compilation leaves none of
+  these files. The module is not optimized again (#164, #131). Bitcode for `-flto` is still
+  written without its summary (#163).
+
 - **Windows.** A `.CRT$XT` terminator that releases a tracked block no longer crashes the
   program, and its block is no longer reported as a leak. The runtime's allocation table and
   its lock are never destroyed, and the leak report is a `.CRT$XTY` terminator, after the

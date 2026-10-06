@@ -219,8 +219,10 @@ every version; this section lists what differs, and why.
 
 ### How instrumented code is compiled
 
-The instrumentation passes run on the optimized IR, after clang's optimizations. With
-`--instrument`, the compiler adds to clang's arguments:
+The instrumentation passes run on the optimized IR, after clang's optimizations. Clang's backend
+then writes the instrumented module, with every code generation option of the compilation, such
+as `-ffunction-sections`, `-fdata-sections`, `-gsplit-dwarf` and `-fstack-usage`, and without
+optimizing it again. With `--instrument`, the compiler adds to clang's arguments:
 
 - `-gline-tables-only`, unless debug information is already requested: the passes record the
   source location of each allocation;
