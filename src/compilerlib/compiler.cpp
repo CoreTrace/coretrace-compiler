@@ -260,14 +260,9 @@ namespace compilerlib
                         ctx_.clang_args.push_back("-gline-tables-only");
                     }
                     // Clang must not treat the allocation functions as builtins, or it could
-                    // remove or merge their calls before the passes run. From LLVM 18, only
-                    // they lose that status, and keepTrackedAllocationCalls keeps the calls
-                    // to operator new and delete. LLVM 16 and 17 have no hook for that pass:
-                    // they disable every builtin, which costs setjmp its returns_twice (#153).
-                    if (!clang_compat::kHasPipelineStartPass)
-                    {
-                        ctx_.clang_args.push_back("-fno-builtin");
-                    }
+                    // remove or merge their calls before the passes run. Only they lose that
+                    // status; keepTrackedAllocationCalls keeps the calls to operator new and
+                    // delete, before the optimization (runCodegenWithModule).
                     for (const std::string& option : noBuiltinAllocationOptions())
                     {
                         ctx_.clang_args.push_back(option.c_str());
@@ -772,6 +767,20 @@ namespace compilerlib
             CT_NODISCARD bool runCodegenWithModule(clang::CompilerInstance& ci, Handler&& handler,
                                                    std::string& error)
             {
+                // Instrumented, the module goes through explicit steps, the same on every
+                // LLVM version: Clang's frontend (`action`), keepTrackedAllocationCalls,
+                // Clang's optimization pipeline, then `handler`, which instruments the
+                // module and has Clang's backend write it without optimizing it again.
+                // Plain, the action optimizes the module, as Clang does.
+                clang::CodeGenOptions& options = ci.getCodeGenOpts();
+                const clang::CodeGenOptions requested = options;
+                if (ctx_.instrument)
+                {
+                    options.DisableLLVMPasses = true;
+                    // Written by compilerlib from the optimization to the output.
+                    options.OptRecordFile.clear();
+                }
+
                 Action action;
                 resetDiagnostics();
                 if (!ci.ExecuteAction(action))
@@ -785,8 +794,25 @@ namespace compilerlib
                     error = "failed to generate LLVM module";
                     return false;
                 }
+
+                emit::OptimizationRecord record;
+                if (ctx_.instrument)
+                {
+                    if (!record.open(module->getContext(), requested, error))
+                        return false;
+                    keepTrackedAllocationCalls(*module);
+                    if (!emit::optimizeModule(*module, ci, requested, error))
+                    {
+                        error = mergeDiagnostics(ctx_.dc.message, error);
+                        resetDiagnostics();
+                        return false;
+                    }
+                }
                 if (handler(std::move(module)))
+                {
+                    record.keep();
                     return true;
+                }
                 // The frontend's diagnostics, its warnings included, precede the failure.
                 error = mergeDiagnostics(ctx_.dc.message, error);
                 resetDiagnostics();
@@ -855,11 +881,6 @@ namespace compilerlib
                 clang_compat::createFileAndSourceManagers(*ci, ctx_.fs);
                 ci->getCodeGenOpts().DisableFree = false;
                 ci->getFrontendOpts().DisableFree = false;
-                if (ctx_.instrument)
-                {
-                    clang_compat::runAtPipelineStart(ci->getCodeGenOpts(),
-                                                     &keepTrackedAllocationCalls);
-                }
 
                 return ci;
             }
