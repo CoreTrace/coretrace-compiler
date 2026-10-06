@@ -20,7 +20,7 @@ first checks that the installed LLVM is the version the job is named after:
 On Windows, the LLVM 23 archive needs zlib and zstd, which it does not ship, to be found by
 CMake: building against it is not covered yet (#149).
 
-Instrumented code behaves differently with LLVM 16 and 17: see
+How instrumented code is compiled, and what differs between LLVM versions: see
 [LLVM versions](#llvm-versions).
 
 The Build workflow adds, with LLVM 20 on Linux: AddressSanitizer, LeakSanitizer and
@@ -219,44 +219,33 @@ every version; this section lists what differs, and why.
 
 ### How instrumented code is compiled
 
-The instrumentation passes run on the optimized IR, after clang's optimizations. Clang's backend
-then writes the instrumented module, with every code generation option of the compilation, such
-as `-ffunction-sections`, `-fdata-sections`, `-gsplit-dwarf` and `-fstack-usage`, and without
-optimizing it again. With `--instrument`, the compiler adds to clang's arguments:
+An instrumented compilation goes through the same steps on every LLVM version:
+
+1. Clang's frontend produces the module, without optimizing it.
+2. In the calls to `operator new` and `operator delete` that the alloc module tracks, compilerlib
+   removes the mark that lets the optimizer omit the allocation of a new-expression, as C++
+   allows.
+3. Clang's optimization pipeline runs once, with the options of the compilation.
+4. The instrumentation passes run on the optimized module, which is then verified.
+5. Clang's backend writes the module, with every code generation option of the compilation,
+   such as `-ffunction-sections`, `-fdata-sections`, `-gsplit-dwarf` and `-fstack-usage`, and
+   without optimizing it again.
+
+With `--instrument`, the compiler also adds to clang's arguments:
 
 - `-gline-tables-only`, unless debug information is already requested: the passes record the
   source location of each allocation;
 - `-fPIE` on Linux, unless `-fPIC` or `-fPIE` is given;
 - one `-fno-builtin-<name>` per C allocation function the alloc module rewrites (`malloc`,
   `calloc`, `realloc`, `aligned_alloc`, `posix_memalign`, `free`). Otherwise clang may remove or
-  merge their calls before the passes run, and the allocations would go untracked.
+  merge their calls before the passes run, and the allocations would go untracked. Other C
+  library functions keep their builtin status: `setjmp` keeps `returns_twice`, and explicit
+  `memcpy`, `memset` and `memmove` calls become memory intrinsics, which the bounds module checks.
 
-The C++ standard also lets the optimizer omit the allocation of a new-expression, and clang
-marks those `operator new` and `operator delete` calls to allow it. `-fno-builtin-<name>` cannot
-name these operators. From LLVM 18, a pass at the start of clang's optimization pipeline removes
-that mark from the calls the alloc module tracks, so that they are still there when it runs.
-
-### LLVM 16 and 17
-
-Clang only lets a library run a pass at the start of its optimization pipeline from LLVM 18. On
-LLVM 16 and 17, instrumented code is therefore compiled with the blanket `-fno-builtin`, which
-also keeps `new`/`delete` pairs, but turns off every C library builtin. This has three
-consequences, which LLVM 18 and later do not have:
-
-- **`setjmp` and the other functions that return twice** (`sigsetjmp`, `getcontext`, `vfork`…)
-  lose the `returns_twice` attribute. With optimizations on, LLVM may then apply
-  transformations that assume the call returns once, such as turning it into a tail call or
-  reusing a stack slot across it. A local variable read after `longjmp` can be wrong. No such
-  failure has been observed at run time, but nothing rules it out. The bounds module recognizes
-  these functions by name, so its record of stack objects stays correct.
-- **Explicit `memcpy`, `memset` and `memmove` calls are not bounds-checked.** They stay calls to
-  the C library, while the bounds module checks the memory intrinsics that clang emits for
-  them from LLVM 18.
-- **Calls to the C library are not optimized**, for instance `memcpy` is not expanded inline.
-
-If a program uses `setjmp`/`longjmp`, instrument it with LLVM 18 or later, or compile the files
-that use them at `-O0`, where these transformations do not run. `cc --version` prints the LLVM
-version the compiler was built with. #153 tracks a fix for these two versions.
+`-fsave-optimization-record` records the remarks of steps 3 to 5 in one file, as for a plain
+compilation; a failed compilation leaves no record. Two diagnostics options are not supported yet:
+`-Rpass` remarks are not printed for instrumented compilations (#167), and `-ftime-trace` writes
+no file, instrumented or not (#166).
 
 ### Other notes per version
 
