@@ -107,6 +107,71 @@ namespace compilerlib::emit
         }
     } // namespace
 
+    namespace
+    {
+        // Runs Clang's backend with `options`, collecting the errors it reports.
+        CT_NODISCARD bool runBackend(llvm::Module& module, clang::CompilerInstance& ci,
+                                     clang::CodeGenOptions& options, clang::BackendAction action,
+                                     std::unique_ptr<llvm::raw_pwrite_stream> stream,
+                                     std::string& error)
+        {
+            llvm::LLVMContext& context = module.getContext();
+            std::string codegenErrors;
+            std::unique_ptr<llvm::DiagnosticHandler> previous = context.getDiagnosticHandler();
+            context.setDiagnosticHandler(std::make_unique<CodeGenErrorCollector>(codegenErrors));
+            const unsigned errorsBefore = ci.getDiagnostics().getNumErrors();
+            clang_compat::emitBackendOutput(ci, options, module, action, std::move(stream));
+            context.setDiagnosticHandler(std::move(previous));
+
+            if (!codegenErrors.empty())
+            {
+                error = std::move(codegenErrors);
+                return false;
+            }
+            if (ci.getDiagnostics().getNumErrors() != errorsBefore)
+            {
+                error = "error: ct: code generation failed";
+                return false;
+            }
+            return true;
+        }
+    } // namespace
+
+    OptimizationRecord::~OptimizationRecord()
+    {
+        if (context_)
+            clang_compat::releaseOptimizationRecord(*context_, file_);
+    }
+
+    bool OptimizationRecord::open(llvm::LLVMContext& context, const clang::CodeGenOptions& options,
+                                  std::string& error)
+    {
+        llvm::Expected<clang_compat::RemarkFile> file =
+            clang_compat::setupOptimizationRecord(context, options);
+        if (!file)
+        {
+            error = "error: ct: cannot write the optimization record " + options.OptRecordFile +
+                    ": " + llvm::toString(file.takeError());
+            return false;
+        }
+        file_ = std::move(*file);
+        context_ = &context;
+        return true;
+    }
+
+    void OptimizationRecord::keep()
+    {
+        if (file_)
+            file_->keep();
+    }
+
+    bool optimizeModule(llvm::Module& module, clang::CompilerInstance& ci,
+                        const clang::CodeGenOptions& options, std::string& error)
+    {
+        clang::CodeGenOptions copy = options;
+        return runBackend(module, ci, copy, clang::Backend_EmitNothing, nullptr, error);
+    }
+
     bool emitToBuffer(llvm::Module& module, clang::CompilerInstance& ci, OutputKind kind,
                       llvm::SmallVectorImpl<char>& buffer, std::string& error)
     {
@@ -114,25 +179,8 @@ namespace compilerlib::emit
         // output is produced, with every other option of the invocation.
         clang::CodeGenOptions options = ci.getCodeGenOpts();
         options.DisableLLVMPasses = true;
-
-        llvm::LLVMContext& context = module.getContext();
-        std::string codegenErrors;
-        std::unique_ptr<llvm::DiagnosticHandler> previous = context.getDiagnosticHandler();
-        context.setDiagnosticHandler(std::make_unique<CodeGenErrorCollector>(codegenErrors));
-        const unsigned errorsBefore = ci.getDiagnostics().getNumErrors();
-        clang_compat::emitBackendOutput(ci, options, module, backendAction(kind),
-                                        std::make_unique<llvm::raw_svector_ostream>(buffer));
-        context.setDiagnosticHandler(std::move(previous));
-
-        if (!codegenErrors.empty())
-        {
-            error = std::move(codegenErrors);
-        }
-        else if (ci.getDiagnostics().getNumErrors() != errorsBefore)
-        {
-            error = "error: ct: code generation failed";
-        }
-        else
+        if (runBackend(module, ci, options, backendAction(kind),
+                       std::make_unique<llvm::raw_svector_ostream>(buffer), error))
         {
             return true;
         }

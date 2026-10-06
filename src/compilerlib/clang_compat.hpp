@@ -16,14 +16,13 @@
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/Module.h>
-#include <llvm/IR/PassManager.h>
 #include <llvm/Support/VirtualFileSystem.h>
 #include <llvm/Support/raw_ostream.h>
-
-#if LLVM_VERSION_MAJOR >= 18
-#include <llvm/Passes/OptimizationLevel.h>
-#include <llvm/Passes/PassBuilder.h>
-#endif
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/LLVMRemarkStreamer.h>
+#include <llvm/Remarks/RemarkStreamer.h>
+#include <llvm/Support/Error.h>
+#include <llvm/Support/ToolOutputFile.h>
 
 #if LLVM_VERSION_MAJOR >= 22
 #include <clang/Options/OptionUtils.h>
@@ -46,37 +45,41 @@ namespace compilerlib::clang_compat
     namespace options = clang::driver::options;
 #endif
 
-    // Whether clang can run a pass of compilerlib at the start of its optimization pipeline,
-    // before any optimization: CodeGenOptions::PassBuilderCallbacks, from LLVM 18.
-    inline constexpr bool kHasPipelineStartPass = LLVM_VERSION_MAJOR >= 18;
-
-    // A function on a module, as a pass of the new pass manager.
-    struct ModuleFunctionPass : llvm::PassInfoMixin<ModuleFunctionPass>
-    {
-        void (*function)(llvm::Module&);
-
-        llvm::PreservedAnalyses run(llvm::Module& module, llvm::ModuleAnalysisManager&)
-        {
-            function(module);
-            return llvm::PreservedAnalyses::none();
-        }
-    };
-
-    // Runs `function` on each module at the start of clang's optimization pipeline. Does
-    // nothing without kHasPipelineStartPass.
-    inline void runAtPipelineStart(clang::CodeGenOptions& options, void (*function)(llvm::Module&))
-    {
-#if LLVM_VERSION_MAJOR >= 18
-        options.PassBuilderCallbacks.push_back(
-            [function](llvm::PassBuilder& builder)
-            {
-                builder.registerPipelineStartEPCallback(
-                    [function](llvm::ModulePassManager& passes, llvm::OptimizationLevel)
-                    { passes.addPass(ModuleFunctionPass{{}, function}); });
-            });
+    // The optimization record of -fsave-optimization-record, set up on a context: the file,
+    // which keeps the remarks only once kept, and the streamer that writes them. LLVM 22
+    // returns a handle that removes the streamer itself when it is destroyed.
+#if LLVM_VERSION_MAJOR >= 22
+    using RemarkFile = llvm::LLVMRemarkFileHandle;
 #else
-        (void)options;
-        (void)function;
+    using RemarkFile = std::unique_ptr<llvm::ToolOutputFile>;
+#endif
+
+    // Sets up the record of `options` on `context`, as Clang's frontend action does; no
+    // file when the options ask for none.
+    inline llvm::Expected<RemarkFile> setupOptimizationRecord(llvm::LLVMContext& context,
+                                                              const clang::CodeGenOptions& options)
+    {
+        llvm::Expected<RemarkFile> file = llvm::setupLLVMOptimizationRemarks(
+            context, options.OptRecordFile, options.OptRecordPasses, options.OptRecordFormat,
+            options.DiagnosticsWithHotness, options.DiagnosticsHotnessThreshold);
+        if (file && *file && (options.hasProfileClangUse() || options.hasProfileIRUse()))
+            context.setDiagnosticsHotnessRequested(true);
+        return file;
+    }
+
+    // Removes the record's streamer from `context`, which must not write into `file` once
+    // it is released.
+    inline void releaseOptimizationRecord(llvm::LLVMContext& context, RemarkFile& file)
+    {
+#if LLVM_VERSION_MAJOR >= 22
+        // Before the file goes: a move assignment would destroy the file first.
+        (void)context;
+        file.finalize();
+        file = RemarkFile();
+#else
+        context.setLLVMRemarkStreamer(nullptr);
+        context.setMainRemarkStreamer(nullptr);
+        file.reset();
 #endif
     }
 
