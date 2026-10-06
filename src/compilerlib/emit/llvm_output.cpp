@@ -1,23 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_output.hpp"
-#include "llvm_compat.hpp"
+#include "../clang_compat.hpp"
 
-#include <clang/Basic/TargetOptions.h>
+#include <clang/Basic/CodeGenOptions.h>
 #include <clang/Frontend/CompilerInstance.h>
 
-#include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/IR/DiagnosticHandler.h>
 #include <llvm/IR/DiagnosticInfo.h>
 #include <llvm/IR/DiagnosticPrinter.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
-#include <llvm/IR/LegacyPassManager.h>
-#include <llvm/MC/TargetRegistry.h>
-#include <llvm/Support/CodeGen.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/raw_ostream.h>
-#include <llvm/Target/TargetMachine.h>
-#include <llvm/TargetParser/Host.h>
 
 #include <memory>
 #include <string>
@@ -48,23 +42,6 @@ namespace compilerlib::emit
           private:
             std::string& errors_;
         };
-
-        CT_NODISCARD llvm_compat::CodeGenOptLevel toCodeGenOptLevel(unsigned level)
-        {
-            switch (level)
-            {
-            case 0:
-                return llvm_compat::kCodeGenOptNone;
-            case 1:
-                return llvm_compat::kCodeGenOptLess;
-            case 2:
-                return llvm_compat::kCodeGenOptDefault;
-            case 3:
-                return llvm_compat::kCodeGenOptAggressive;
-            default:
-                return llvm_compat::kCodeGenOptDefault;
-            }
-        }
 
         // Runs `writer` on `outputPath`. An error of the stream itself, from writing or
         // from closing, fails the output here: a stream destroyed with one ends the process.
@@ -102,111 +79,82 @@ namespace compilerlib::emit
             return true;
         }
 
-        std::string buildTargetFeatures(const clang::CompilerInstance& ci)
+        CT_NODISCARD clang::BackendAction backendAction(OutputKind kind)
         {
-            const auto& targetOpts = ci.getTargetOpts();
-            std::string features;
-            for (const auto& feature : targetOpts.FeaturesAsWritten)
+            switch (kind)
             {
-                if (!features.empty())
-                    features += ",";
-                features += feature;
+            case OutputKind::Object:
+                return clang::Backend_EmitObj;
+            case OutputKind::IR:
+                return clang::Backend_EmitLL;
+            case OutputKind::Bitcode:
+                return clang::Backend_EmitBC;
             }
-            return features;
+            return clang::Backend_EmitObj;
         }
 
-        std::unique_ptr<llvm::TargetMachine> createTargetMachine(llvm::Module& module,
-                                                                 const clang::CompilerInstance& ci,
-                                                                 std::string& error)
+        // The files code generation writes besides its output. Clang's backend keeps them
+        // even when code generation reported an error through the context's handler, as
+        // an invalid inline assembly instruction does.
+        void removeSecondaryOutputs(const clang::CodeGenOptions& options)
         {
-            llvm::Triple targetTriple(module.getTargetTriple());
-            if (targetTriple.str().empty())
-                targetTriple = llvm::Triple(llvm::sys::getDefaultTargetTriple());
-            module.setTargetTriple(llvm_compat::tripleArgument(targetTriple));
-
-            std::string targetError;
-            const llvm::Target* target = llvm::TargetRegistry::lookupTarget(
-                llvm_compat::tripleArgument(targetTriple), targetError);
-            if (!target)
+            for (const std::string& path : {options.SplitDwarfOutput, options.StackUsageOutput})
             {
-                error = targetError;
-                return nullptr;
+                if (!path.empty() && path != "-")
+                    llvm::sys::fs::remove(path);
             }
-
-            llvm::TargetOptions options;
-            // Without it, AsmPrinter reverses the constructors, sorted by priority, for the
-            // legacy .ctors scheme: on Mach-O, the order they run in (#131).
-            options.UseInitArray = ci.getCodeGenOpts().UseInitArray;
-            auto codegenLevel = toCodeGenOptLevel(ci.getCodeGenOpts().OptimizationLevel);
-            // For position-independent code (needed for instrumented code and PIE executables),
-            // explicitly set the relocation model to PIC.
-            llvm::Reloc::Model relocModel = llvm::Reloc::PIC_;
-            std::unique_ptr<llvm::TargetMachine> targetMachine(target->createTargetMachine(
-                llvm_compat::tripleArgument(targetTriple), ci.getTargetOpts().CPU,
-                buildTargetFeatures(ci), options, relocModel, std::nullopt, codegenLevel));
-            if (!targetMachine)
-            {
-                error = "failed to create target machine";
-                return nullptr;
-            }
-
-            module.setDataLayout(targetMachine->createDataLayout());
-            return targetMachine;
         }
     } // namespace
 
-    bool emitObjectFile(llvm::Module& module, const clang::CompilerInstance& ci,
-                        llvm::StringRef outputPath, std::string& error)
+    bool emitToBuffer(llvm::Module& module, clang::CompilerInstance& ci, OutputKind kind,
+                      llvm::SmallVectorImpl<char>& buffer, std::string& error)
     {
-        std::unique_ptr<llvm::TargetMachine> targetMachine = createTargetMachine(module, ci, error);
-        if (!targetMachine)
+        // The optimization pipeline already ran, before the instrumentation: only the
+        // output is produced, with every other option of the invocation.
+        clang::CodeGenOptions options = ci.getCodeGenOpts();
+        options.DisableLLVMPasses = true;
+
+        llvm::LLVMContext& context = module.getContext();
+        std::string codegenErrors;
+        std::unique_ptr<llvm::DiagnosticHandler> previous = context.getDiagnosticHandler();
+        context.setDiagnosticHandler(std::make_unique<CodeGenErrorCollector>(codegenErrors));
+        const unsigned errorsBefore = ci.getDiagnostics().getNumErrors();
+        clang_compat::emitBackendOutput(ci, options, module, backendAction(kind),
+                                        std::make_unique<llvm::raw_svector_ostream>(buffer));
+        context.setDiagnosticHandler(std::move(previous));
+
+        if (!codegenErrors.empty())
+        {
+            error = std::move(codegenErrors);
+        }
+        else if (ci.getDiagnostics().getNumErrors() != errorsBefore)
+        {
+            error = "error: ct: code generation failed";
+        }
+        else
+        {
+            return true;
+        }
+        removeSecondaryOutputs(options);
+        return false;
+    }
+
+    bool emitToFile(llvm::Module& module, clang::CompilerInstance& ci, OutputKind kind,
+                    llvm::StringRef outputPath, std::string& error)
+    {
+        llvm::SmallString<0> buffer;
+        if (!emitToBuffer(module, ci, kind, buffer, error))
             return false;
-
-        return writeOutputFile(outputPath, error,
-                               [&](llvm::raw_fd_ostream& dest) -> bool
-                               {
-                                   llvm::legacy::PassManager pass;
-                                   if (targetMachine->addPassesToEmitFile(pass, dest, nullptr,
-                                                                          llvm_compat::kObjectFile))
-                                   {
-                                       error = "target does not support object emission";
-                                       return false;
-                                   }
-
-                                   llvm::LLVMContext& context = module.getContext();
-                                   std::string codegenErrors;
-                                   std::unique_ptr<llvm::DiagnosticHandler> previous =
-                                       context.getDiagnosticHandler();
-                                   context.setDiagnosticHandler(
-                                       std::make_unique<CodeGenErrorCollector>(codegenErrors));
-                                   pass.run(module);
-                                   context.setDiagnosticHandler(std::move(previous));
-                                   if (!codegenErrors.empty())
-                                   {
-                                       error = std::move(codegenErrors);
-                                       return false;
-                                   }
-                                   return true;
-                               });
-    }
-
-    bool emitLLVMIRFile(llvm::Module& module, llvm::StringRef outputPath, std::string& error)
-    {
-        return writeOutputFile(outputPath, error,
-                               [&](llvm::raw_fd_ostream& dest) -> bool
-                               {
-                                   module.print(dest, nullptr);
-                                   return true;
-                               });
-    }
-
-    bool emitBitcodeFile(llvm::Module& module, llvm::StringRef outputPath, std::string& error)
-    {
-        return writeOutputFile(outputPath, error,
-                               [&](llvm::raw_fd_ostream& dest) -> bool
-                               {
-                                   llvm::WriteBitcodeToFile(module, dest);
-                                   return true;
-                               });
+        if (writeOutputFile(outputPath, error,
+                            [&](llvm::raw_fd_ostream& dest) -> bool
+                            {
+                                dest << buffer;
+                                return true;
+                            }))
+        {
+            return true;
+        }
+        removeSecondaryOutputs(ci.getCodeGenOpts());
+        return false;
     }
 } // namespace compilerlib::emit
