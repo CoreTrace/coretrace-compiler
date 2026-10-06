@@ -80,6 +80,16 @@ namespace compilerlib::clang_compat
 #endif
     }
 
+    // The file -fstack-usage writes, which LLVM 23 renamed.
+    inline const std::string& stackUsageOutput(const clang::CodeGenOptions& options)
+    {
+#if LLVM_VERSION_MAJOR >= 23
+        return options.StackUsageFile;
+#else
+        return options.StackUsageOutput;
+#endif
+    }
+
     // Runs Clang's backend on `module` as the instance's frontend action would: its
     // optimization pipeline unless `options` disable it, then the output `action` asks for,
     // with the instance's target and code generation options. Diagnostics go to the

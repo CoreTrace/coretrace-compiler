@@ -98,7 +98,8 @@ namespace compilerlib::emit
         // an invalid inline assembly instruction does.
         void removeSecondaryOutputs(const clang::CodeGenOptions& options)
         {
-            for (const std::string& path : {options.SplitDwarfOutput, options.StackUsageOutput})
+            for (const std::string& path :
+                 {options.SplitDwarfOutput, clang_compat::stackUsageOutput(options)})
             {
                 if (!path.empty() && path != "-")
                     llvm::sys::fs::remove(path);
