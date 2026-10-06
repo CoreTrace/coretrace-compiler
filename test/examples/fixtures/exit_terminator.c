@@ -2,7 +2,7 @@
 // Windows: a function placed in .CRT$XTU, which the CRT runs as a terminator during exit,
 // after the exit handlers and the destructors of global objects, releases a tracked block.
 // The leak report must come after it and find nothing, and the release must not reach a
-// runtime whose state is already destroyed (#152).
+// runtime whose state is already destroyed (#159).
 #include <stdio.h>
 #include <stdlib.h>
 

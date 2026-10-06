@@ -137,7 +137,7 @@ FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-ove
 known_failure() {
   case "$1" in
     # Exit-time code of objects linked before the first instrumented one runs after the
-    # report on macOS, where initializers run in link order (#152).
+    # report on macOS, where initializers run in link order (#161).
     ct_leak_exit_uninstrumented_first.cpp)
       [[ "$(uname -s)" == Darwin ]] && echo leak-report && return 0
       ;;
