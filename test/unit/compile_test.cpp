@@ -333,8 +333,7 @@ int loud(int* values, int index)
 
     // setjmp returns twice, and LLVM keeps transformations such as tail calls away from its
     // callers only when the call carries returns_twice. A blanket -fno-builtin dropped it
-    // from instrumented code (#136). LLVM 16 and 17 keep that flag: they have no hook to
-    // keep operator new and delete calls from being removed before the passes run (#153).
+    // from instrumented code (#136, and #153 for LLVM 16 and 17).
     constexpr const char* kSetjmp = R"(#include <setjmp.h>
 
 static jmp_buf recover;
@@ -352,9 +351,6 @@ int jump(int value)
 
     TEST_F(CompileTest, SetjmpReturnsTwiceInInstrumentedCode)
     {
-#if LLVM_VERSION_MAJOR < 18
-        GTEST_SKIP() << "LLVM 16 and 17 compile instrumented code with -fno-builtin (#153)";
-#endif
         compilerlib::CompileResult result =
             compilerlib::compile({"-O2", "-S", "-emit-llvm", writeSource("jump.c", kSetjmp)},
                                  compilerlib::OutputMode::ToMemory, /*instrument=*/true);
