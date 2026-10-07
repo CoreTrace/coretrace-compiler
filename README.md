@@ -15,10 +15,7 @@ first checks that the installed LLVM is the version the job is named after:
 | --- | --- | --- | --- |
 | Linux (Ubuntu 24.04) | 16 to 23 | the same version's clang; GCC for LLVM 20 | unit, smoke, install, runtime fixtures at `-O0` and `-O2`, pass fuzzing |
 | macOS 15 | 19, 20, 23 (Homebrew) | AppleClang | unit, smoke, install, runtime fixtures at `-O0` and `-O2`, pass fuzzing |
-| Windows (Server 2022) | 19.1.7, 20.1.0, 22.1.8 (official archives) | the archive's clang-cl | unit, smoke, install |
-
-On Windows, the LLVM 23 archive needs zlib and zstd, which it does not ship, to be found by
-CMake: building against it is not covered yet (#149).
+| Windows (Server 2022) | 19.1.7, 20.1.0, 22.1.8, 23.1.2 (official archives) | the archive's clang-cl | unit, smoke, install |
 
 How instrumented code is compiled, and what differs between LLVM versions: see
 [LLVM versions](#llvm-versions).
@@ -41,6 +38,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 `
   -LLVMDir "C:\LLVM\lib\cmake\llvm" `
   -LoggerSourceDir "C:\Users\shookapic\Documents\coretrace-log" `
   -Configuration Release
+```
+
+The LLVM 23 archive links with zlib and zstd, which it does not ship (#149). Install them for
+the static C runtime the project uses, for example with vcpkg, and let CMake find them before
+building:
+
+```powershell
+vcpkg install zlib zstd --triplet x64-windows-static
+$env:CMAKE_PREFIX_PATH = "<vcpkg root>\installed\x64-windows-static"
 ```
 
 macOS:
@@ -253,8 +259,8 @@ in the source. `-ftime-trace` writes its file, which also covers the instrumenta
 
 ### Other notes per version
 
-- **Windows with LLVM 23**: building CoreTrace Compiler against the official archive is not
-  covered yet. The archive needs zlib and zstd, which it does not ship (#149).
+- **Windows with LLVM 23**: the official archive links with zlib and zstd, which it does not
+  ship; the Windows build section says how to provide them (#149).
 - **Clang 23, Apple targets**: Objective-C messages go through selector stubs such as
   `objc_msgSend$new`. The alloc module recognizes them, so the objects are tracked as with
   earlier versions.

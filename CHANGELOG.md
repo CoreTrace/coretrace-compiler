@@ -33,6 +33,15 @@ pull request.
   and `-Werror`, `-w` and `-Wno-*` apply. This fixes the regression of v0.11.1 for the
   optimization, whose diagnostics went through Clang before it; those of code generation never
   did (#172, #167).
+- **Windows with LLVM 23.** CoreTrace Compiler builds against the official LLVM 23 archive,
+  which links with zlib and zstd and does not ship them. Installed for the static C runtime,
+  for example by vcpkg with the `x64-windows-static` triplet, they are found through
+  `CMAKE_PREFIX_PATH` (#173, #149).
+
+### Tests and CI
+
+- The LLVM versions workflow builds and tests Windows with LLVM 23.1.2, with zlib and zstd
+  from vcpkg (#173, #149).
 
 ## v0.11.1 (2026-10-07)
 
