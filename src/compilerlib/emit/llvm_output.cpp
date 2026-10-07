@@ -5,9 +5,6 @@
 #include <clang/Basic/CodeGenOptions.h>
 #include <clang/Frontend/CompilerInstance.h>
 
-#include <llvm/IR/DiagnosticHandler.h>
-#include <llvm/IR/DiagnosticInfo.h>
-#include <llvm/IR/DiagnosticPrinter.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Support/FileSystem.h>
@@ -20,29 +17,6 @@ namespace compilerlib::emit
 {
     namespace
     {
-        // Keeps the errors code generation reports, which LLVM prints before ending the
-        // process when no handler takes them. Other diagnostics are left to LLVM.
-        class CodeGenErrorCollector : public llvm::DiagnosticHandler
-        {
-          public:
-            explicit CodeGenErrorCollector(std::string& errors) : errors_(errors) {}
-
-            bool handleDiagnostics(const llvm::DiagnosticInfo& info) override
-            {
-                if (info.getSeverity() != llvm::DS_Error)
-                    return false;
-                llvm::raw_string_ostream stream(errors_);
-                llvm::DiagnosticPrinterRawOStream printer(stream);
-                stream << "error: ";
-                info.print(printer);
-                stream << '\n';
-                return true;
-            }
-
-          private:
-            std::string& errors_;
-        };
-
         // Runs `writer` on `outputPath`. An error of the stream itself, from writing or
         // from closing, fails the output here: a stream destroyed with one ends the process.
         template <typename Writer>
@@ -109,25 +83,15 @@ namespace compilerlib::emit
 
     namespace
     {
-        // Runs Clang's backend with `options`, collecting the errors it reports.
+        // Runs Clang's backend with `options`. It fails when the instance's diagnostics
+        // counted an error, which BackendDiagnostics reports there.
         CT_NODISCARD bool runBackend(llvm::Module& module, clang::CompilerInstance& ci,
                                      clang::CodeGenOptions& options, clang::BackendAction action,
                                      std::unique_ptr<llvm::raw_pwrite_stream> stream,
                                      std::string& error)
         {
-            llvm::LLVMContext& context = module.getContext();
-            std::string codegenErrors;
-            std::unique_ptr<llvm::DiagnosticHandler> previous = context.getDiagnosticHandler();
-            context.setDiagnosticHandler(std::make_unique<CodeGenErrorCollector>(codegenErrors));
             const unsigned errorsBefore = ci.getDiagnostics().getNumErrors();
             clang_compat::emitBackendOutput(ci, options, module, action, std::move(stream));
-            context.setDiagnosticHandler(std::move(previous));
-
-            if (!codegenErrors.empty())
-            {
-                error = std::move(codegenErrors);
-                return false;
-            }
             if (ci.getDiagnostics().getNumErrors() != errorsBefore)
             {
                 error = "error: ct: code generation failed";

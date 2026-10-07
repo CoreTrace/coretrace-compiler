@@ -13,6 +13,7 @@
 #include "args_internal.hpp"
 #include "clang_compat.hpp"
 #include "instrumentation/alloc_internal.hpp"
+#include "emit/backend_diagnostics.hpp"
 #include "emit/llvm_output.hpp"
 
 #include <clang/Frontend/FrontendActions.h>
@@ -26,6 +27,7 @@
 #include <clang/FrontendTool/Utils.h>
 #include <clang/Frontend/FrontendOptions.h>
 #include <clang/CodeGen/CodeGenAction.h>
+#include <clang/CodeGen/ModuleBuilder.h>
 
 #include <llvm/ADT/SmallString.h>
 #include <llvm/ADT/SmallVector.h>
@@ -61,9 +63,44 @@ namespace compilerlib
     {
         constexpr llvm::StringRef kTargetTriple = LLVM_DEFAULT_TARGET_TRIPLE;
 
+        // EmitLLVMOnlyAction, which also records where the frontend declared each function of
+        // the module, as Clang's backend consumer does: BackendDiagnostics locates diagnostics
+        // there after the action, once the declarations are gone.
+        class LocatingCodegenAction : public clang::EmitLLVMOnlyAction
+        {
+          public:
+            emit::FunctionLocations takeFunctionLocations(void)
+            {
+                return std::move(functions_);
+            }
+
+          protected:
+            void EndSourceFileAction(void) override
+            {
+                // The code generator exists once the action made its consumer.
+                if (getCompilerInstance().hasASTConsumer())
+                {
+                    clang::CodeGenerator* generator = getCodeGenerator();
+                    if (llvm::Module* module = generator->GetModule())
+                    {
+                        for (const llvm::Function& function : module->functions())
+                        {
+                            if (const clang::Decl* decl =
+                                    generator->GetDeclForMangledName(function.getName()))
+                                functions_[function.getName()] = decl->getLocation();
+                        }
+                    }
+                }
+                clang::EmitLLVMOnlyAction::EndSourceFileAction();
+            }
+
+          private:
+            emit::FunctionLocations functions_;
+        };
+
         // Code generation for the instrumentation passes: the functions the user declared
         // no_instrument_function reach them with an attribute they honour.
-        using InstrumentedCodegenAction = frontend::NoInstrumentAction<clang::EmitLLVMOnlyAction>;
+        using InstrumentedCodegenAction = frontend::NoInstrumentAction<LocatingCodegenAction>;
 
         struct DiagsSaver : clang::DiagnosticConsumer
         {
@@ -833,6 +870,9 @@ namespace compilerlib
                 // Plain, the action optimizes the module, as Clang does.
                 clang::CodeGenOptions& options = ci.getCodeGenOpts();
                 const clang::CodeGenOptions requested = options;
+                // LocatingCodegenAction reads the declarations once the module is generated:
+                // -clear-ast-before-backend would have freed them by then.
+                options.ClearASTBeforeBackend = false;
                 if (ctx_.instrument)
                 {
                     options.DisableLLVMPasses = true;
@@ -854,6 +894,10 @@ namespace compilerlib
                     return false;
                 }
 
+                // Steps 3 to 5 report through Clang's diagnostics, as the action does.
+                emit::BackendDiagnostics diagnostics(module->getContext(), ci.getDiagnostics(),
+                                                     ci.getSourceManager(), ci.getLangOpts(),
+                                                     requested, action.takeFunctionLocations());
                 emit::OptimizationRecord record;
                 if (ctx_.instrument)
                 {

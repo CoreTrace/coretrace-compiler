@@ -32,8 +32,12 @@ namespace compilerlib::emit
         clang_compat::RemarkFile file_;
     };
 
+    // The steps below run while BackendDiagnostics is installed on the module's context: the
+    // diagnostics of the optimization and of the code generation then go to the instance's
+    // diagnostics, and an error there fails the step.
+
     // Runs Clang's optimization pipeline on `module`, with `options`, as its frontend action
-    // would. Errors as for emitToBuffer.
+    // would.
     CT_NODISCARD bool optimizeModule(llvm::Module& module, clang::CompilerInstance& ci,
                                      const clang::CodeGenOptions& options, std::string& error);
 
@@ -47,9 +51,7 @@ namespace compilerlib::emit
     // Writes the instrumented module through Clang's backend, with the instance's target and
     // code generation options and without its optimization pipeline, which ran before the
     // instrumentation (#131). Code generation also writes the secondary outputs the options
-    // ask for, such as split debug information or stack usage. On failure, `error` holds the
-    // errors code generation reported; those Clang reports through its own diagnostics go to
-    // the instance's consumer.
+    // ask for, such as split debug information or stack usage.
     CT_NODISCARD bool emitToBuffer(llvm::Module& module, clang::CompilerInstance& ci,
                                    OutputKind kind, llvm::SmallVectorImpl<char>& buffer,
                                    std::string& error);
