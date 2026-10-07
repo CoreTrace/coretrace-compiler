@@ -1543,7 +1543,22 @@ int frame(int i)
             ::testing::internal::CaptureStderr();
             compilerlib::CompileResult result =
                 compilerlib::compile(args, compilerlib::OutputMode::ToFile, instrument);
-            EXPECT_EQ(::testing::internal::GetCapturedStderr(), "");
+            std::string printed = ::testing::internal::GetCapturedStderr();
+#if LLVM_VERSION_MAJOR < 17
+            // For a frame larger than -Wframe-larger-than, LLVM 16 itself prints the share of
+            // spills in it, outside any diagnostic and for plain code too; LLVM 17 prints it
+            // in debug builds only.
+            const size_t spills = printed.find(" spills, ");
+            if (spills != std::string::npos)
+            {
+                const size_t previous = printed.rfind('\n', spills);
+                const size_t start = previous == std::string::npos ? 0 : previous + 1;
+                const size_t end = printed.find('\n', spills);
+                printed.erase(start,
+                              end == std::string::npos ? std::string::npos : end + 1 - start);
+            }
+#endif
+            EXPECT_EQ(printed, "");
             return result;
         }
 
@@ -1578,7 +1593,8 @@ int frame(int i)
     INSTANTIATE_TEST_SUITE_P(Families, RemarkFamilyTest,
                              ::testing::Values("-Rpass=inline", "-Rpass-missed=inline",
                                                "-Rpass-analysis=loop-vectorize",
-                                               "-Rpass-analysis=prologepilog"),
+                                               // LLVM 23 renamed the pass prolog-epilog.
+                                               "-Rpass-analysis=prolog-?epilog"),
                              [](const ::testing::TestParamInfo<const char*>& info)
                              {
                                  switch (info.index)
