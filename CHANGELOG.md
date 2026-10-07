@@ -20,11 +20,18 @@ pull request.
   an error instead of writing bitcode without its summary, whose link-time optimization would
   run again on the instrumented code, untested. `-fno-lto` after them is accepted, and plain
   compilations keep LTO (#170, #163).
+- **Diagnostics of instrumented compilations** are printed as clang prints them, with source
+  excerpts and option names, instead of one line each (#172).
 
 ### Fixes
 
 - **`-ftime-trace`** writes its file, as with clang, for plain and instrumented compilations;
   an instrumented trace also covers the instrumentation (#171, #166).
+- **Diagnostics of the optimization and code generation of instrumented code** go through
+  Clang's diagnostics again, as for plain code: `-Rpass`, `-Rpass-missed` and `-Rpass-analysis`
+  print their remarks, unrequested remarks are not printed, each diagnostic is located in the
+  source, and `-Werror`, `-w` and `-Wno-*` apply. This fixes the regression of v0.11.1 (#172,
+  #167).
 
 ## v0.11.1 (2026-10-07)
 
