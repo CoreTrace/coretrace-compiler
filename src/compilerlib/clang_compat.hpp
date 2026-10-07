@@ -11,6 +11,7 @@
 #include <clang/Basic/TargetInfo.h>
 #include <clang/CodeGen/BackendUtil.h>
 #include <clang/Driver/Compilation.h>
+#include <clang/Driver/Driver.h>
 #include <clang/Driver/ToolChain.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/CompilerInvocation.h>
@@ -30,7 +31,6 @@
 #include <clang/Options/OptionUtils.h>
 #include <clang/Options/Options.h>
 #else
-#include <clang/Driver/Driver.h>
 #include <clang/Driver/Options.h>
 #endif
 
