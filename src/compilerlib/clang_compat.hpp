@@ -15,6 +15,7 @@
 #include <clang/Driver/ToolChain.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/CompilerInvocation.h>
+#include <clang/Frontend/FrontendOptions.h>
 #include <llvm/ADT/IntrusiveRefCntPtr.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Config/llvm-config.h>
@@ -25,6 +26,9 @@
 #include <llvm/IR/LLVMRemarkStreamer.h>
 #include <llvm/Remarks/RemarkStreamer.h>
 #include <llvm/Support/Error.h>
+#include <llvm/Support/FileSystem.h>
+#include <llvm/Support/Path.h>
+#include <llvm/Support/TimeProfiler.h>
 #include <llvm/Support/ToolOutputFile.h>
 
 #if LLVM_VERSION_MAJOR >= 22
@@ -93,6 +97,40 @@ namespace compilerlib::clang_compat
         return compilation.getDefaultToolChain().isUsingLTO(compilation.getArgs());
 #else
         return compilation.getDriver().isUsingLTO();
+#endif
+    }
+
+    // The file -ftime-trace writes, empty without the option. Before LLVM 17, the driver
+    // passes the option as given, and -cc1 derives the file from the output, as cc1_main does.
+    inline std::string timeTraceFile(const clang::FrontendOptions& options)
+    {
+#if LLVM_VERSION_MAJOR >= 17
+        return options.TimeTracePath;
+#else
+        if (!options.TimeTrace && options.TimeTracePath.empty())
+            return {};
+        llvm::SmallString<128> path(options.OutputFile);
+        llvm::sys::path::replace_extension(path, "json");
+        if (!options.TimeTracePath.empty())
+        {
+            llvm::SmallString<128> tracePath(options.TimeTracePath);
+            if (llvm::sys::fs::is_directory(tracePath))
+                llvm::sys::path::append(tracePath, llvm::sys::path::filename(path));
+            path.assign(tracePath);
+        }
+        return std::string(path);
+#endif
+    }
+
+    // Starts the time-trace profiler of this thread with the job's options; LLVM 19 added
+    // -ftime-trace-verbose.
+    inline void startTimeTrace(const clang::FrontendOptions& options, llvm::StringRef program)
+    {
+#if LLVM_VERSION_MAJOR >= 19
+        llvm::timeTraceProfilerInitialize(options.TimeTraceGranularity, program,
+                                          options.TimeTraceVerbose);
+#else
+        llvm::timeTraceProfilerInitialize(options.TimeTraceGranularity, program);
 #endif
     }
 

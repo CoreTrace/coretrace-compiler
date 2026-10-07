@@ -9,7 +9,10 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Object/ObjectFile.h>
+#include <llvm/Support/Error.h>
+#include <llvm/Support/JSON.h>
 #include <llvm/Support/SourceMgr.h>
+#include <llvm/Support/TimeProfiler.h>
 #include <llvm/Support/raw_ostream.h>
 
 #include <gtest/gtest.h>
@@ -1334,5 +1337,112 @@ void moveBytes(char* destination, const char* source, size_t size)
                                  compilerlib::OutputMode::ToFile);
         EXPECT_TRUE(result.success) << result.diagnostics;
         EXPECT_TRUE(fs::exists(path("unit.o")));
+    }
+    // The names of the events of a -ftime-trace file; empty if the file is missing or is
+    // not a trace.
+    std::set<std::string> traceEvents(const std::string& path)
+    {
+        std::set<std::string> names;
+        llvm::Expected<llvm::json::Value> trace = llvm::json::parse(readFile(path));
+        if (!trace)
+        {
+            llvm::consumeError(trace.takeError());
+            return names;
+        }
+        const llvm::json::Object* object = trace->getAsObject();
+        const llvm::json::Array* events = object ? object->getArray("traceEvents") : nullptr;
+        if (!events)
+            return names;
+        for (const llvm::json::Value& event : *events)
+        {
+            if (const llvm::json::Object* fields = event.getAsObject())
+            {
+                if (auto name = fields->getString("name"))
+                    names.insert(name->str());
+            }
+        }
+        return names;
+    }
+
+    // -ftime-trace writes the trace clang writes, on every path a compilation to a file
+    // takes (#166), and the profiler stops with the compilation.
+    struct TimeTraceMode
+    {
+        const char* name;
+        bool instrument;
+        const char* option;
+    };
+
+    void PrintTo(const TimeTraceMode& mode, std::ostream* os)
+    {
+        *os << mode.name;
+    }
+
+    class TimeTraceTest : public CompileTest, public ::testing::WithParamInterface<TimeTraceMode>
+    {
+      protected:
+        compilerlib::CompileResult compileWithTrace(const std::string& traceOption)
+        {
+            // Granularity 0 records every event, however short the compilation.
+            std::vector<std::string> args = {kElfTarget, "-O2", traceOption,
+                                             "-ftime-trace-granularity=0"};
+            args.insert(args.end(),
+                        {"-c", writeSource("unit.c", kSectionUnit), "-o", path("unit.o")});
+            if (GetParam().option)
+                args.push_back(GetParam().option);
+            return compilerlib::compile(args, compilerlib::OutputMode::ToFile,
+                                        GetParam().instrument);
+        }
+    };
+
+    TEST_P(TimeTraceTest, WritesTheTraceNextToTheOutput)
+    {
+        compilerlib::CompileResult result = compileWithTrace("-ftime-trace");
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        const std::set<std::string> events = traceEvents(path("unit.json"));
+        for (const char* step : {"Frontend", "Optimizer", "CodeGenPasses"})
+            EXPECT_EQ(events.count(step), 1u) << step;
+        EXPECT_FALSE(llvm::timeTraceProfilerEnabled());
+    }
+
+    TEST_P(TimeTraceTest, WritesTheTraceWhereAsked)
+    {
+        compilerlib::CompileResult result = compileWithTrace("-ftime-trace=" + path("custom.json"));
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_EQ(traceEvents(path("custom.json")).count("Frontend"), 1u);
+        EXPECT_FALSE(fs::exists(path("unit.json")));
+    }
+
+    // As with clang, a trace that cannot be written is reported, and the compilation still
+    // succeeds.
+    TEST_P(TimeTraceTest, ReportsAnUnwritableTrace)
+    {
+        compilerlib::CompileResult result =
+            compileWithTrace("-ftime-trace=" + path("missing/trace.json"));
+        EXPECT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(result.diagnostics.find("unable to open output file"), std::string::npos)
+            << result.diagnostics;
+        EXPECT_TRUE(fs::exists(path("unit.o")));
+        EXPECT_FALSE(llvm::timeTraceProfilerEnabled());
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Paths, TimeTraceTest,
+                             ::testing::Values(TimeTraceMode{"Plain", false, nullptr},
+                                               TimeTraceMode{"PlainOptNone", false, "--ct-optnone"},
+                                               TimeTraceMode{"Instrumented", true,
+                                                             "--ct-modules=alloc"}),
+                             [](const ::testing::TestParamInfo<TimeTraceMode>& info)
+                             { return std::string(info.param.name); });
+
+    // An instrumented trace covers the instrumentation, between the optimization and the
+    // code generation.
+    TEST_F(CompileTest, InstrumentedTraceCoversTheInstrumentation)
+    {
+        compilerlib::CompileResult result = compilerlib::compile(
+            {kElfTarget, "-O2", "-ftime-trace", "-ftime-trace-granularity=0", "-c",
+             writeSource("unit.c", kSectionUnit), "-o", path("unit.o"), "--ct-modules=alloc"},
+            compilerlib::OutputMode::ToFile, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_EQ(traceEvents(path("unit.json")).count("CoreTraceInstrumentation"), 1u);
     }
 } // namespace
