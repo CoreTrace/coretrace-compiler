@@ -1121,6 +1121,15 @@ namespace compilerlib
             return {
                 false, ctx.dc.message.empty() ? "no jobs to run" : std::move(ctx.dc.message), {}};
 
+        // Instrumented LTO is not supported (#163): the bitcode would be written without its
+        // summary, and the link-time pipeline would optimize the instrumented code again,
+        // which no test covers. The driver resolves -flto, -flto=<mode> and -fno-lto.
+        if (instrument && driver.driver().isUsingLTO())
+            return {false,
+                    "error: ct: --instrument does not support -flto: compile instrumented code "
+                    "without link-time optimization",
+                    {}};
+
         if (!instrument && mode == OutputMode::ToFile && !ctx.runtimeConfig.optnone_enabled)
             return runNonInstrumentedCompilation(ctx, driver, *comp);
 
