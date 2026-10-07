@@ -23,8 +23,8 @@ pull request.
 
 ### Fixes
 
-- **`-ftime-trace`** writes its file again, as with clang, for plain and instrumented
-  compilations; an instrumented trace also covers the instrumentation (#171, #166).
+- **`-ftime-trace`** writes its file, as with clang, for plain and instrumented compilations;
+  an instrumented trace also covers the instrumentation (#171, #166).
 
 ## v0.11.1 (2026-10-07)
 
