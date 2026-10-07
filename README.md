@@ -257,6 +257,12 @@ as for a plain compilation (#167): `-Rpass`, `-Rpass-missed` and `-Rpass-analysi
 remarks printed, warning options such as `-Werror` and `-w` apply, and each diagnostic is located
 in the source. `-ftime-trace` writes its file, which also covers the instrumentation (#166).
 
+An instrumented compilation prints its diagnostics as clang prints them, those of the frontend
+included (#172): with source excerpts, notes such as the inline assembly an error comes from, and
+the option of each warning or remark, for example `[-Wunused-variable]`.
+`CompileResult::diagnostics` holds this text, so a host of compilerlib that parses it sees that
+format too.
+
 ### Other notes per version
 
 - **Windows with LLVM 23**: the official archive links with zlib and zstd, which it does not
