@@ -323,15 +323,26 @@ jobs:
         "LLVM_DIR=$llvmCmakeDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         "Clang_DIR=$clangCmakeDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+    # The LLVM 23 archive links with zlib and zstd, which it does not ship (#149).
+    - name: Install zlib and zstd with vcpkg
+      if: matrix.llvm == 23
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $PSNativeCommandUseErrorActionPreference = $true
+        & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install zlib zstd --triplet x64-windows-static
+        "CORETRACE_VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
     - name: Configure + Build + Install
       shell: pwsh
       run: |
         $ErrorActionPreference = "Stop"
+        $vcpkg = if ($env:CORETRACE_VCPKG_ROOT) { @("-VcpkgRoot", $env:CORETRACE_VCPKG_ROOT) } else { @() }
         powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1 `
           -LLVMDir "${env:LLVM_CMAKE_DIR}" `
           -LoggerSourceDir "${PWD}\deps\coretrace-log" `
           -Configuration Release `
-          -BuildTests
+          -BuildTests @vcpkg
 
     - name: Smoke test
       shell: pwsh
