@@ -79,9 +79,11 @@ endfunction()
 # From LLVM 23, the official Windows archive links LLVMSupport with zlib and zstd, which it does
 # not ship (#149). LLVM's Findzstd defines the static zstd target it links with only for a
 # library named zstd_static.lib, which vcpkg does not install; zstd's own CMake package
-# defines that target.
+# defines that target. vcpkg's static zlib is zs.lib, a name CMake's FindZLIB does not look
+# for; FindZLIB uses the library found here.
 if(WIN32)
   find_package(zstd CONFIG QUIET)
+  find_library(ZLIB_LIBRARY NAMES zs)
 endif()
 
 find_package(LLVM REQUIRED CONFIG)
