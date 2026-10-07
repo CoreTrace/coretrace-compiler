@@ -87,6 +87,11 @@ options and the runtime ABI are those of 0.11.0. Objects instrumented by 0.11.0 
 - `-ftime-trace` writes no file, with or without `--instrument` (#166).
 - `-Rpass` remarks are not printed for instrumented compilations; `-fsave-optimization-record`
   is not affected (#167).
+- A regression of #168: the diagnostics of the optimization of instrumented code no longer go
+  through Clang's diagnostics. Some are printed in LLVM's format, without a source excerpt;
+  remarks Clang filters out are printed; and warning options do not apply to them: with
+  `-Werror`, an optimization failure does not fail the compilation, and `-w` does not silence
+  it (#167).
 - The leak report runs before the exit-time code of shared libraries (#158), and on macOS
   before that of objects compiled without `--instrument` and linked first (#161).
 - Building against the LLVM 23 Windows archive is not covered (#149).
