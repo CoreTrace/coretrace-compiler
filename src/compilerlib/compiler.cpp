@@ -935,8 +935,12 @@ namespace compilerlib
                 clang::CompilerInvocation::CreateFromArgs(*invoc, ccArgs, driverDiags_);
 
                 auto ci = clang_compat::makeCompilerInstance(std::move(invoc));
-                clang_compat::createDiagnostics(*ci, ctx_.fs, &ctx_.dc, /*shouldOwnClient=*/false);
-                ci->getDiagnostics().getDiagnosticOptions().ShowCarets = false;
+                // As runCc1: the text clang prints, with the invocation's diagnostic options,
+                // source excerpts included, written into the compilation's diagnostics.
+                auto* printer = new clang::TextDiagnosticPrinter(
+                    ctx_.dc.os, clang_compat::diagnosticOptions(*ci));
+                clang_compat::createDiagnostics(*ci, ctx_.fs, printer, /*shouldOwnClient=*/true);
+                ci->setVerboseOutputStream(ctx_.dc.os);
                 clang_compat::createFileAndSourceManagers(*ci, ctx_.fs);
                 ci->getCodeGenOpts().DisableFree = false;
                 ci->getFrontendOpts().DisableFree = false;
