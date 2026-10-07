@@ -246,9 +246,10 @@ Link-time optimization is not supported with `--instrument`: `-flto` and `-flto=
 instrumented compilation fail with an error, unless `-fno-lto` turns them off (#163).
 
 `-fsave-optimization-record` records the remarks of steps 3 to 5 in one file, as for a plain
-compilation; a failed compilation leaves no record. `-Rpass` remarks are not printed for
-instrumented compilations yet (#167). `-ftime-trace` writes its file, which also covers the
-instrumentation (#166).
+compilation; a failed compilation leaves no record. The diagnostics of steps 3 to 5 are Clang's,
+as for a plain compilation (#167): `-Rpass`, `-Rpass-missed` and `-Rpass-analysis` select the
+remarks printed, warning options such as `-Werror` and `-w` apply, and each diagnostic is located
+in the source. `-ftime-trace` writes its file, which also covers the instrumentation (#166).
 
 ### Other notes per version
 
