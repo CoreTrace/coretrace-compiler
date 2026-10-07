@@ -1591,16 +1591,28 @@ CT_NOINSTR static void ct_report_leaks(void)
 }
 
 #if defined(__APPLE__)
+extern "C" void __cxa_finalize(void* dso);
+
 // Mach-O keeps one list of exit-time code, run in reverse order of registration: exit
 // handlers, destructors of global objects, and destructor functions, which clang registers
-// the same way. The report registered first runs last: every module that tracks
-// allocations schedules it from a constructor that runs before its static initializers.
+// the same way, those of dylibs included. Dylibs and objects initialized before the report
+// was scheduled registered theirs earlier, so they would run after it (#158). The report
+// therefore runs the rest of the list first: __cxa_finalize marks each entry as run before
+// calling it, so every handler still runs once, in the same order.
+CT_NOINSTR static void ct_report_leaks_last(void)
+{
+    __cxa_finalize(nullptr);
+    ct_report_leaks();
+}
+
+// The report registered first runs last: every module that tracks allocations schedules it
+// from a constructor that runs before its static initializers.
 extern "C" CT_NOINSTR void __ct_schedule_leak_report(void)
 {
     static int scheduled = 0;
     if (__atomic_exchange_n(&scheduled, 1, __ATOMIC_ACQ_REL) == 0)
     {
-        std::atexit(ct_report_leaks);
+        std::atexit(ct_report_leaks_last);
     }
 }
 

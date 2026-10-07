@@ -192,29 +192,6 @@ namespace compilerlib
             }
         }
 
-        // The archive cc links first on Apple targets (ct_leak_report_first.cpp, #161), which
-        // the runtime installs next to its own archive. Empty when compilerlib was built for a
-        // system without it.
-        CT_NODISCARD bool leakReportFirstArchive(const RuntimeArchives& archives,
-                                                 std::string& archive, std::string& error)
-        {
-#if defined(CT_LEAK_REPORT_FIRST_LIB_NAME)
-            llvm::SmallString<256> path(llvm::sys::path::parent_path(archives.runtime));
-            llvm::sys::path::append(path, CT_LEAK_REPORT_FIRST_LIB_NAME);
-            if (!llvm::sys::fs::exists(path))
-            {
-                error = "instrumentation runtime archive not found: " + path.str().str();
-                return false;
-            }
-            archive = path.str().str();
-#else
-            (void)archives;
-            (void)error;
-            archive.clear();
-#endif
-            return true;
-        }
-
         template <typename T> std::unique_ptr<clang::driver::Compilation> takeCompilation(T&& comp)
         {
             if constexpr (std::is_pointer_v<std::remove_reference_t<T>>)
@@ -239,7 +216,6 @@ namespace compilerlib
             std::string clang_resource_dir;
             std::string clang_sysroot;
             RuntimeArchives runtime_archives;
-            std::string leak_report_first_archive;
             llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs;
             // Options of the driver's diagnostics engine, which must outlive it.
             clang_compat::DiagnosticOptionsStorage driver_diagnostic_options;
@@ -311,7 +287,6 @@ namespace compilerlib
                     ctx_.clang_args.push_back("-isysroot");
                     ctx_.clang_args.push_back(ctx_.clang_sysroot.c_str());
                 }
-                const size_t userArgsBegin = ctx_.clang_args.size();
                 for (const auto& arg : ctx_.filtered_args)
                 {
                     ctx_.clang_args.push_back(arg.c_str());
@@ -348,23 +323,6 @@ namespace compilerlib
                     if (!resolveRuntimeArchives(ctx_.runtime_archives, error))
                     {
                         return false;
-                    }
-                    // Before every input of the link, whose initializers ld64 runs after
-                    // its own (#161).
-                    if (targetTriple.isOSDarwin())
-                    {
-                        if (!leakReportFirstArchive(ctx_.runtime_archives,
-                                                    ctx_.leak_report_first_archive, error))
-                        {
-                            return false;
-                        }
-                        if (!ctx_.leak_report_first_archive.empty())
-                        {
-                            const char* forceLoad[] = {"-Xlinker", "-force_load", "-Xlinker",
-                                                       ctx_.leak_report_first_archive.c_str()};
-                            ctx_.clang_args.insert(ctx_.clang_args.begin() + userArgsBegin,
-                                                   std::begin(forceLoad), std::end(forceLoad));
-                        }
                     }
                     // Ensure position-independent executable linking on Linux
                     if (targetTriple.isOSLinux())
