@@ -11,9 +11,6 @@ param(
     [string]$Arch = "x64",
     [string]$Toolset = "",
     [string]$LoggerSourceDir = "",
-    # A vcpkg installation with zlib and zstd for the x64-windows-static triplet, which the
-    # LLVM 23 archive links with and does not ship (#149).
-    [string]$VcpkgRoot = "",
     [switch]$BuildTests,
     [switch]$PackageZip
 )
@@ -210,16 +207,6 @@ else
     $cmakeArgs += @(
         "-DCMAKE_C_COMPILER=$clangClPath",
         "-DCMAKE_CXX_COMPILER=$clangClPath"
-    )
-}
-
-if ($VcpkgRoot -ne "")
-{
-    # The static triplet, as the project links the static C runtime (/MT).
-    $vcpkgToolchain = Join-Path (Resolve-Path $VcpkgRoot).Path "scripts\buildsystems\vcpkg.cmake"
-    $cmakeArgs += @(
-        "-DCMAKE_TOOLCHAIN_FILE=$vcpkgToolchain",
-        "-DVCPKG_TARGET_TRIPLET=x64-windows-static"
     )
 }
 
