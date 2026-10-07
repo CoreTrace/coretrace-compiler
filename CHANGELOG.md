@@ -28,10 +28,11 @@ pull request.
 - **`-ftime-trace`** writes its file, as with clang, for plain and instrumented compilations;
   an instrumented trace also covers the instrumentation (#171, #166).
 - **Diagnostics of the optimization and code generation of instrumented code** go through
-  Clang's diagnostics again, as for plain code: `-Rpass`, `-Rpass-missed` and `-Rpass-analysis`
-  print their remarks, unrequested remarks are not printed, each diagnostic is located in the
-  source, and `-Werror`, `-w` and `-Wno-*` apply. This fixes the regression of v0.11.1 (#172,
-  #167).
+  Clang's diagnostics, as for plain code: `-Rpass`, `-Rpass-missed` and `-Rpass-analysis` print
+  their remarks, unrequested remarks are not printed, each diagnostic is located in the source,
+  and `-Werror`, `-w` and `-Wno-*` apply. This fixes the regression of v0.11.1 for the
+  optimization, whose diagnostics went through Clang before it; those of code generation never
+  did (#172, #167).
 
 ## v0.11.1 (2026-10-07)
 
