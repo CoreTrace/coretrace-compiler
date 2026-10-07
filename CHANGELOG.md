@@ -21,6 +21,11 @@ pull request.
   run again on the instrumented code, untested. `-fno-lto` after them is accepted, and plain
   compilations keep LTO (#170, #163).
 
+### Fixes
+
+- **`-ftime-trace`** writes its file again, as with clang, for plain and instrumented
+  compilations; an instrumented trace also covers the instrumentation (#171, #166).
+
 ## v0.11.1 (2026-10-07)
 
 Instrumented code is compiled through one pipeline on every LLVM version, and written by
