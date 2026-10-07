@@ -1647,10 +1647,13 @@ int frame(int i)
             << result.diagnostics;
     }
 
-    INSTANTIATE_TEST_SUITE_P(
-        Options, SilencedOptimizationFailureTest, ::testing::Values("-w", "-Wno-pass-failed"),
-        [](const ::testing::TestParamInfo<const char*>& info)
-        { return std::string(info.index == 0 ? "NoWarnings" : "NoPassFailed"); });
+    std::string silencingOptionName(const ::testing::TestParamInfo<const char*>& info)
+    {
+        return info.index == 0 ? "NoWarnings" : "NoPassFailed";
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Options, SilencedOptimizationFailureTest,
+                             ::testing::Values("-w", "-Wno-pass-failed"), silencingOptionName);
 
     // The handler leaves the optimization record whole: it holds the remarks of
     // optimization and code generation, whichever -Rpass selects.
