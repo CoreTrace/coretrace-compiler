@@ -1612,12 +1612,17 @@ CT_NOINSTR __attribute__((constructor)) static void ct_schedule_leak_report_late
 }
 #else
 // ELF runs .fini_array after every exit handler, the destructors of global objects among
-// them, and the lowest priority last: 101, the lowest a program may use, puts the report
-// after every destructor function of default priority.
+// them, and the lowest priority last: 101, the lowest a program may use, puts this function
+// after every destructor function of default priority. The executable's .fini_array runs
+// before those of the shared libraries it depends on, whose exit-time code may still release
+// tracked blocks (#158). glibc finalizes every object from one exit handler, and runs the
+// handlers registered meanwhile once it returns: registered from here, the report runs after
+// all of them. Where registration is refused, the report runs here.
 extern "C" CT_NOINSTR void __ct_schedule_leak_report(void) {}
 
 CT_NOINSTR __attribute__((destructor(101))) static void ct_report_leaks_at_exit(void)
 {
-    ct_report_leaks();
+    if (std::atexit(ct_report_leaks) != 0)
+        ct_report_leaks();
 }
 #endif

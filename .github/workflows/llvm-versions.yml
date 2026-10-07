@@ -86,6 +86,7 @@ jobs:
         python test/examples/test_install_layout.py
 
     - name: Run runtime fixture suites
+      id: runtime_suites
       run: |
         bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
         bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
@@ -94,6 +95,8 @@ jobs:
     # The passes instrument the optimized IR: the same suites, built at -O2, check that
     # the diagnostics survive the optimizer and that instrumented code still behaves.
     - name: Run runtime fixture suites at -O2
+      # Also after a failure at -O0, which the results at -O2 help to diagnose.
+      if: ${{ !cancelled() && steps.runtime_suites.outcome != 'skipped' }}
       env:
         CT_TEST_OPT: -O2
       run: |
@@ -158,12 +161,15 @@ jobs:
         python test/examples/test_install_layout.py
 
     - name: Run runtime fixture suites
+      id: runtime_suites
       run: |
         bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
         bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
         bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests"
 
     - name: Run runtime fixture suites at -O2
+      # Also after a failure at -O0, which the results at -O2 help to diagnose.
+      if: ${{ !cancelled() && steps.runtime_suites.outcome != 'skipped' }}
       env:
         CT_TEST_OPT: -O2
       run: |

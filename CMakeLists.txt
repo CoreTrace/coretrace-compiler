@@ -222,6 +222,8 @@ if(CORETRACE_COMPILER_BUILD_RUNTIME)
   )
   if(APPLE)
     target_sources(ct_instrument_runtime PRIVATE src/runtime/ct_runtime_objc.cpp)
+    # cc links it first into instrumented executables (#161).
+    add_library(ct_leak_report_first STATIC src/runtime/ct_leak_report_first.cpp)
   endif()
   target_include_directories(ct_instrument_runtime PRIVATE src/runtime)
   target_link_libraries(ct_instrument_runtime PRIVATE coretrace_logger)
@@ -257,6 +259,12 @@ else()
   set(CT_RUNTIME_DEFINITIONS
     CT_RUNTIME_LIB_NAME="${CMAKE_STATIC_LIBRARY_PREFIX}ct_instrument_runtime${CMAKE_STATIC_LIBRARY_SUFFIX}"
     CT_RUNTIME_LOGGER_LIB_NAME="${CMAKE_STATIC_LIBRARY_PREFIX}coretrace_logger${CMAKE_STATIC_LIBRARY_SUFFIX}"
+  )
+endif()
+# On Apple targets, the archive linked first, next to the runtime archive.
+if(APPLE)
+  list(APPEND CT_RUNTIME_DEFINITIONS
+    CT_LEAK_REPORT_FIRST_LIB_NAME="${CMAKE_STATIC_LIBRARY_PREFIX}ct_leak_report_first${CMAKE_STATIC_LIBRARY_SUFFIX}"
   )
 endif()
 
@@ -368,6 +376,9 @@ add_library(cc::compilerlib_static ALIAS compilerlib_static)
 target_compile_definitions(compilerlib_static PRIVATE ${CT_RUNTIME_DEFINITIONS})
 if(CORETRACE_COMPILER_BUILD_RUNTIME)
   add_dependencies(compilerlib_static ct_instrument_runtime)
+  if(APPLE)
+    add_dependencies(compilerlib_static ct_leak_report_first)
+  endif()
 endif()
 coretrace_disable_rtti(compilerlib_static)
 target_link_libraries(compilerlib_static PUBLIC ${CT_CLANG_LINK_LIBS} ${CT_LLVM_LINK_LIBS})
@@ -386,6 +397,9 @@ add_library(cc::compilerlib_shared ALIAS compilerlib_shared)
 target_compile_definitions(compilerlib_shared PRIVATE ${CT_RUNTIME_DEFINITIONS})
 if(CORETRACE_COMPILER_BUILD_RUNTIME)
   add_dependencies(compilerlib_shared ct_instrument_runtime)
+  if(APPLE)
+    add_dependencies(compilerlib_shared ct_leak_report_first)
+  endif()
 endif()
 coretrace_disable_rtti(compilerlib_shared)
 target_link_libraries(compilerlib_shared PRIVATE ${CT_CLANG_LINK_LIBS} ${CT_LLVM_LINK_LIBS})
@@ -426,6 +440,9 @@ install(TARGETS compilerlib_static compilerlib_shared cc
 )
 if(CORETRACE_COMPILER_BUILD_RUNTIME)
   install(TARGETS ct_instrument_runtime ARCHIVE DESTINATION lib)
+  if(APPLE)
+    install(TARGETS ct_leak_report_first ARCHIVE DESTINATION lib)
+  endif()
   # The logger target lives in the fetched subdirectory; install its archive next to
   # the runtime so an installed cc can link instrumented programs.
   install(FILES $<TARGET_FILE:coretrace_logger> DESTINATION lib)
