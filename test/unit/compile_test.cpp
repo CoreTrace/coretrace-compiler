@@ -29,6 +29,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -1444,5 +1445,265 @@ void moveBytes(char* destination, const char* source, size_t size)
             compilerlib::OutputMode::ToFile, /*instrument=*/true);
         ASSERT_TRUE(result.success) << result.diagnostics;
         EXPECT_EQ(traceEvents(path("unit.json")).count("CoreTraceInstrumentation"), 1u);
+    }
+    // A unit whose compilation at -O2 reports a remark of each -Rpass family, from the
+    // optimization (inline, loop-vectorize) and from the code generation (prologepilog), an
+    // optimization failure (the loop cannot be vectorized as requested), and a frame larger
+    // than -Wframe-larger-than=64, which code generation locates at the function.
+    constexpr const char* kBackendDiagnosticsUnit = R"(static int square(int x)
+{
+    return x * x;
+}
+
+int compute(int x)
+{
+    return square(x) + 1;
+}
+
+__attribute__((noinline)) int opaque(int x)
+{
+    return x * 3;
+}
+
+int caller(int x)
+{
+    return opaque(x) + 2;
+}
+
+int scan(int* a, int n)
+{
+    int last = 0;
+#pragma clang loop vectorize(enable)
+    for (int i = 0; i < n; i++)
+    {
+        last = a[i] * 3 + last;
+        a[i] = last;
+    }
+    return last;
+}
+
+int frame(int i)
+{
+    volatile char buffer[256];
+    buffer[i] = 1;
+    return buffer[0];
+}
+)";
+
+    // The diagnostics located in `source`, as "line:column: level: message". A plain
+    // compilation also prints source excerpts and the option of each diagnostic, which
+    // instrumented compilations do not print.
+    std::multiset<std::string> diagnosticsIn(const std::string& diagnostics,
+                                             const std::string& source)
+    {
+        std::multiset<std::string> located;
+        std::istringstream lines(diagnostics);
+        std::string line;
+        const std::string prefix = source + ":";
+        while (std::getline(lines, line))
+        {
+            if (line.rfind(prefix, 0) != 0)
+                continue;
+            line.erase(0, prefix.size());
+            const size_t option = line.rfind(" [-");
+            if (option != std::string::npos && !line.empty() && line.back() == ']')
+                line.erase(option);
+            located.insert(line);
+        }
+        return located;
+    }
+
+    size_t countLevel(const std::multiset<std::string>& diagnostics, const char* level)
+    {
+        return static_cast<size_t>(
+            std::count_if(diagnostics.begin(), diagnostics.end(), [&](const std::string& diagnostic)
+                          { return diagnostic.find(level) != std::string::npos; }));
+    }
+
+    // Diagnostics of the optimization and of the code generation of instrumented code go
+    // through Clang's diagnostics, as for plain code (#167): with the same filtering, the
+    // same locations and the same severity, which warning options change.
+    class BackendDiagnosticsTest : public CompileTest
+    {
+      protected:
+        compilerlib::CompileResult compileUnit(bool instrument,
+                                               const std::vector<std::string>& options)
+        {
+            source_ = writeSource("unit.c", kBackendDiagnosticsUnit);
+            // Instrumented compilations add -gline-tables-only when no -g is given: plain
+            // ones get it too, so that both locate diagnostics with the same debug locations.
+            std::vector<std::string> args = {kElfTarget, "-O2", "-gline-tables-only"};
+            args.insert(args.end(), options.begin(), options.end());
+            args.insert(args.end(),
+                        {"-c", source_, "-o", path(instrument ? "instrumented.o" : "plain.o")});
+            if (instrument)
+                args.push_back("--ct-modules=alloc");
+            // Every diagnostic belongs in the result: LLVM's default handler would print to
+            // the process's stderr instead, unfiltered.
+            ::testing::internal::CaptureStderr();
+            compilerlib::CompileResult result =
+                compilerlib::compile(args, compilerlib::OutputMode::ToFile, instrument);
+            std::string printed = ::testing::internal::GetCapturedStderr();
+#if LLVM_VERSION_MAJOR < 17
+            // For a frame larger than -Wframe-larger-than, LLVM 16 itself prints the share of
+            // spills in it, outside any diagnostic and for plain code too; LLVM 17 prints it
+            // in debug builds only.
+            const size_t spills = printed.find(" spills, ");
+            if (spills != std::string::npos)
+            {
+                const size_t previous = printed.rfind('\n', spills);
+                const size_t start = previous == std::string::npos ? 0 : previous + 1;
+                const size_t end = printed.find('\n', spills);
+                printed.erase(start,
+                              end == std::string::npos ? std::string::npos : end + 1 - start);
+            }
+#endif
+            EXPECT_EQ(printed, "");
+            return result;
+        }
+
+        // The diagnostics of the plain and of the instrumented compilation, both expected
+        // to succeed.
+        std::pair<std::multiset<std::string>, std::multiset<std::string>>
+        plainAndInstrumented(const std::vector<std::string>& options)
+        {
+            compilerlib::CompileResult plain = compileUnit(false, options);
+            EXPECT_TRUE(plain.success) << plain.diagnostics;
+            compilerlib::CompileResult instrumented = compileUnit(true, options);
+            EXPECT_TRUE(instrumented.success) << instrumented.diagnostics;
+            return {diagnosticsIn(plain.diagnostics, source_),
+                    diagnosticsIn(instrumented.diagnostics, source_)};
+        }
+
+        std::string source_;
+    };
+
+    class RemarkFamilyTest : public BackendDiagnosticsTest,
+                             public ::testing::WithParamInterface<const char*>
+    {
+    };
+
+    TEST_P(RemarkFamilyTest, InstrumentedRemarksMatchPlain)
+    {
+        auto [plain, instrumented] = plainAndInstrumented({GetParam()});
+        EXPECT_GT(countLevel(plain, ": remark: "), 0u) << "the test's premise";
+        EXPECT_EQ(instrumented, plain);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Families, RemarkFamilyTest,
+                             ::testing::Values("-Rpass=inline", "-Rpass-missed=inline",
+                                               "-Rpass-analysis=loop-vectorize",
+                                               // LLVM 23 renamed the pass prolog-epilog.
+                                               "-Rpass-analysis=prolog-?epilog"),
+                             [](const ::testing::TestParamInfo<const char*>& info)
+                             {
+                                 switch (info.index)
+                                 {
+                                 case 0:
+                                     return std::string("Passed");
+                                 case 1:
+                                     return std::string("Missed");
+                                 case 2:
+                                     return std::string("Analysis");
+                                 default:
+                                     return std::string("CodeGenerationAnalysis");
+                                 }
+                             });
+
+    // -Rpass=<regex> selects remarks by pass name, and remarks are off without it.
+    TEST_F(BackendDiagnosticsTest, InstrumentedRemarksAreFiltered)
+    {
+        auto [plain, instrumented] = plainAndInstrumented({"-Rpass=inl.ne"});
+        EXPECT_EQ(instrumented, plain);
+        EXPECT_EQ(countLevel(instrumented, ": remark: "), 1u);
+
+        compilerlib::CompileResult unrequested = compileUnit(true, {});
+        EXPECT_TRUE(unrequested.success) << unrequested.diagnostics;
+        EXPECT_EQ(unrequested.diagnostics.find("remark"), std::string::npos)
+            << unrequested.diagnostics;
+    }
+
+    TEST_F(BackendDiagnosticsTest, InstrumentedOptimizationFailureMatchesPlain)
+    {
+        auto [plain, instrumented] = plainAndInstrumented({});
+        EXPECT_EQ(countLevel(plain, ": warning: loop not vectorized"), 1u) << "the test's premise";
+        EXPECT_EQ(instrumented, plain);
+    }
+
+    // Code generation locates the frame size warning at the function's declaration, which
+    // the instrumented path must still know after the frontend.
+    TEST_F(BackendDiagnosticsTest, InstrumentedFunctionLocationsMatchPlain)
+    {
+        auto [plain, instrumented] = plainAndInstrumented({"-Wframe-larger-than=64"});
+        EXPECT_EQ(countLevel(plain, ": warning: stack frame size"), 1u) << "the test's premise";
+        EXPECT_EQ(instrumented, plain);
+    }
+
+    TEST_F(BackendDiagnosticsTest, WerrorMakesAnInstrumentedOptimizationFailureAnError)
+    {
+        compilerlib::CompileResult result = compileUnit(true, {"-Werror"});
+        EXPECT_FALSE(result.success);
+        EXPECT_EQ(
+            countLevel(diagnosticsIn(result.diagnostics, source_), ": error: loop not vectorized"),
+            1u)
+            << result.diagnostics;
+        EXPECT_FALSE(fs::exists(path("instrumented.o")));
+    }
+
+    class SilencedOptimizationFailureTest : public BackendDiagnosticsTest,
+                                            public ::testing::WithParamInterface<const char*>
+    {
+    };
+
+    TEST_P(SilencedOptimizationFailureTest, IsNotPrinted)
+    {
+        compilerlib::CompileResult result = compileUnit(true, {GetParam()});
+        EXPECT_TRUE(result.success) << result.diagnostics;
+        EXPECT_EQ(result.diagnostics.find("loop not vectorized"), std::string::npos)
+            << result.diagnostics;
+    }
+
+    std::string silencingOptionName(const ::testing::TestParamInfo<const char*>& info)
+    {
+        return info.index == 0 ? "NoWarnings" : "NoPassFailed";
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Options, SilencedOptimizationFailureTest,
+                             ::testing::Values("-w", "-Wno-pass-failed"), silencingOptionName);
+
+    // The handler leaves the optimization record whole: it holds the remarks of
+    // optimization and code generation, whichever -Rpass selects.
+    TEST_F(BackendDiagnosticsTest, InstrumentedRecordWithRemarksMatchesPlain)
+    {
+        std::multiset<std::string> records[2];
+        for (const bool instrument : {false, true})
+        {
+            compilerlib::CompileResult result =
+                compileUnit(instrument, {"-Rpass=inline", "-fsave-optimization-record"});
+            ASSERT_TRUE(result.success) << result.diagnostics;
+            records[instrument] =
+                recordedRemarks(path(instrument ? "instrumented.opt.yaml" : "plain.opt.yaml"));
+        }
+        EXPECT_FALSE(records[false].empty()) << "the test's premise";
+        EXPECT_EQ(records[true], records[false]);
+    }
+
+    // A code generation error is reported where Clang reports it, and fails the compilation.
+    TEST_F(BackendDiagnosticsTest, InstrumentedCodeGenerationErrorMatchesPlain)
+    {
+        const std::string source = CT_TEST_SOURCE_DIR "/examples/fixtures/codegen_error.c";
+        std::multiset<std::string> errors[2];
+        for (const bool instrument : {false, true})
+        {
+            ::testing::internal::CaptureStderr();
+            compilerlib::CompileResult result = compilerlib::compile(
+                {kElfTarget, "-c", source, "-o", path(instrument ? "instrumented.o" : "plain.o")},
+                compilerlib::OutputMode::ToFile, instrument);
+            EXPECT_EQ(::testing::internal::GetCapturedStderr(), "");
+            EXPECT_FALSE(result.success);
+            errors[instrument] = diagnosticsIn(result.diagnostics, source);
+        }
+        EXPECT_EQ(countLevel(errors[false], ": error: "), 1u) << "the test's premise";
+        EXPECT_EQ(errors[true], errors[false]);
     }
 } // namespace

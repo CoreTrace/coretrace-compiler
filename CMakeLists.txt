@@ -139,6 +139,7 @@ endif()
 set(LIB_SOURCES
   src/compilerlib/args.cpp
   src/compilerlib/compiler.cpp
+  src/compilerlib/emit/backend_diagnostics.cpp
   src/compilerlib/emit/llvm_output.cpp
   src/compilerlib/frontend/no_instrument_action.cpp
   src/compilerlib/frontend/optnone_action.cpp
