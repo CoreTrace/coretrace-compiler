@@ -12,7 +12,15 @@ From v0.8.0 on, each release also has detailed notes on the
 [releases page](https://github.com/CoreTrace/coretrace-compiler/releases), citing every
 pull request.
 
-## Unreleased
+## v0.11.1 (2026-10-07)
+
+Instrumented code is compiled through one pipeline on every LLVM version, and written by
+Clang's backend with every code generation option of the compilation. Fixes a crash with
+`-fsave-optimization-record` and a crash at exit on Windows.
+
+The public interfaces do not change: the compilerlib headers, the C entry point, the `cc`
+options and the runtime ABI are those of 0.11.0. Objects instrumented by 0.11.0 link with the
+0.11.1 runtime, and the other way round.
 
 ### Behaviour changes
 
@@ -21,21 +29,21 @@ pull request.
   calls, then runs Clang's optimization pipeline once. LLVM 16 and 17 no longer compile
   instrumented code with `-fno-builtin`: `setjmp` keeps `returns_twice`, and explicit
   `memcpy`, `memset` and `memmove` calls are bounds-checked there too (#168, #153).
+- **Relocation model of instrumented objects.** It is the compilation's own, as for plain
+  objects, instead of position-independent code on every target. On Linux, `cc` still adds
+  `-fPIE` to instrumented compilations unless `-fPIC` or `-fPIE` is given (#164).
 
 ### Fixes
-
-- **Optimization records.** An instrumented object built with `-fsave-optimization-record` no
-  longer crashes the compiler, its record holds the code generation remarks as a plain
-  compilation's does, and a failed compilation leaves no record (#168, #165).
 
 - **Code generation options of instrumented code.** Instrumented objects, IR and bitcode are
   written by Clang's backend, with every code generation option of the compilation, instead of
   a target machine of compilerlib's own. `-ffunction-sections`, `-fdata-sections`, the
-  address-significance table, `-gsplit-dwarf` (`.dwo`), `-fstack-usage` (`.su`) and the
-  relocation model now apply to them as to plain objects; a failed compilation leaves none of
-  these files. The module is not optimized again (#164, #131). Bitcode for `-flto` is still
-  written without its summary (#163).
-
+  address-significance table, `-gsplit-dwarf` (`.dwo`) and `-fstack-usage` (`.su`) now apply to
+  them as to plain objects; a failed compilation leaves none of these files. The module is not
+  optimized again (#164, #131).
+- **Optimization records.** An instrumented object built with `-fsave-optimization-record` no
+  longer crashes the compiler, its record holds the code generation remarks as a plain
+  compilation's does, and a failed compilation leaves no record (#168, #165).
 - **Windows.** A `.CRT$XT` terminator that releases a tracked block no longer crashes the
   program, and its block is no longer reported as a leak. The runtime's allocation table and
   its lock are never destroyed, and the leak report is a `.CRT$XTY` terminator, after the
@@ -47,11 +55,27 @@ pull request.
   without `--instrument` and of shared libraries. They reproduce two known defects, on
   macOS for the first (#161) and on Linux and macOS for the second (#158). The runtime
   suite expects exactly these failures: any other failure of the fixtures fails it (#157).
+- Unit tests check the sections, address-significance table, split DWARF and stack usage
+  files of instrumented objects on ELF and COFF, that instrumented code is optimized once,
+  that explicit memory functions are bounds-checked and `setjmp` keeps `returns_twice` on every
+  LLVM version, and the content and cleanup of optimization records (#164, #168).
 
 ### Documentation
 
 - The README's "Leak report" section lists which exit-time code the report is checked to
-  come after, per system, and the confirmed limitations (#157, #160).
+  come after, per system, and the confirmed limitations (#157, #160, #162).
+- The README's "LLVM versions" section describes the instrumented pipeline (#164, #168).
+
+### Known issues
+
+- `--instrument` with `-flto` or `-flto=thin` writes bitcode without its summary, and the
+  link-time behaviour of instrumented code is not tested (#163).
+- `-ftime-trace` writes no file, with or without `--instrument` (#166).
+- `-Rpass` remarks are not printed for instrumented compilations; `-fsave-optimization-record`
+  is not affected (#167).
+- The leak report runs before the exit-time code of shared libraries (#158), and on macOS
+  before that of objects compiled without `--instrument` and linked first (#161).
+- Building against the LLVM 23 Windows archive is not covered (#149).
 
 ## v0.11.0 (2026-10-04)
 
