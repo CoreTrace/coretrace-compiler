@@ -207,18 +207,14 @@ What the tests check, in CI:
 | Destructors of global objects of instrumented code | yes | yes | yes |
 | `atexit` handlers registered by instrumented code | yes | yes | not tested |
 | Destructor functions (`__attribute__((destructor))`) of default priority, in instrumented code | yes | yes | not tested |
-| The same in objects compiled without `--instrument` and linked before the instrumented ones | yes | yes, when `cc` links the program (#161) | not tested |
-| The same in a shared library the program links with | yes (#158) | **no** (#158) | not tested |
+| The same in objects compiled without `--instrument` and linked before the instrumented ones | yes | yes (#161) | not tested |
+| The same in a shared library the program links with | yes (#158) | yes (#158) | not tested |
 | A terminator placed in `.CRT$XTU`, in instrumented code | — | — | yes |
 
-In the case marked **no**, the report runs before that code: the blocks it releases are listed
-as leaks. The test suite expects exactly this failure, so a change in behaviour shows up.
-
 On Linux, the report is registered from the program's last destructor function, and glibc runs it
-once every shared library has run its exit-time code. On macOS, the linker runs the initializers
-of a program in link order: `cc` links first an archive of the runtime whose initializer schedules
-the report, before every other input. A program that another tool links does not get it, and
-objects linked before its first instrumented one are then not covered.
+once every shared library has run its exit-time code. On macOS, the exit-time code of the program
+and of its dylibs is one list, run in reverse order of registration; the report's handler runs the
+rest of that list before reporting, so the report comes last whichever tool links the program.
 
 On Windows, the report is itself a terminator, in `.CRT$XTY`, and the runtime's allocation table
 and its lock are never destroyed: blocks can still be released after the destructors of every
