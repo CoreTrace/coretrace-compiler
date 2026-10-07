@@ -76,6 +76,14 @@ function(coretrace_patch_llvm_diaguids replacement_path)
   endforeach()
 endfunction()
 
+# From LLVM 23, the official Windows archive links LLVMSupport with zlib and zstd, which it does
+# not ship (#149). LLVM's Findzstd defines the static zstd target it links with only for a
+# library named zstd_static.lib, which vcpkg does not install; zstd's own CMake package
+# defines that target.
+if(WIN32)
+  find_package(zstd CONFIG QUIET)
+endif()
+
 find_package(LLVM REQUIRED CONFIG)
 # compilerlib builds against LLVM 16 to 23; the LLVM versions workflow builds each of them.
 if(LLVM_VERSION_MAJOR LESS 16)
