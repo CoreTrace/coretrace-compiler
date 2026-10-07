@@ -242,6 +242,9 @@ With `--instrument`, the compiler also adds to clang's arguments:
   library functions keep their builtin status: `setjmp` keeps `returns_twice`, and explicit
   `memcpy`, `memset` and `memmove` calls become memory intrinsics, which the bounds module checks.
 
+Link-time optimization is not supported with `--instrument`: `-flto` and `-flto=<mode>` make an
+instrumented compilation fail with an error, unless `-fno-lto` turns them off (#163).
+
 `-fsave-optimization-record` records the remarks of steps 3 to 5 in one file, as for a plain
 compilation; a failed compilation leaves no record. Two diagnostics options are not supported yet:
 `-Rpass` remarks are not printed for instrumented compilations (#167), and `-ftime-trace` writes
