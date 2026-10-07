@@ -10,6 +10,8 @@
 #include <clang/Basic/DiagnosticOptions.h>
 #include <clang/Basic/TargetInfo.h>
 #include <clang/CodeGen/BackendUtil.h>
+#include <clang/Driver/Compilation.h>
+#include <clang/Driver/ToolChain.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/CompilerInvocation.h>
 #include <llvm/ADT/IntrusiveRefCntPtr.h>
@@ -80,6 +82,17 @@ namespace compilerlib::clang_compat
         context.setLLVMRemarkStreamer(nullptr);
         context.setMainRemarkStreamer(nullptr);
         file.reset();
+#endif
+    }
+
+    // Whether the compilation uses link-time optimization, as the driver resolved -flto,
+    // -flto=<mode> and -fno-lto. LLVM 23 moved the LTO mode from the driver to the toolchain.
+    inline bool usesLto(const clang::driver::Compilation& compilation)
+    {
+#if LLVM_VERSION_MAJOR >= 23
+        return compilation.getDefaultToolChain().isUsingLTO(compilation.getArgs());
+#else
+        return compilation.getDriver().isUsingLTO();
 #endif
     }
 

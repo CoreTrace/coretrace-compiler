@@ -1124,7 +1124,7 @@ namespace compilerlib
         // Instrumented LTO is not supported (#163): the bitcode would be written without its
         // summary, and the link-time pipeline would optimize the instrumented code again,
         // which no test covers. The driver resolves -flto, -flto=<mode> and -fno-lto.
-        if (instrument && driver.driver().isUsingLTO())
+        if (instrument && clang_compat::usesLto(*comp))
             return {false,
                     "error: ct: --instrument does not support -flto: compile instrumented code "
                     "without link-time optimization",
