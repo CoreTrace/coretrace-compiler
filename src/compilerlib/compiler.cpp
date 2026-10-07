@@ -16,6 +16,7 @@
 #include "emit/llvm_output.hpp"
 
 #include <clang/Frontend/FrontendActions.h>
+#include <clang/Basic/DiagnosticFrontend.h>
 #include <clang/Driver/Compilation.h>
 #include <clang/Driver/Driver.h>
 #include <mutex>
@@ -39,6 +40,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/Program.h>
 #include <llvm/Support/TargetSelect.h>
+#include <llvm/Support/TimeProfiler.h>
 #include <llvm/Support/VirtualFileSystem.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
@@ -384,6 +386,53 @@ namespace compilerlib
                            });
         }
 
+        // -ftime-trace for one -cc1 job, as cc1_main runs it: the profiler of this thread
+        // records the job, and finish(), or the destructor, writes the trace whether the job
+        // succeeded or not. A host that already profiles this thread keeps its profiler.
+        class Cc1TimeTrace
+        {
+          public:
+            Cc1TimeTrace(clang::CompilerInstance& ci, llvm::StringRef program)
+                : ci_(ci), file_(clang_compat::timeTraceFile(ci.getFrontendOpts()))
+            {
+                if (file_.empty() || llvm::timeTraceProfilerEnabled())
+                {
+                    file_.clear();
+                    return;
+                }
+                clang_compat::startTimeTrace(ci.getFrontendOpts(), program);
+            }
+
+            Cc1TimeTrace(const Cc1TimeTrace&) = delete;
+            Cc1TimeTrace& operator=(const Cc1TimeTrace&) = delete;
+
+            ~Cc1TimeTrace()
+            {
+                finish();
+            }
+
+            // Writes the trace and stops the profiler. As with clang, a trace that cannot be
+            // written is reported without failing the job.
+            void finish(void)
+            {
+                if (file_.empty())
+                    return;
+                std::error_code ec;
+                llvm::raw_fd_ostream out(file_, ec, llvm::sys::fs::OF_TextWithCRLF);
+                if (ec)
+                    ci_.getDiagnostics().Report(clang::diag::err_fe_unable_to_open_output)
+                        << file_ << ec.message();
+                else
+                    llvm::timeTraceProfilerWrite(out);
+                llvm::timeTraceProfilerCleanup();
+                file_.clear();
+            }
+
+          private:
+            clang::CompilerInstance& ci_;
+            std::string file_;
+        };
+
         // The compilation whose driver is executing its jobs on this thread, for runCc1:
         // Driver::CC1Main takes a plain function before LLVM 17, so it cannot carry it.
         thread_local CompileContext* executingContext = nullptr;
@@ -426,7 +475,12 @@ namespace compilerlib
             // this library may compile again, so everything is released.
             ci->getFrontendOpts().DisableFree = false;
             ci->getCodeGenOpts().DisableFree = false;
-            const bool succeeded = parsed && clang::ExecuteCompilerInvocation(ci.get());
+            bool succeeded = false;
+            if (parsed)
+            {
+                Cc1TimeTrace trace(*ci, argv[0]);
+                succeeded = clang::ExecuteCompilerInvocation(ci.get());
+            }
 
             stream.flush();
             ctx.dc.os << text;
@@ -536,6 +590,7 @@ namespace compilerlib
                     error = "instrumentation only supports object or LLVM IR/bitcode output";
                     return false;
                 }
+                Cc1TimeTrace trace(*ci, job.getExecutable());
 
                 auto handleModule = [&](std::unique_ptr<llvm::Module> module) -> bool
                 {
@@ -607,6 +662,7 @@ namespace compilerlib
                         "in-memory bitcode needs a bitcode compilation: pass -emit-llvm -c";
                     return result;
                 }
+                Cc1TimeTrace trace(*ci, job.getExecutable());
 
                 switch (ci->getFrontendOpts().ProgramAction)
                 {
@@ -716,6 +772,8 @@ namespace compilerlib
                     return result;
                 }
 
+                // Before the diagnostics are collected: writing the trace may report one.
+                trace.finish();
                 result.success = true;
                 if (includeDriverDiags)
                 {
@@ -739,6 +797,7 @@ namespace compilerlib
             // must fail the compilation rather than reach code generation or the output.
             CT_NODISCARD bool instrument(llvm::Module& module, std::string& error)
             {
+                llvm::TimeTraceScope scope("CoreTraceInstrumentation");
                 const RuntimeConfig& config = ctx_.runtimeConfig;
                 if (config.trace_enabled)
                     instrumentModule(module);
