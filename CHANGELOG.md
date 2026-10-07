@@ -38,20 +38,19 @@ pull request.
   for example by vcpkg with the `x64-windows-static` triplet, they are found through
   `CMAKE_PREFIX_PATH` (#173, #149).
 
-- **Leak report after the exit-time code of shared libraries, on Linux.** Blocks that a shared
-  library releases at exit, from a global object's destructor or a destructor function, are no
-  longer reported as leaks. macOS still reports them (#174, #158).
-- **Leak report after the exit-time code of objects linked first, on macOS.** When `cc` links
-  the program, blocks that an object compiled without `--instrument` and linked before the
-  instrumented ones releases at exit are no longer reported as leaks. `cc` links first a new
-  runtime archive, `libct_leak_report_first.a`, installed next to the runtime (#174, #161).
+- **Leak report after the exit-time code of shared libraries.** Blocks that a shared library
+  releases at exit, from a global object's destructor or a destructor function, are no longer
+  reported as leaks, on Linux (#174) and macOS (#176) (#158).
+- **Leak report after the exit-time code of objects linked first, on macOS.** Blocks that an
+  object compiled without `--instrument` and linked before the instrumented ones releases at
+  exit are no longer reported as leaks, whichever tool links the program (#174, #176, #161).
 
 ### Tests and CI
 
 - The LLVM versions workflow builds and tests Windows with LLVM 23.1.2, with zlib and zstd
   from vcpkg (#173, #149).
-- The runtime fixture suites at `-O2` run even when those at `-O0` fail. The known failures
-  of the leak report fixtures now name only the remaining defect, #158 on macOS (#174).
+- The runtime fixture suites at `-O2` run even when those at `-O0` fail (#174). The leak report
+  fixtures no longer have known failures (#174, #176).
 
 ## v0.11.1 (2026-10-07)
 
