@@ -136,11 +136,6 @@ FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-ove
 #                allocated, and only those.
 known_failure() {
   case "$1" in
-    # On macOS, the executable's exit-time code, the report included, runs before that of
-    # the shared libraries it depends on (#158).
-    ct_leak_exit_shared_library.cpp)
-      [[ "$(uname -s)" == Darwin ]] && echo leak-report && return 0
-      ;;
   esac
   return 1
 }
