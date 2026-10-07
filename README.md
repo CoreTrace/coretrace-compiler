@@ -258,10 +258,10 @@ remarks printed, warning options such as `-Werror` and `-w` apply, and each diag
 in the source. `-ftime-trace` writes its file, which also covers the instrumentation (#166).
 
 An instrumented compilation prints its diagnostics as clang prints them, those of the frontend
-included: with source excerpts, notes such as the inline assembly an error comes from, and the
-option of each warning or remark, for example `[-Wunused-variable]`. It honours the diagnostic
-options of the compilation, such as `-fcolor-diagnostics` (#172). `CompileResult::diagnostics`
-holds this text, so a host of compilerlib that parses it sees that format too.
+included (#172): with source excerpts, notes such as the inline assembly an error comes from, and
+the option of each warning or remark, for example `[-Wunused-variable]`.
+`CompileResult::diagnostics` holds this text, so a host of compilerlib that parses it sees that
+format too.
 
 ### Other notes per version
 
