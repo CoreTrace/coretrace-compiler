@@ -1284,4 +1284,55 @@ void moveBytes(char* destination, const char* source, size_t size)
         ASSERT_FALSE(result.success);
         EXPECT_FALSE(fs::exists(path("broken.opt.yaml")));
     }
+
+    // Instrumented LTO is not supported (#163): the bitcode would be written without its
+    // summary, and the link-time pipeline would optimize the instrumented code again. The
+    // compilation fails at once, and writes nothing.
+    class InstrumentedLtoTest : public CompileTest,
+                                public ::testing::WithParamInterface<const char*>
+    {
+    };
+
+    TEST_P(InstrumentedLtoTest, IsRejected)
+    {
+        compilerlib::CompileResult result =
+            compilerlib::compile({kElfTarget, GetParam(), "-c", writeSource("unit.c", kSectionUnit),
+                                  "-o", path("unit.o"), "--ct-modules=alloc"},
+                                 compilerlib::OutputMode::ToFile, /*instrument=*/true);
+        EXPECT_FALSE(result.success);
+        EXPECT_NE(result.diagnostics.find("--instrument does not support -flto"), std::string::npos)
+            << result.diagnostics;
+        EXPECT_FALSE(fs::exists(path("unit.o")));
+    }
+
+    INSTANTIATE_TEST_SUITE_P(LtoModes, InstrumentedLtoTest,
+                             ::testing::Values("-flto", "-flto=thin", "-flto=full"),
+                             [](const ::testing::TestParamInfo<const char*>& info)
+                             {
+                                 const std::string mode = info.param;
+                                 return mode == "-flto" ? std::string("Default")
+                                                        : mode.substr(std::strlen("-flto="));
+                             });
+
+    // -fno-lto after -flto turns LTO off, as for clang.
+    TEST_F(CompileTest, InstrumentedCompilationAcceptsLtoTurnedOff)
+    {
+        compilerlib::CompileResult result = compilerlib::compile(
+            {kElfTarget, "-flto", "-fno-lto", "-c", writeSource("unit.c", kSectionUnit), "-o",
+             path("unit.o"), "--ct-modules=alloc"},
+            compilerlib::OutputMode::ToFile, /*instrument=*/true);
+        EXPECT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(fs::exists(path("unit.o")));
+    }
+
+    // Plain compilations keep LTO.
+    TEST_F(CompileTest, PlainLtoIsUnchanged)
+    {
+        compilerlib::CompileResult result =
+            compilerlib::compile({kElfTarget, "-flto=thin", "-c",
+                                  writeSource("unit.c", kSectionUnit), "-o", path("unit.o")},
+                                 compilerlib::OutputMode::ToFile);
+        EXPECT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(fs::exists(path("unit.o")));
+    }
 } // namespace

@@ -12,6 +12,15 @@ From v0.8.0 on, each release also has detailed notes on the
 [releases page](https://github.com/CoreTrace/coretrace-compiler/releases), citing every
 pull request.
 
+## Unreleased
+
+### Behaviour changes
+
+- **Instrumented LTO is rejected.** `--instrument` with `-flto` or `-flto=<mode>` fails with
+  an error instead of writing bitcode without its summary, whose link-time optimization would
+  run again on the instrumented code, untested. `-fno-lto` after them is accepted, and plain
+  compilations keep LTO (#170, #163).
+
 ## v0.11.1 (2026-10-07)
 
 Instrumented code is compiled through one pipeline on every LLVM version, and written by
