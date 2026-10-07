@@ -136,16 +136,10 @@ FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-ove
 #                allocated, and only those.
 known_failure() {
   case "$1" in
-    # Exit-time code of objects linked before the first instrumented one runs after the
-    # report on macOS, where initializers run in link order (#161).
-    ct_leak_exit_uninstrumented_first.cpp)
-      [[ "$(uname -s)" == Darwin ]] && echo leak-report && return 0
-      ;;
-    # The executable's exit-time code, the report included, runs before that of the
-    # shared libraries it depends on (#158).
+    # On macOS, the executable's exit-time code, the report included, runs before that of
+    # the shared libraries it depends on (#158).
     ct_leak_exit_shared_library.cpp)
-      echo leak-report
-      return 0
+      [[ "$(uname -s)" == Darwin ]] && echo leak-report && return 0
       ;;
   esac
   return 1
