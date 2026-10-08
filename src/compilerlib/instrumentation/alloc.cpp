@@ -365,6 +365,37 @@ namespace compilerlib
         // The escape analysis runs before the allocator calls are rewritten, so the
         // alloca that receives posix_memalign's result is still passed to the raw
         // callee. That call is the allocation itself, not a capture of the slot.
+        // A ThreadSanitizer access check, `void __tsan_<access><size>(ptr)`, which LLVM's
+        // ThreadSanitizer pass (16 to 23) inserts before each memory access it instruments,
+        // before these passes run. It checks the address and keeps no copy of it, although
+        // LLVM declares no capture attribute on it: the pointer does not escape through it.
+        // Other ThreadSanitizer entry points, such as range checks or atomics, are calls like
+        // any other.
+        CT_NODISCARD bool isTsanAccessCheck(const llvm::CallBase& call)
+        {
+            const llvm::Function* callee = call.getCalledFunction();
+            if (!callee || !callee->isDeclaration())
+                return false;
+            const llvm::FunctionType* type = callee->getFunctionType();
+            if (type->isVarArg() || type->getNumParams() != 1 ||
+                !type->getReturnType()->isVoidTy() || !type->getParamType(0)->isPointerTy())
+                return false;
+            llvm::StringRef name = callee->getName();
+            if (!name.consume_front("__tsan_"))
+                return false;
+            // Longest first, so that read_write is not taken for read.
+            for (llvm::StringRef access :
+                 {"unaligned_volatile_read", "unaligned_volatile_write", "unaligned_read_write",
+                  "unaligned_read", "unaligned_write", "volatile_read", "volatile_write",
+                  "read_write", "read", "write"})
+            {
+                llvm::StringRef size = name;
+                if (size.consume_front(access))
+                    return size == "1" || size == "2" || size == "4" || size == "8" || size == "16";
+            }
+            return false;
+        }
+
         CT_NODISCARD bool isOutParamAllocatorCall(const llvm::CallBase& call,
                                                   const llvm::Value* slot)
         {
@@ -459,6 +490,8 @@ namespace compilerlib
                             }
                             if (auto* call = llvm::dyn_cast<llvm::CallBase>(loadUser))
                             {
+                                if (isTsanAccessCheck(*call))
+                                    continue;
                                 llvm::Function* callee = call->getCalledFunction();
                                 if (callee && isFreeLikeName(callee->getName()))
                                 {
@@ -514,7 +547,8 @@ namespace compilerlib
                         continue;
                     }
                     if (auto* call = llvm::dyn_cast<llvm::CallBase>(user);
-                        call && isOutParamAllocatorCall(*call, current))
+                        call &&
+                        (isOutParamAllocatorCall(*call, current) || isTsanAccessCheck(*call)))
                     {
                         continue;
                     }
@@ -764,6 +798,9 @@ namespace compilerlib
                     }
                     continue;
                 }
+                if (auto* call = llvm::dyn_cast<llvm::CallBase>(user);
+                    call && isTsanAccessCheck(*call))
+                    continue;
                 if (llvm::isa<llvm::CallBase>(user) || llvm::isa<llvm::ReturnInst>(user))
                 {
                     return finish(promoteState(state, EscapeState::EscapedCall,
@@ -943,6 +980,8 @@ namespace compilerlib
                     }
                     if (auto* call = llvm::dyn_cast<llvm::CallBase>(user))
                     {
+                        if (isTsanAccessCheck(*call))
+                            continue;
                         llvm::Function* callee = call->getCalledFunction();
                         if (callee && isFreeLikeName(callee->getName()))
                         {
