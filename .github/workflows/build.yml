@@ -173,6 +173,16 @@ jobs:
         bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
         bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
 
+    # ThreadSanitizer writes its reports to the fixtures' stderr logs.
+    - name: Upload the fixture logs
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: tsan-fixture-logs
+        path: |
+          ${{ runner.temp }}/ct_autofree_tests/*.log
+          ${{ runner.temp }}/ct_runtime_tests/*.log
+
   # Line coverage of compilerlib, cc and the runtime (ENABLE_COVERAGE), from the unit tests,
   # the smoke tests and the runtime fixture suites. Informational: no threshold is enforced.
   # The suites build their programs with -fprofile-instr-generate, so that the runtime they
