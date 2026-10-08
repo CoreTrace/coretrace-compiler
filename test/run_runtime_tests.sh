@@ -35,9 +35,10 @@ mkdir -p "${OUT_DIR}"
 source "${ROOT_DIR}/test/scripts/run_with_timeout.sh"
 
 # Flags of every instrumented build. Clang leaves columns out of CodeView, the debug
-# information of Windows, unless asked: the sites the fixtures check have one.
+# information of Windows, unless asked: the sites the fixtures check have one. With
+# -gcolumn-info alone, cc no longer adds the line tables it emits by default (#189).
 COMMON_FLAGS=()
-[[ "${ON_WINDOWS}" -eq 1 ]] && COMMON_FLAGS=(-gcolumn-info)
+[[ "${ON_WINDOWS}" -eq 1 ]] && COMMON_FLAGS=(-gline-tables-only -gcolumn-info)
 
 # Instrumentation flags per fixture.
 flags_for() {
