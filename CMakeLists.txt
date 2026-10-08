@@ -146,6 +146,8 @@ if(ENABLE_DEBUG_UBSAN)
   endif()
 endif()
 
+option(ENABLE_TSAN_RUNTIME "Build the instrumentation runtime with ThreadSanitizer" OFF)
+
 option(ENABLE_COVERAGE "Build with Clang's source-based code coverage" OFF)
 
 if(ENABLE_COVERAGE)
@@ -255,6 +257,16 @@ if(CORETRACE_COMPILER_BUILD_RUNTIME)
     # Nor with UndefinedBehaviorSanitizer's.
     target_compile_options(ct_instrument_runtime PRIVATE -fno-sanitize=undefined)
     target_compile_options(coretrace_logger PRIVATE -fno-sanitize=undefined)
+  endif()
+  # The runtime and its logger with ThreadSanitizer, which checks their locks and shared
+  # state from the programs that link them. Those programs must then be linked with
+  # -fsanitize=thread themselves; compilerlib and cc are built without it. On macOS, the
+  # autofree scan reads memory without synchronization by design, which ThreadSanitizer
+  # reports, and it finds ThreadSanitizer's own references to blocks: CI checks Linux, which
+  # has no scan.
+  if(ENABLE_TSAN_RUNTIME)
+    target_compile_options(ct_instrument_runtime PRIVATE -fsanitize=thread -g)
+    target_compile_options(coretrace_logger PRIVATE -fsanitize=thread -g)
   endif()
 endif()
 
@@ -453,6 +465,10 @@ option(CORETRACE_BUILD_UNIT_TESTS "Build the GoogleTest unit tests (top-level bu
 if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME AND CORETRACE_BUILD_UNIT_TESTS)
   enable_testing()
   add_subdirectory(test/unit)
+  # The runtime unit tests link the runtime, which then needs ThreadSanitizer's runtime.
+  if(ENABLE_TSAN_RUNTIME AND TARGET runtime_unit_tests)
+    target_link_options(runtime_unit_tests PRIVATE -fsanitize=thread)
+  endif()
 endif()
 
 if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
