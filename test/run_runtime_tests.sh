@@ -34,6 +34,11 @@ mkdir -p "${OUT_DIR}"
 # shellcheck source-path=SCRIPTDIR source=scripts/run_with_timeout.sh
 source "${ROOT_DIR}/test/scripts/run_with_timeout.sh"
 
+# Flags of every instrumented build. Clang leaves columns out of CodeView, the debug
+# information of Windows, unless asked: the sites the fixtures check have one.
+COMMON_FLAGS=()
+[[ "${ON_WINDOWS}" -eq 1 ]] && COMMON_FLAGS=(-gcolumn-info)
+
 # Instrumentation flags per fixture.
 flags_for() {
   case "$1" in
@@ -204,11 +209,7 @@ skip_reason() {
         return 0
         ;;
       ct_double_free_site.c|ct_double_delete_site.cpp)
-        echo "the Windows runtime words a double free differently, and its sites have no column (#188)"
-        return 0
-        ;;
-      ct_leak_site.c)
-        echo "Windows sites have no column (#188)"
+        echo "the Windows runtime words a double free differently (#188)"
         return 0
         ;;
     esac
@@ -324,7 +325,7 @@ check_one() {
   fi
 
   # shellcheck disable=SC2086
-  "${CC_BIN}" --instrument ${CT_TEST_OPT:+"${CT_TEST_OPT}"} ${flags} \
+  "${CC_BIN}" --instrument ${CT_TEST_OPT:+"${CT_TEST_OPT}"} ${COMMON_FLAGS[@]+"${COMMON_FLAGS[@]}"} ${flags} \
     ${before[@]+"${before[@]}"} "${ROOT_DIR}/test/${test_file}" ${after[@]+"${after[@]}"} \
     -o "${bin}" >>"${compile_log}" 2>&1 || {
       echo "  compile failed (see ${compile_log})"
