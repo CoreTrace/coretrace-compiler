@@ -51,6 +51,9 @@ pull request.
   from vcpkg (#173, #149).
 - The runtime fixture suites at `-O2` run even when those at `-O0` fail (#174). The leak report
   fixtures no longer have known failures (#174, #176).
+- A Linux job reports the line coverage of compilerlib, `cc` and the runtime, from the unit
+  tests, the smoke tests and the runtime fixture suites, in its summary and as an artifact.
+  `-DENABLE_COVERAGE=ON` builds with Clang's source-based coverage, on Linux (#177, #103).
 
 ## v0.11.1 (2026-10-07)
 
