@@ -15,7 +15,7 @@ first checks that the installed LLVM is the version the job is named after:
 | --- | --- | --- | --- |
 | Linux (Ubuntu 24.04) | 16 to 23 | the same version's clang; GCC for LLVM 20 | unit, smoke, install, runtime fixtures at `-O0` and `-O2`, pass fuzzing |
 | macOS 15 | 19, 20, 23 (Homebrew) | AppleClang | unit, smoke, install, runtime fixtures at `-O0` and `-O2`, pass fuzzing |
-| Windows (Server 2022) | 19.1.7, 20.1.0, 22.1.8, 23.1.2 (official archives) | the archive's clang-cl | unit, smoke, install, runtime fixtures at `-O0` and `-O2` under Git Bash, without those that need POSIX or that #187 and #188 track |
+| Windows (Server 2022) | 19.1.7, 20.1.0, 22.1.8, 23.1.2 (official archives) | the archive's clang-cl | unit, smoke, install, runtime fixtures at `-O0` and `-O2` under Git Bash, without those that need POSIX or that #188 tracks; #187 is an expected failure |
 
 How instrumented code is compiled, and what differs between LLVM versions: see
 [LLVM versions](#llvm-versions).
