@@ -66,8 +66,9 @@ pull request.
 - The Benchmarks workflow measures the run-time overhead of instrumentation on the programs in
   `bench/`, for several sets of modules, with `scripts/bench/overhead.py` (#184, #103).
 - The Windows jobs run the runtime and autofree fixture suites under Git Bash, at `-O0` and
-  `-O2`. They skip the fixtures that need POSIX (pthreads, `fork`, `dlfcn.h`, `unistd.h`, `mmap`,
-  `posix_memalign`, `aligned_alloc`), and those of the Windows defects #187 and #188 (#186, #103).
+  `-O2`, with column information in the sites. They skip the fixtures that need POSIX
+  (pthreads, `fork`, `dlfcn.h`, `unistd.h`, `mmap`, `posix_memalign`, `aligned_alloc`) and those
+  of #188, and expect the leak report failure of #187 (#186, #103).
 
 ## v0.11.1 (2026-10-07)
 
