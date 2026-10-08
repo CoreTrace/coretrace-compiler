@@ -194,6 +194,22 @@ skip_reason() {
         echo "uses dlfcn.h, which Windows does not provide"
         return 0
         ;;
+      ct_leak_exit_shared_library.cpp)
+        echo "the leak report runs before the exit-time code of DLLs (#187)"
+        return 0
+        ;;
+      ct_alloc_basic.c|ct_new_delete.cpp)
+        echo "the Windows runtime does not report unreachable allocations (#188)"
+        return 0
+        ;;
+      ct_double_free_site.c|ct_double_delete_site.cpp)
+        echo "the Windows runtime words a double free differently, and its sites have no column (#188)"
+        return 0
+        ;;
+      ct_leak_site.c)
+        echo "Windows sites have no column (#188)"
+        return 0
+        ;;
     esac
   fi
   return 1
