@@ -28,6 +28,11 @@ job's summary, and in the `coverage-html` artifact; it enforces no threshold. Lo
 with ThreadSanitizer (`-DENABLE_TSAN_RUNTIME=ON`) and runs its unit tests and the runtime
 fixture suites with programs built with `-fsanitize=thread`: a data race in the runtime fails it.
 
+The Benchmarks workflow measures the run-time overhead of instrumentation, on demand: it builds
+the programs in `bench/` without instrumentation and with several sets of modules, and writes
+the median time of each, as a multiple of the plain build's, to its summary. Locally:
+`python3 scripts/bench/overhead.py --cc build/cc`.
+
 Quick build:
 
 ```zsh

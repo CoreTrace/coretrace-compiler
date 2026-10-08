@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The run-time overhead of instrumentation, on the programs in bench/: on demand, and when a
+# pull request changes the benchmarks. Informational: the table goes to the job's summary,
+# and no threshold is enforced.
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'bench/**'
+      - 'scripts/bench/**'
+      - '.github/workflows/benchmarks.yml'
+
+jobs:
+  overhead:
+    name: Overhead (ubuntu-24.04, LLVM 20)
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake ninja-build
+        sudo bash scripts/ci/install-llvm-apt.sh 20 llvm-20 llvm-20-dev clang-20 libclang-20-dev
+
+    - name: Build
+      run: |
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+          -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm \
+          -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang \
+          -DCORETRACE_BUILD_UNIT_TESTS=OFF
+        cmake --build build --target cc
+
+    - name: Measure
+      # With pipefail, as an explicit bash shell runs: a failed measurement fails the step.
+      shell: bash
+      run: |
+        python3 scripts/bench/overhead.py --cc build/cc --runs 3 | tee overhead.md
+        {
+          echo '### Run-time overhead of instrumentation (Linux, LLVM 20)'
+          cat overhead.md
+        } >> "${GITHUB_STEP_SUMMARY}"
