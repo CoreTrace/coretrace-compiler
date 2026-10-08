@@ -129,3 +129,82 @@ jobs:
         bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
         bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
         bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests"
+
+  # Line coverage of compilerlib, cc and the runtime (ENABLE_COVERAGE), from the unit tests,
+  # the smoke tests and the runtime fixture suites. Informational: no threshold is enforced.
+  # The suites build their programs with -fprofile-instr-generate, so that the runtime they
+  # link records its coverage.
+  coverage:
+    name: Coverage (ubuntu-24.04, LLVM 20)
+    runs-on: ubuntu-24.04
+    env:
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/profiles/%8m.profraw
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake ninja-build python3-venv
+        sudo bash scripts/ci/install-llvm-apt.sh 20 llvm-20 llvm-20-dev clang-20 libclang-20-dev \
+          libclang-rt-20-dev
+
+    - name: Build
+      run: |
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_COVERAGE=ON \
+          -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+          -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm \
+          -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang \
+          -DUSE_SHARED_LIB=OFF
+        cmake --build build
+
+    - name: Run unit tests
+      run: ctest --test-dir build --output-on-failure
+
+    - name: Run Python smoke tests
+      run: |
+        python3 -m venv .venv
+        source .venv/bin/activate
+        python -m pip install --upgrade pip
+        python -m pip install git+https://github.com/CoreTrace/coretrace-testkit.git
+        python test/examples/test_smoke.py
+        python test/examples/test_extern_project.py
+        python test/examples/test_help_smoke.py
+
+    - name: Run runtime fixture suites
+      env:
+        CT_TEST_OPT: -fprofile-instr-generate
+      run: |
+        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
+        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
+        bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests"
+
+    - name: Coverage report
+      if: ${{ !cancelled() }}
+      run: |
+        llvm-profdata-20 merge -sparse profiles/*.profraw -o coverage.profdata
+        objects=(build/cc -object build/test/unit/compilerlib_unit_tests
+                 -object build/test/unit/runtime_unit_tests
+                 -object build/libct_instrument_runtime.a)
+        filter='(_deps|/test/|^/usr/)'
+        llvm-cov-20 report "${objects[@]}" -instr-profile coverage.profdata \
+          -ignore-filename-regex="${filter}" | sed "s|${GITHUB_WORKSPACE}/||" > coverage.txt
+        llvm-cov-20 show "${objects[@]}" -instr-profile coverage.profdata \
+          -ignore-filename-regex="${filter}" -format=html -output-dir coverage-html
+        cat coverage.txt
+        {
+          echo '### Line coverage (LLVM 20, Linux)'
+          echo '```'
+          cat coverage.txt
+          echo '```'
+        } >> "${GITHUB_STEP_SUMMARY}"
+
+    - name: Upload the coverage report
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-html
+        path: |
+          coverage-html
+          coverage.txt
