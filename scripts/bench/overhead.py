@@ -40,7 +40,8 @@ def build(cc, source, options, output):
 
 
 def measure(binary, runs):
-    """Returns the program's stdout and its median wall time in milliseconds."""
+    """Returns the program's stdout, the same in every run, and its median wall time in
+    milliseconds."""
     times = []
     stdout = None
     for _ in range(runs):
@@ -50,6 +51,8 @@ def measure(binary, runs):
         times.append((time.perf_counter() - start) * 1000)
         if result.returncode != 0:
             sys.exit(f"{binary} exited with {result.returncode}")
+        if stdout is not None and result.stdout != stdout:
+            sys.exit(f"{binary} printed {result.stdout!r}, then {stdout!r} in an earlier run")
         stdout = result.stdout
     return stdout, statistics.median(times)
 
