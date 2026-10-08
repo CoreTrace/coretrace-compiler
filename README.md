@@ -251,8 +251,10 @@ An instrumented compilation goes through the same steps on every LLVM version:
 
 With `--instrument`, the compiler also adds to clang's arguments:
 
-- `-gline-tables-only`, unless debug information is already requested: the passes record the
-  source location of each allocation;
+- `-gline-tables-only`, unless debug information is already requested, as clang decides it: by
+  an option such as `-g`, `-g2` or `-gdwarf-5`, not undone by a later `-g0`. Options that only
+  change debug information, such as `-gcolumn-info` or `-gsplit-dwarf`, do not request it. The
+  passes record the source location of each allocation;
 - `-fPIE` on Linux, unless `-fPIC` or `-fPIE` is given;
 - one `-fno-builtin-<name>` per C allocation function the alloc module rewrites (`malloc`,
   `calloc`, `realloc`, `aligned_alloc`, `posix_memalign`, `free`). Otherwise clang may remove or
