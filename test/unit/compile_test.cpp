@@ -185,6 +185,20 @@ int main(void)
         EXPECT_NE(result.llvmIR.find("sub/dir/sites.c:6\\00"), std::string::npos) << result.llvmIR;
     }
 
+    // -gcolumn-info only changes the debug information another option asks for: the line
+    // tables an instrumented compilation adds by default stay, and the allocation's site
+    // has its column, CodeView included (#189).
+    TEST_F(CompileTest, ColumnInfoAloneKeepsSites)
+    {
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-gcolumn-info", "-S", "-emit-llvm", "--ct-modules=alloc",
+                                  writeSource("column/sites.c", kSites)},
+                                 compilerlib::OutputMode::ToMemory, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(result.llvmIR.find("column/sites.c:8:12\\00"), std::string::npos)
+            << result.llvmIR;
+    }
+
     // Functions that opt out of instrumentation, either way, and the ones beside them.
     constexpr const char* kNoInstrumentC =
         R"(__attribute__((no_instrument_function)) int quiet(int* values, int index)
