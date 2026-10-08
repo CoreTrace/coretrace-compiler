@@ -405,6 +405,27 @@ jobs:
         CC_BIN="${PWD}/dist/windows/bin/cc.exe" \
           bash test/run_autofree_tests.sh "$(cygpath -u "${RUNNER_TEMP}")/ct_autofree_tests"
 
+    # The same suites, built at -O2.
+    - name: Run runtime fixture tests at -O2 (Windows)
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      shell: bash
+      timeout-minutes: 15
+      env:
+        CT_TEST_OPT: -O2
+      run: |
+        CC_BIN="${PWD}/dist/windows/bin/cc.exe" \
+          bash test/run_runtime_tests.sh "$(cygpath -u "${RUNNER_TEMP}")/ct_runtime_tests_O2"
+
+    - name: Run auto-free fixture tests at -O2 (Windows)
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      shell: bash
+      timeout-minutes: 15
+      env:
+        CT_TEST_OPT: -O2
+      run: |
+        CC_BIN="${PWD}/dist/windows/bin/cc.exe" \
+          bash test/run_autofree_tests.sh "$(cygpath -u "${RUNNER_TEMP}")/ct_autofree_tests_O2"
+
     - name: Upload the fixture logs (Windows)
       if: ${{ !cancelled() && steps.build.outcome == 'success' }}
       uses: actions/upload-artifact@v4
@@ -413,3 +434,5 @@ jobs:
         path: |
           ${{ runner.temp }}/ct_runtime_tests/*.log
           ${{ runner.temp }}/ct_autofree_tests/*.log
+          ${{ runner.temp }}/ct_runtime_tests_O2/*.log
+          ${{ runner.temp }}/ct_autofree_tests_O2/*.log
