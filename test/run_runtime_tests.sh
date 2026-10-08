@@ -7,7 +7,17 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CC_BIN="${CC_BIN:-${ROOT_DIR}/build/cc}"
+# Git Bash, on Windows, names the system MINGW64_NT-<version>.
+case "$(uname -s)" in
+  MINGW*|MSYS*) ON_WINDOWS=1 ;;
+  *) ON_WINDOWS=0 ;;
+esac
+if [[ "${ON_WINDOWS}" -eq 1 ]]; then
+  # Where scripts/build-windows.ps1 builds it by default.
+  CC_BIN="${CC_BIN:-${ROOT_DIR}/build-win/Release/cc.exe}"
+else
+  CC_BIN="${CC_BIN:-${ROOT_DIR}/build/cc}"
+fi
 OUT_DIR="${1:-/tmp/ct_runtime_tests}"
 # Optimization flag the fixtures are built with, for instance -O2. Empty keeps the
 # driver's default, -O0.
@@ -23,6 +33,12 @@ mkdir -p "${OUT_DIR}"
 
 # shellcheck source-path=SCRIPTDIR source=scripts/run_with_timeout.sh
 source "${ROOT_DIR}/test/scripts/run_with_timeout.sh"
+
+# Flags of every instrumented build. Clang leaves columns out of CodeView, the debug
+# information of Windows, unless asked: the sites the fixtures check have one. With
+# -gcolumn-info alone, cc no longer adds the line tables it emits by default (#189).
+COMMON_FLAGS=()
+[[ "${ON_WINDOWS}" -eq 1 ]] && COMMON_FLAGS=(-gline-tables-only -gcolumn-info)
 
 # Instrumentation flags per fixture.
 flags_for() {
@@ -55,6 +71,14 @@ companion_for() {
     ct_leak_exit_uninstrumented_first.cpp) echo "plain:ct_leak_exit_uninstrumented_first_plain.cpp" ;;
     ct_leak_exit_shared_library.cpp) echo "shared:ct_leak_exit_shared_library_lib.cpp" ;;
     *) echo "" ;;
+  esac
+}
+
+# Functions a "shared:" companion exports on Windows, where a DLL exports only the
+# functions it names.
+companion_exports_for() {
+  case "$1" in
+    ct_leak_exit_shared_library.cpp) echo "ct_exit_library_register" ;;
   esac
 }
 
@@ -136,6 +160,11 @@ FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-ove
 #                allocated, and only those.
 known_failure() {
   case "$1" in
+    # On Windows, the report, a terminator of the executable, runs before the exit-time
+    # code of the DLLs it depends on (#187).
+    ct_leak_exit_shared_library.cpp)
+      [[ "${ON_WINDOWS}" -eq 1 ]] && echo leak-report && return 0
+      ;;
   esac
   return 1
 }
@@ -158,6 +187,30 @@ skip_reason() {
         ;;
       ct_vtable_diag_mismatch.cpp)
         echo "calls puts from another module, which ThreadSanitizer intercepts in the program"
+        return 0
+        ;;
+    esac
+  fi
+  if [[ "${ON_WINDOWS}" -eq 1 ]]; then
+    case "$1" in
+      ct_threads_stress.c)
+        echo "uses pthreads, which Windows does not provide"
+        return 0
+        ;;
+      ct_fork_threads.c)
+        echo "uses fork and pthreads, which Windows does not provide"
+        return 0
+        ;;
+      ct_vtable_diag_mismatch.cpp)
+        echo "uses dlfcn.h, which Windows does not provide"
+        return 0
+        ;;
+      ct_alloc_basic.c|ct_new_delete.cpp)
+        echo "the Windows runtime does not report unreachable allocations (#188)"
+        return 0
+        ;;
+      ct_double_free_site.c|ct_double_delete_site.cpp)
+        echo "the Windows runtime words a double free differently (#188)"
         return 0
         ;;
     esac
@@ -248,20 +301,32 @@ check_one() {
         ;;
       shared:*)
         local library="${OUT_DIR}/lib${base}.so"
+        local library_flags=(-fPIC)
         [[ "$(uname -s)" == Darwin ]] && library="${OUT_DIR}/lib${base}.dylib"
+        after=("${library}" "-Wl,-rpath,${OUT_DIR}")
+        if [[ "${ON_WINDOWS}" -eq 1 ]]; then
+          # Clang rejects -fPIC for the MSVC target. The program links with the DLL's
+          # import library, and loads the DLL from its own directory.
+          library="${OUT_DIR}/lib${base}.dll"
+          library_flags=()
+          local symbol
+          for symbol in $(companion_exports_for "${test_file}"); do
+            library_flags+=("-Wl,-export:${symbol}")
+          done
+          after=("${OUT_DIR}/lib${base}.lib")
+        fi
         # shellcheck disable=SC2086
-        "${CC_BIN}" ${CT_TEST_OPT:+"${CT_TEST_OPT}"} -shared -fPIC "${unit}" -o "${library}" \
-          >"${compile_log}" 2>&1 || {
+        "${CC_BIN}" ${CT_TEST_OPT:+"${CT_TEST_OPT}"} -shared ${library_flags[@]+"${library_flags[@]}"} \
+          "${unit}" -o "${library}" >"${compile_log}" 2>&1 || {
             echo "  companion compile failed (see ${compile_log})"
             return 1
           }
-        after=("${library}" "-Wl,-rpath,${OUT_DIR}")
         ;;
     esac
   fi
 
   # shellcheck disable=SC2086
-  "${CC_BIN}" --instrument ${CT_TEST_OPT:+"${CT_TEST_OPT}"} ${flags} \
+  "${CC_BIN}" --instrument ${CT_TEST_OPT:+"${CT_TEST_OPT}"} ${COMMON_FLAGS[@]+"${COMMON_FLAGS[@]}"} ${flags} \
     ${before[@]+"${before[@]}"} "${ROOT_DIR}/test/${test_file}" ${after[@]+"${after[@]}"} \
     -o "${bin}" >>"${compile_log}" 2>&1 || {
       echo "  compile failed (see ${compile_log})"

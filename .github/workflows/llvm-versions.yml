@@ -183,14 +183,15 @@ jobs:
           bash test/run_pass_fuzz.sh "${RUNNER_TEMP}/ct_pass_fuzz"
 
   # The official archive of each version, pinned to a minor release, built with its
-  # clang-cl by scripts/build-windows.ps1. The runtime fixture suites are not ported to
-  # Windows yet: the job runs the unit tests and the smoke tests only.
+  # clang-cl by scripts/build-windows.ps1. Besides the unit tests and the smoke tests, it
+  # runs the fixture runners under Git Bash.
   #
   # The newest version here is 22: the LLVM 23 archive links LLVMSupport with zlib and
   # zstd, which it does not ship, so CMake cannot configure against it alone (#149).
   windows:
     name: Windows / LLVM ${{ matrix.llvm }}
     runs-on: windows-2022
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -341,6 +342,7 @@ jobs:
         "CMAKE_PREFIX_PATH=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
     - name: Configure + Build + Install
+      id: build
       shell: pwsh
       run: |
         $ErrorActionPreference = "Stop"
@@ -384,3 +386,53 @@ jobs:
         # The install test installs a build tree, so it needs the compiler from build-win.
         $env:CORETRACE_COMPILER_TEST_CC = (Resolve-Path .\build-win\Release\cc.exe).Path
         .\.venv\Scripts\python .\test\examples\test_install_layout.py
+
+    # Each suite in its own step, run whatever the result of the steps before it, so that
+    # one failure does not hide another.
+    - name: Run runtime fixture tests (Windows)
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      shell: bash
+      timeout-minutes: 15
+      run: |
+        CC_BIN="${PWD}/dist/windows/bin/cc.exe" \
+          bash test/run_runtime_tests.sh "$(cygpath -u "${RUNNER_TEMP}")/ct_runtime_tests"
+
+    - name: Run auto-free fixture tests (Windows)
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      shell: bash
+      timeout-minutes: 15
+      run: |
+        CC_BIN="${PWD}/dist/windows/bin/cc.exe" \
+          bash test/run_autofree_tests.sh "$(cygpath -u "${RUNNER_TEMP}")/ct_autofree_tests"
+
+    # The same suites, built at -O2.
+    - name: Run runtime fixture tests at -O2 (Windows)
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      shell: bash
+      timeout-minutes: 15
+      env:
+        CT_TEST_OPT: -O2
+      run: |
+        CC_BIN="${PWD}/dist/windows/bin/cc.exe" \
+          bash test/run_runtime_tests.sh "$(cygpath -u "${RUNNER_TEMP}")/ct_runtime_tests_O2"
+
+    - name: Run auto-free fixture tests at -O2 (Windows)
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      shell: bash
+      timeout-minutes: 15
+      env:
+        CT_TEST_OPT: -O2
+      run: |
+        CC_BIN="${PWD}/dist/windows/bin/cc.exe" \
+          bash test/run_autofree_tests.sh "$(cygpath -u "${RUNNER_TEMP}")/ct_autofree_tests_O2"
+
+    - name: Upload the fixture logs (Windows)
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-llvm${{ matrix.llvm }}-fixture-logs
+        path: |
+          ${{ runner.temp }}/ct_runtime_tests/*.log
+          ${{ runner.temp }}/ct_autofree_tests/*.log
+          ${{ runner.temp }}/ct_runtime_tests_O2/*.log
+          ${{ runner.temp }}/ct_autofree_tests_O2/*.log
