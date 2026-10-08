@@ -65,7 +65,8 @@ def main():
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as temporary:
-        out_dir = Path(args.out_dir or temporary)
+        # Absolute, so that the programs run from it rather than being looked up in PATH.
+        out_dir = Path(args.out_dir or temporary).resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
         header = ["Program", "plain (ms)"] + [name for name, _ in CONFIGS]
         rows = []
