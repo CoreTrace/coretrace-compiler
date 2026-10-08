@@ -175,6 +175,8 @@ jobs:
     - name: Run runtime fixture suites
       env:
         CT_TEST_OPT: -fprofile-instr-generate
+        # Coverage counters slow the threaded fixtures past the default 60 seconds.
+        RUN_TIMEOUT_SECONDS: 300
       run: |
         bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
         bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
