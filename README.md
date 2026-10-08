@@ -21,8 +21,10 @@ How instrumented code is compiled, and what differs between LLVM versions: see
 [LLVM versions](#llvm-versions).
 
 The Build workflow adds, with LLVM 20 on Linux: AddressSanitizer, LeakSanitizer and
-UndefinedBehaviorSanitizer builds, a build without the runtime, and multi-arch Docker tests on
-`main`.
+UndefinedBehaviorSanitizer builds, a build without the runtime, multi-arch Docker tests on
+`main`, and a line coverage report of compilerlib, `cc` and the runtime. The report is in the
+job's summary, and in the `coverage-html` artifact; it enforces no threshold. Locally, on Linux,
+`-DENABLE_COVERAGE=ON` builds with Clang's source-based coverage.
 
 Quick build:
 
