@@ -2,8 +2,9 @@
 # shellcheck shell=bash
 # Sourced by the test runners.
 
-# A run longer than this is a hang: the program is killed and its test fails.
-RUN_TIMEOUT_SECONDS=60
+# A run longer than this is a hang: the program is killed and its test fails. Slower builds,
+# such as the coverage one, may set a longer limit in the environment.
+RUN_TIMEOUT_SECONDS="${RUN_TIMEOUT_SECONDS:-60}"
 
 # Runs a command, killed after RUN_TIMEOUT_SECONDS. Returns the command's status, or 124
 # on timeout, as timeout(1) does, which macOS lacks. Redirections given to the call apply
