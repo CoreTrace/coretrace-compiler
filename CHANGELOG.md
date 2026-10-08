@@ -44,6 +44,9 @@ pull request.
 - **Leak report after the exit-time code of objects linked first, on macOS.** Blocks that an
   object compiled without `--instrument` and linked before the instrumented ones releases at
   exit are no longer reported as leaks, whichever tool links the program (#174, #176, #161).
+- **Unused new-expression in a function with a cleanup.** At -O2, an instrumented compilation of
+  such code failed with "instrumentation produced invalid LLVM IR": the release of the unused
+  result came before the invoke that produces it (#179, #178).
 
 ### Tests and CI
 

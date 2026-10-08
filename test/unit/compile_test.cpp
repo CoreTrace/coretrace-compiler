@@ -1706,4 +1706,31 @@ int frame(int i)
         EXPECT_EQ(countLevel(errors[false], ": error: "), 1u) << "the test's premise";
         EXPECT_EQ(errors[true], errors[false]);
     }
+    // At -O2, an unused new-expression in a function with a cleanup, here a local object's
+    // destructor, is an invoke: the release of its unused result used to precede it.
+    TEST_F(CompileTest, UnusedNewInAFunctionWithACleanupCompiles)
+    {
+        const char* source = R"(extern "C" int puts(const char*);
+
+struct Guard
+{
+    ~Guard() { puts("guard"); }
+};
+
+int main()
+{
+    Guard guard;
+    new int(4);
+    return 0;
+}
+)";
+        for (const char* autofree : {"--ct-no-autofree", "--ct-autofree"})
+        {
+            compilerlib::CompileResult result =
+                compilerlib::compile({kElfTarget, "-O2", "-c", writeSource("unit.cpp", source),
+                                      "-o", path("unit.o"), "--ct-modules=alloc", autofree},
+                                     compilerlib::OutputMode::ToFile, /*instrument=*/true);
+            EXPECT_TRUE(result.success) << autofree << "\n" << result.diagnostics;
+        }
+    }
 } // namespace

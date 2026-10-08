@@ -1361,20 +1361,28 @@ namespace compilerlib
 
         // Releases `value` right after `after` with `release`, for allocations whose
         // result the program never uses.
-        void insertImmediateAutoFree(llvm::Instruction& after, llvm::Value* value,
-                                     llvm::FunctionCallee release, llvm::Type* voidPtrTy)
+        // First instruction to run once `call` has returned normally. An invoke's normal
+        // edge is split when its destination has other predecessors, so the result is
+        // available there.
+        CT_NODISCARD llvm::Instruction* insertionPointAfter(llvm::CallBase& call)
         {
-            llvm::Instruction* insertPt = after.getNextNode();
-            if (!insertPt)
+            if (auto* invoke = llvm::dyn_cast<llvm::InvokeInst>(&call))
             {
-                insertPt = after.getParent()->getTerminator();
+                llvm::BasicBlock* normal = invoke->getNormalDest();
+                if (!normal->getSinglePredecessor())
+                    normal = llvm::SplitEdge(invoke->getParent(), normal);
+                return &*normal->getFirstInsertionPt();
             }
-            if (!insertPt)
-            {
-                return;
-            }
-            llvm::IRBuilder<> afterBuilder(insertPt);
-            llvm::Value* ptr = value;
+            return call.getNextNode();
+        }
+
+        // Releases the unused result of `call` once it has returned normally: an invoke's
+        // result exists only on its normal edge.
+        void insertImmediateAutoFree(llvm::CallBase& call, llvm::FunctionCallee release,
+                                     llvm::Type* voidPtrTy)
+        {
+            llvm::IRBuilder<> afterBuilder(insertionPointAfter(call));
+            llvm::Value* ptr = &call;
             if (ptr->getType() != voidPtrTy)
             {
                 ptr = afterBuilder.CreateBitCast(ptr, voidPtrTy);
@@ -1417,21 +1425,6 @@ namespace compilerlib
             if (callee == "objc_msgSend")
                 return isObjcAllocSelector(objcSelectorName(call));
             return callee.consume_front("objc_msgSend$") && isObjcAllocSelector(callee);
-        }
-
-        // First instruction to run once `call` has returned normally. An invoke's normal
-        // edge is split when its destination has other predecessors, so the result is
-        // available there.
-        CT_NODISCARD llvm::Instruction* insertionPointAfter(llvm::CallBase& call)
-        {
-            if (auto* invoke = llvm::dyn_cast<llvm::InvokeInst>(&call))
-            {
-                llvm::BasicBlock* normal = invoke->getNormalDest();
-                if (!normal->getSinglePredecessor())
-                    normal = llvm::SplitEdge(invoke->getParent(), normal);
-                return &*normal->getFirstInsertionPt();
-            }
-            return call.getNextNode();
         }
 
         // How one family of allocator calls is rewritten.
@@ -1481,7 +1474,7 @@ namespace compilerlib
                 llvm::CallBase* newCall = replaceCall(call, target, args);
                 if (unused && newCall)
                 {
-                    insertImmediateAutoFree(*newCall, newCall, rewrite.release(), ctx.voidPtrTy);
+                    insertImmediateAutoFree(*newCall, rewrite.release(), ctx.voidPtrTy);
                 }
             }
         }

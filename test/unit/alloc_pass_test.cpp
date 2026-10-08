@@ -177,6 +177,89 @@ define void @local() {
         EXPECT_EQ(callees("local"), (std::vector<std::string>{"__ct_malloc", "__ct_autofree"}));
     }
 
+    // An unused allocation by an invoke, as in a function with cleanups: the release goes
+    // where the call returns normally, the only place its result is available.
+    TEST_F(AutoFreeTest, UnusedInvokedAllocationIsReleasedOnTheNormalPath)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+declare i32 @__gxx_personality_v0(...)
+
+define void @unused_invoked() personality ptr @__gxx_personality_v0 {
+entry:
+  %block = invoke ptr @malloc(i64 8)
+          to label %done unwind label %failed
+
+done:
+  ret void
+
+failed:
+  %pad = landingpad { ptr, i32 } cleanup
+  resume { ptr, i32 } %pad
+}
+)");
+        EXPECT_EQ(callees("unused_invoked"),
+                  (std::vector<std::string>{"__ct_malloc_unreachable", "__ct_autofree"}));
+        for (llvm::Instruction& inst : llvm::instructions(*module_->getFunction("unused_invoked")))
+        {
+            if (auto* call = llvm::dyn_cast<llvm::CallInst>(&inst))
+                EXPECT_EQ(call->getParent()->getName(), "done");
+        }
+    }
+
+    // The same, when the normal destination has another predecessor and a PHI: the release
+    // goes into a block of its own on the invoke's edge, which the PHI then comes from.
+    TEST_F(AutoFreeTest, UnusedInvokedAllocationIsReleasedOnASplitEdge)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+declare i32 @__gxx_personality_v0(...)
+
+define i32 @unused_invoked_shared(i1 %allocate) personality ptr @__gxx_personality_v0 {
+entry:
+  br i1 %allocate, label %call, label %join
+
+call:
+  %block = invoke ptr @malloc(i64 8)
+          to label %join unwind label %failed
+
+join:
+  %result = phi i32 [ 1, %call ], [ 0, %entry ]
+  ret i32 %result
+
+failed:
+  %pad = landingpad { ptr, i32 } cleanup
+  resume { ptr, i32 } %pad
+}
+)");
+        llvm::Function& function = *module_->getFunction("unused_invoked_shared");
+        EXPECT_EQ(callees("unused_invoked_shared"),
+                  (std::vector<std::string>{"__ct_malloc_unreachable", "__ct_autofree"}));
+        llvm::BasicBlock* release = nullptr;
+        for (llvm::Instruction& inst : llvm::instructions(function))
+        {
+            if (auto* call = llvm::dyn_cast<llvm::CallInst>(&inst))
+                release = call->getParent();
+        }
+        ASSERT_NE(release, nullptr);
+        llvm::BasicBlock* call = nullptr;
+        llvm::BasicBlock* join = nullptr;
+        for (llvm::BasicBlock& block : function)
+        {
+            if (block.getName() == "call")
+                call = &block;
+            else if (block.getName() == "join")
+                join = &block;
+        }
+        ASSERT_NE(call, nullptr);
+        ASSERT_NE(join, nullptr);
+        EXPECT_EQ(release->getSinglePredecessor(), call);
+        EXPECT_EQ(release->getSingleSuccessor(), join);
+        auto* phi = llvm::cast<llvm::PHINode>(&join->front());
+        EXPECT_GE(phi->getBasicBlockIndex(release), 0);
+        EXPECT_LT(phi->getBasicBlockIndex(call), 0);
+    }
+
     TEST_F(AutoFreeTest, AllocationCopiedBetweenLocalSlotsIsReleasedBeforeTheReturn)
     {
         instrument(R"(
