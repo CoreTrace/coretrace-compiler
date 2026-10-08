@@ -3,7 +3,17 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CC_BIN="${CC_BIN:-${ROOT_DIR}/build/cc}"
+# Git Bash, on Windows, names the system MINGW64_NT-<version>.
+case "$(uname -s)" in
+  MINGW*|MSYS*) ON_WINDOWS=1 ;;
+  *) ON_WINDOWS=0 ;;
+esac
+if [[ "${ON_WINDOWS}" -eq 1 ]]; then
+  # Where scripts/build-windows.ps1 builds it by default.
+  CC_BIN="${CC_BIN:-${ROOT_DIR}/build-win/Release/cc.exe}"
+else
+  CC_BIN="${CC_BIN:-${ROOT_DIR}/build/cc}"
+fi
 OUT_DIR="${1:-/tmp/ct_autofree_tests}"
 # Optimization flag the fixtures are built with, for instance -O2. Empty keeps the
 # driver's default, -O0.
@@ -77,6 +87,35 @@ expect_nonzero_exit() {
       return 1
       ;;
   esac
+}
+
+# Fixtures that use an interface the system does not provide: they are not built.
+skip_reason() {
+  if [[ "${ON_WINDOWS}" -eq 1 ]]; then
+    case "$1" in
+      ct_autofree_local.c|ct_autofree_sbrk.c|ct_autofree_brk.c)
+        echo "includes unistd.h, which Windows does not provide"
+        return 0
+        ;;
+      ct_autofree_mmap.c)
+        echo "uses mmap, which Windows does not provide"
+        return 0
+        ;;
+      ct_autofree_posix_memalign.c)
+        echo "uses posix_memalign, which the Windows C library does not provide"
+        return 0
+        ;;
+      ct_autofree_aligned_alloc.c)
+        echo "uses aligned_alloc, which the Windows C library does not provide"
+        return 0
+        ;;
+      ct_autofree_scan_suspended_io.c|ct_threads_stress.c|ct_autofree_scan_roots.c)
+        echo "uses pthreads, which Windows does not provide"
+        return 0
+        ;;
+    esac
+  fi
+  return 1
 }
 
 # sbrk cannot grow the program break everywhere: the runtime refuses it outside
@@ -164,6 +203,12 @@ run_one() {
 
   echo "==> ${test_file}"
 
+  local reason
+  if reason="$(skip_reason "${test_file}")"; then
+    echo "  SKIP: ${reason}"
+    return 2
+  fi
+
   local flags
   flags="$(flags_for "${test_file}")"
   # shellcheck disable=SC2086
@@ -191,7 +236,6 @@ run_one() {
     return 1
   fi
 
-  local reason
   if reason="$(skip_reason_after_run "${test_file}" "${run_log}")"; then
     echo "  SKIP: ${reason}"
     return 2
