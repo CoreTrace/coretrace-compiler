@@ -272,6 +272,12 @@ check_one() {
   run_with_timeout "${bin}" >"${out_log}" 2>"${err_log}"
   local run_rc=$?
   set -e
+  # Before any other check: a fixture may accept the status ThreadSanitizer exits with, and
+  # a child process's report reaches the log while the parent still exits with 0.
+  if grep -q "ThreadSanitizer" "${err_log}"; then
+    echo "  ThreadSanitizer report (see ${err_log})"
+    return 1
+  fi
   if [[ "${run_rc}" -eq 124 ]]; then
     echo "  no exit after ${RUN_TIMEOUT_SECONDS}s, killed (see ${err_log})"
     return 1
