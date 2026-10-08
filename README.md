@@ -24,7 +24,9 @@ The Build workflow adds, with LLVM 20 on Linux: AddressSanitizer, LeakSanitizer 
 UndefinedBehaviorSanitizer builds, a build without the runtime, multi-arch Docker tests on
 `main`, and a line coverage report of compilerlib, `cc` and the runtime. The report is in the
 job's summary, and in the `coverage-html` artifact; it enforces no threshold. Locally, on Linux,
-`-DENABLE_COVERAGE=ON` builds with Clang's source-based coverage.
+`-DENABLE_COVERAGE=ON` builds with Clang's source-based coverage. A last job builds the runtime
+with ThreadSanitizer (`-DENABLE_TSAN_RUNTIME=ON`) and runs its unit tests and the runtime
+fixture suites with programs built with `-fsanitize=thread`: a data race in the runtime fails it.
 
 Quick build:
 

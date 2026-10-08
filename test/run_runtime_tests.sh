@@ -148,6 +148,20 @@ skip_reason() {
       return 0
       ;;
   esac
+  # Built with ThreadSanitizer on Linux (its CI job), the fixtures whose scenario its runtime
+  # changes there. Every other build checks them.
+  if [[ "$(uname -s)" == Linux && " ${CT_TEST_OPT:-} " == *" -fsanitize=thread "* ]]; then
+    case "$1" in
+      ct_bounds_container_of_underflow.c|ct_bounds_container_of_underflow_shadow.c)
+        echo "reads before its block, which ThreadSanitizer's allocator leaves unmapped on Linux"
+        return 0
+        ;;
+      ct_vtable_diag_mismatch.cpp)
+        echo "calls puts from another module, which ThreadSanitizer intercepts in the program"
+        return 0
+        ;;
+    esac
+  fi
   return 1
 }
 
@@ -258,6 +272,12 @@ check_one() {
   run_with_timeout "${bin}" >"${out_log}" 2>"${err_log}"
   local run_rc=$?
   set -e
+  # Before any other check: a fixture may accept the status ThreadSanitizer exits with, and
+  # a child process's report reaches the log while the parent still exits with 0.
+  if grep -q "ThreadSanitizer" "${err_log}"; then
+    echo "  ThreadSanitizer report (see ${err_log})"
+    return 1
+  fi
   if [[ "${run_rc}" -eq 124 ]]; then
     echo "  no exit after ${RUN_TIMEOUT_SECONDS}s, killed (see ${err_log})"
     return 1

@@ -130,6 +130,59 @@ jobs:
         bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
         bash test/run_differential_tests.sh "${RUNNER_TEMP}/ct_differential_tests"
 
+  # The instrumentation runtime and its logger built with ThreadSanitizer
+  # (ENABLE_TSAN_RUNTIME): a data race in the runtime's locks or shared state fails the
+  # runtime unit tests or a fixture. The fixtures' programs are linked with
+  # -fsanitize=thread, which ThreadSanitizer's runtime needs.
+  tsan-runtime:
+    name: Runtime with ThreadSanitizer (ubuntu-24.04, LLVM 20)
+    runs-on: ubuntu-24.04
+    env:
+      TSAN_OPTIONS: halt_on_error=1:exitcode=66
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake ninja-build
+        sudo bash scripts/ci/install-llvm-apt.sh 20 llvm-20 llvm-20-dev clang-20 libclang-20-dev \
+          libclang-rt-20-dev
+        # The kernel randomizes mmap addresses over more bits than ThreadSanitizer supports.
+        sudo sysctl vm.mmap_rnd_bits=28
+
+    - name: Build
+      run: |
+        cmake -S . -B build -G Ninja -DENABLE_TSAN_RUNTIME=ON \
+          -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+          -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm \
+          -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang \
+          -DUSE_SHARED_LIB=OFF
+        cmake --build build --target cc runtime_unit_tests
+
+    - name: Run the runtime unit tests
+      run: build/test/unit/runtime_unit_tests
+
+    - name: Run runtime fixture suites
+      env:
+        CT_TEST_OPT: -fsanitize=thread
+        # ThreadSanitizer slows the threaded fixtures past the default 60 seconds.
+        RUN_TIMEOUT_SECONDS: 300
+      run: |
+        bash test/run_autofree_tests.sh "${RUNNER_TEMP}/ct_autofree_tests"
+        bash test/run_runtime_tests.sh "${RUNNER_TEMP}/ct_runtime_tests"
+
+    # ThreadSanitizer writes its reports to the fixtures' stderr logs.
+    - name: Upload the fixture logs
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: tsan-fixture-logs
+        path: |
+          ${{ runner.temp }}/ct_autofree_tests/*.log
+          ${{ runner.temp }}/ct_runtime_tests/*.log
+
   # Line coverage of compilerlib, cc and the runtime (ENABLE_COVERAGE), from the unit tests,
   # the smoke tests and the runtime fixture suites. Informational: no threshold is enforced.
   # The suites build their programs with -fprofile-instr-generate, so that the runtime they

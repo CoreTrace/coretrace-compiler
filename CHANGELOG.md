@@ -60,6 +60,9 @@ pull request.
 - A Linux job reports the line coverage of compilerlib, `cc` and the runtime, from the unit
   tests, the smoke tests and the runtime fixture suites, in its summary and as an artifact.
   `-DENABLE_COVERAGE=ON` builds with Clang's source-based coverage, on Linux (#177, #103).
+- A Linux job builds the runtime with ThreadSanitizer (`-DENABLE_TSAN_RUNTIME=ON`) and runs its
+  unit tests and the autofree and runtime fixture suites under `-fsanitize=thread`. Three
+  fixtures whose scenario ThreadSanitizer changes are skipped there (#181, #103).
 
 ## v0.11.1 (2026-10-07)
 
