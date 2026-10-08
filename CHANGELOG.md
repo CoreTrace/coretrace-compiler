@@ -47,6 +47,9 @@ pull request.
 - **Unused new-expression in a function with a cleanup.** At -O2, an instrumented compilation of
   such code failed with "instrumentation produced invalid LLVM IR": the release of the unused
   result came before the invoke that produces it (#179, #178).
+- **`--ct-autofree` under ThreadSanitizer.** With `-fsanitize=thread`, ThreadSanitizer's access
+  checks made blocks look escaping, so the autofree released nothing and those blocks were
+  reported as leaks (#183, #182).
 
 ### Tests and CI
 

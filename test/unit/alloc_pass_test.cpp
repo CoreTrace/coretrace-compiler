@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -258,6 +259,104 @@ failed:
         auto* phi = llvm::cast<llvm::PHINode>(&join->front());
         EXPECT_GE(phi->getBasicBlockIndex(release), 0);
         EXPECT_LT(phi->getBasicBlockIndex(call), 0);
+    }
+
+    bool callsAutoFree(const std::vector<std::string>& callees)
+    {
+        return std::find(callees.begin(), callees.end(), "__ct_autofree") != callees.end();
+    }
+
+    // Under -fsanitize=thread, LLVM's ThreadSanitizer pass checks each memory access with a
+    // `void __tsan_<access><size>(ptr)` call, before the passes run. The check keeps no
+    // copy of the address: the slot and the block it is given do not escape through it.
+    TEST_F(AutoFreeTest, ThreadSanitizerChecksOnASlotDoNotKeepTheBlock)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+declare void @__tsan_write8(ptr)
+declare void @__tsan_read8(ptr)
+declare void @__tsan_write1(ptr)
+
+define void @checked_slot() {
+  %slot = alloca ptr
+  %block = call ptr @malloc(i64 8)
+  call void @__tsan_write8(ptr %slot)
+  store ptr %block, ptr %slot
+  call void @__tsan_read8(ptr %slot)
+  %copy = load ptr, ptr %slot
+  call void @__tsan_write1(ptr %copy)
+  ret void
+}
+)");
+        EXPECT_TRUE(callsAutoFree(callees("checked_slot")));
+    }
+
+    TEST_F(AutoFreeTest, ThreadSanitizerChecksOnABlockDoNotKeepIt)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+declare void @__tsan_unaligned_write4(ptr)
+declare void @__tsan_read_write2(ptr)
+
+define void @checked_block() {
+  %block = call ptr @malloc(i64 8)
+  %field = getelementptr i8, ptr %block, i64 1
+  call void @__tsan_unaligned_write4(ptr %field)
+  store i32 1, ptr %field, align 1
+  call void @__tsan_read_write2(ptr %block)
+  store i16 2, ptr %block
+  ret void
+}
+)");
+        EXPECT_TRUE(callsAutoFree(callees("checked_block")));
+    }
+
+    // A call that may keep the pointer still makes it escape: a function of the program, a
+    // ThreadSanitizer entry point that is not an access check, and an access check's name
+    // with another signature.
+    TEST_F(AutoFreeTest, ProgramFunctionKeepsTheBlock)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+declare void @remember(ptr)
+
+define void @remembered() {
+  %block = call ptr @malloc(i64 8)
+  call void @remember(ptr %block)
+  ret void
+}
+)");
+        EXPECT_FALSE(callsAutoFree(callees("remembered")));
+    }
+
+    TEST_F(AutoFreeTest, ThreadSanitizerRangeCheckKeepsTheBlock)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+declare void @__tsan_read_range(ptr, i64)
+
+define void @range_checked() {
+  %block = call ptr @malloc(i64 8)
+  call void @__tsan_read_range(ptr %block, i64 8)
+  ret void
+}
+)");
+        EXPECT_FALSE(callsAutoFree(callees("range_checked")));
+    }
+
+    TEST_F(AutoFreeTest, AccessCheckNameWithAnotherSignatureKeepsTheBlock)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+declare ptr @__tsan_read8(ptr)
+
+define void @renamed() {
+  %block = call ptr @malloc(i64 8)
+  %kept = call ptr @__tsan_read8(ptr %block)
+  ret void
+}
+)");
+        EXPECT_FALSE(callsAutoFree(callees("renamed")));
     }
 
     TEST_F(AutoFreeTest, AllocationCopiedBetweenLocalSlotsIsReleasedBeforeTheReturn)
