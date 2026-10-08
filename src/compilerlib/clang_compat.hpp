@@ -51,6 +51,16 @@ namespace compilerlib::clang_compat
     namespace options = clang::driver::options;
 #endif
 
+    // The driver's option table, which LLVM 22 moved out of the driver too.
+    inline const llvm::opt::OptTable& driverOptTable()
+    {
+#if LLVM_VERSION_MAJOR >= 22
+        return clang::getDriverOptTable();
+#else
+        return clang::driver::getDriverOptTable();
+#endif
+    }
+
     // The optimization record of -fsave-optimization-record, set up on a context: the file,
     // which keeps the remarks only once kept, and the streamer that writes them. LLVM 22
     // returns a handle that removes the streamer itself when it is destroyed.
