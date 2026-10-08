@@ -63,6 +63,8 @@ pull request.
 - A Linux job builds the runtime with ThreadSanitizer (`-DENABLE_TSAN_RUNTIME=ON`) and runs its
   unit tests and the autofree and runtime fixture suites under `-fsanitize=thread`. Three
   fixtures whose scenario ThreadSanitizer changes are skipped there (#181, #103).
+- The Benchmarks workflow measures the run-time overhead of instrumentation on the programs in
+  `bench/`, for several sets of modules, with `scripts/bench/overhead.py` (#184, #103).
 
 ## v0.11.1 (2026-10-07)
 
