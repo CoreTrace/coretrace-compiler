@@ -148,6 +148,20 @@ skip_reason() {
       return 0
       ;;
   esac
+  # Built with ThreadSanitizer (its CI job), the fixtures whose scenario its runtime
+  # changes. Every other build checks them.
+  if [[ " ${CT_TEST_OPT:-} " == *" -fsanitize=thread "* ]]; then
+    case "$1" in
+      ct_bounds_container_of_underflow.c|ct_bounds_container_of_underflow_shadow.c)
+        echo "reads before its block, which ThreadSanitizer's allocator leaves unmapped on Linux"
+        return 0
+        ;;
+      ct_vtable_diag_mismatch.cpp)
+        echo "calls puts from another module, which ThreadSanitizer intercepts in the program"
+        return 0
+        ;;
+    esac
+  fi
   return 1
 }
 
