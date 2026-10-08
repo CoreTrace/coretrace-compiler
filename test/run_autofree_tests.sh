@@ -180,6 +180,12 @@ run_one() {
   run_with_timeout env ${run_env} "${bin}" >"${run_log}" 2>&1
   local run_rc=$?
   set -e
+  # Before any other check or skip: a fixture may accept the status ThreadSanitizer exits
+  # with, and a child process's report reaches the log while the parent still exits with 0.
+  if has_match "ThreadSanitizer" "${run_log}"; then
+    echo "  FAIL: ThreadSanitizer report (see ${run_log})"
+    return 1
+  fi
   if [[ "${run_rc}" -eq 124 ]]; then
     echo "  FAIL: no exit after ${RUN_TIMEOUT_SECONDS}s, killed (see ${run_log})"
     return 1
