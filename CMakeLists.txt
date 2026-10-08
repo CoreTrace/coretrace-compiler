@@ -146,6 +146,21 @@ if(ENABLE_DEBUG_UBSAN)
   endif()
 endif()
 
+option(ENABLE_COVERAGE "Build with Clang's source-based code coverage" OFF)
+
+if(ENABLE_COVERAGE)
+  # Linux only: there, coverage-instrumented objects do not reference the profile runtime,
+  # which the linker gets through -u instead; on Apple systems they do.
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "ENABLE_COVERAGE needs Clang on Linux.")
+  endif()
+  # Everything is measured, the runtime included. Without value profiling, the objects call
+  # nothing in the profile runtime: instrumented programs that cc links without it, as most
+  # tests do, still link, and only those linked with -fprofile-instr-generate record coverage.
+  add_compile_options(-fprofile-instr-generate -fcoverage-mapping -mllvm -disable-vp=true)
+  add_link_options(-fprofile-instr-generate)
+endif()
+
 set(LIB_SOURCES
   src/compilerlib/args.cpp
   src/compilerlib/compiler.cpp
