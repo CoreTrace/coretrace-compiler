@@ -148,9 +148,9 @@ skip_reason() {
       return 0
       ;;
   esac
-  # Built with ThreadSanitizer (its CI job), the fixtures whose scenario its runtime
-  # changes. Every other build checks them.
-  if [[ " ${CT_TEST_OPT:-} " == *" -fsanitize=thread "* ]]; then
+  # Built with ThreadSanitizer on Linux (its CI job), the fixtures whose scenario its runtime
+  # changes there. Every other build checks them.
+  if [[ "$(uname -s)" == Linux && " ${CT_TEST_OPT:-} " == *" -fsanitize=thread "* ]]; then
     case "$1" in
       ct_bounds_container_of_underflow.c|ct_bounds_container_of_underflow_shadow.c)
         echo "reads before its block, which ThreadSanitizer's allocator leaves unmapped on Linux"
