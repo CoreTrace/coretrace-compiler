@@ -93,7 +93,7 @@ expect_nonzero_exit() {
 skip_reason() {
   if [[ "${ON_WINDOWS}" -eq 1 ]]; then
     case "$1" in
-      ct_autofree_local.c|ct_autofree_sbrk.c|ct_autofree_brk.c)
+      ct_autofree_sbrk.c|ct_autofree_brk.c)
         echo "includes unistd.h, which Windows does not provide"
         return 0
         ;;
