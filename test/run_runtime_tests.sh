@@ -58,6 +58,8 @@ flags_for() {
     # Without a log line per allocation: that is a million lines here.
     ct_threads_stress.c) echo "--ct-modules=alloc,bounds --ct-no-alloc-trace" ;;
     ct_fork_threads.c) echo "--ct-modules=alloc --ct-no-alloc-trace" ;;
+    ct_alloc_unreachable_autofree.c|ct_new_unreachable_autofree.cpp)
+      echo "--ct-modules=alloc --ct-autofree" ;;
     *)                 echo "--ct-modules=alloc" ;;
   esac
 }
@@ -102,7 +104,7 @@ expect_leaks() {
 # Substring that must appear on stderr, as a grep basic regular expression.
 expect_stderr() {
   case "$1" in
-    ct_alloc_basic.c) echo "tracing-malloc-unreachable" ;;
+    ct_alloc_basic.c|ct_alloc_unreachable_autofree.c) echo "tracing-malloc-unreachable" ;;
     ct_bounds_container_of_underflow.c) echo "heap-buffer-overflow" ;;
     ct_bounds_container_of_underflow_shadow.c) echo "heap-buffer-overflow" ;;
     ct_bounds_container_of_overflow.c) echo "heap-buffer-overflow" ;;
@@ -110,7 +112,7 @@ expect_stderr() {
     ct_bounds_stack_overflow.c|ct_bounds_stack_callee.c|ct_bounds_stack_container_of.c|\
     ct_bounds_stack_default_modules.c|ct_bounds_stack_longjmp.c)
       echo "stack-buffer-overflow" ;;
-    ct_new_delete.cpp) echo "tracing-new-unreachable" ;;
+    ct_new_delete.cpp|ct_new_unreachable_autofree.cpp) echo "tracing-new-unreachable" ;;
     # Leaks and double frees name where the memory came from; a double free also names
     # where it happens.
     ct_leak_site.c) echo 'ct: leak ptr=.* alloc_site=[^ ]*ct_leak_site\.c:8:' ;;
@@ -205,10 +207,6 @@ skip_reason() {
         echo "uses dlfcn.h, which Windows does not provide"
         return 0
         ;;
-      ct_alloc_basic.c|ct_new_delete.cpp)
-        echo "the Windows runtime does not report unreachable allocations (#188)"
-        return 0
-        ;;
       ct_double_free_site.c|ct_double_delete_site.cpp)
         echo "the Windows runtime words a double free differently (#188)"
         return 0
@@ -220,6 +218,7 @@ skip_reason() {
 
 TESTS=(
   ct_alloc_basic.c
+  ct_alloc_unreachable_autofree.c
   ct_alloc_growth.c
   ct_leak_site.c
   ct_double_free_site.c
@@ -242,6 +241,7 @@ TESTS=(
   ct_threads_stress.c
   ct_fork_threads.c
   ct_new_delete.cpp
+  ct_new_unreachable_autofree.cpp
   ct_new_delete_sized.cpp
   ct_new_delete_variants.cpp
   ct_new_delete_library.cpp
