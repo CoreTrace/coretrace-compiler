@@ -324,4 +324,10 @@ CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... arg
     }
 }
 
+// An allocation, as both runtimes log it: `label` and the site, then a box with `status`
+// ("reachable", "unreachable"), the requested and the allocated sizes, and the address.
+CT_NOINSTR void ct_log_alloc_details(const char* label, const char* status, size_t req_size,
+                                     size_t real_size, void* ptr, const char* site, CTColor color,
+                                     CTLevel lvl);
+
 #endif // CT_RUNTIME_INTERNAL_H

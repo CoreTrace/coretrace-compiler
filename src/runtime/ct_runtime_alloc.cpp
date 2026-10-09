@@ -509,20 +509,6 @@ CT_NOINSTR static void ct_shadow_track_alloc(void* ptr, size_t req_size, size_t 
     }
 }
 
-CT_NOINSTR static void ct_log_alloc_details(const char* label, const char* status, size_t req_size,
-                                            size_t real_size, void* ptr, const char* site,
-                                            CTColor color, CTLevel lvl)
-{
-    ct_log(lvl, "{}{}{} :: tid={} site={}\n", ct_color(color), label, ct_color(CTColor::Reset),
-           ct_thread_id(), ct_site_name(site));
-    ct_log(lvl, "┌-----------------------------------┐\n");
-    ct_log(lvl, "| {:<16} : {:<14} |\n", "status", status);
-    ct_log(lvl, "| {:<16} : {:<14} |\n", "req_size", req_size);
-    ct_log(lvl, "| {:<16} : {:<14} |\n", "total_alloc_size", real_size);
-    ct_log(lvl, "| {:<16} : {:<14} |\n", "ptr", std::format("{:p}", ptr));
-    ct_log(lvl, "└-----------------------------------┘\n");
-}
-
 CT_NOINSTR void ct_track_allocation(void* ptr, size_t size, const char* site, unsigned char kind)
 {
     ct_lock_acquire();
