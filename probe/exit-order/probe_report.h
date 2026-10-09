@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <winternl.h>
 
+#include <io.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,6 +37,7 @@ static int probe_loader_lock_held(void)
 //   executable that holds probe_cs forever, alive or killed; lock, whether probe_cs could be
 //   taken, as the runtime's lock would be by the report;
 // - heap: a CRT malloc/free, then a process heap allocation;
+// - lowio: a line through _write(_fileno(stderr)), as the CoreTrace logger writes;
 // - stdio: a line through this module's CRT stdio.
 static int probe_check_enabled(const char* check)
 {
@@ -81,6 +83,12 @@ static void probe_report(const char* event)
         probe_write("  heap: process heap\n");
         HeapFree(GetProcessHeap(), 0, HeapAlloc(GetProcessHeap(), 0, 64));
         probe_write("  heap: ok\n");
+    }
+    if (probe_check_enabled("lowio"))
+    {
+        probe_write("  lowio: _write\n");
+        static const char text[] = "  lowio: ok\n";
+        _write(_fileno(stderr), text, sizeof text - 1);
     }
     if (probe_check_enabled("stdio"))
     {

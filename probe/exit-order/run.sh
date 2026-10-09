@@ -14,7 +14,7 @@ build -shared "${here}/probe_helper.c" -o "${out}/probe_helper.dll"
 # The import order decides which DLL the loader initializes first, and detaches last.
 build "${here}/probe_exe.c" "${out}/probe_helper.lib" "${out}/probe_user.lib" -o "${out}/helper_first.exe"
 build "${here}/probe_exe.c" "${out}/probe_user.lib" "${out}/probe_helper.lib" -o "${out}/user_first.exe"
-for checks in none heap stdio; do
+for checks in none heap lowio stdio; do
   for exe in helper_first user_first; do
     for mode in return exit exitprocess; do
       echo "=== ${crt} CRT, ${exe}, ${mode}, checks: ${checks}"
