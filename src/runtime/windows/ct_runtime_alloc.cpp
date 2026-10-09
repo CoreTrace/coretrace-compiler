@@ -449,6 +449,16 @@ namespace
         return PAGE_NOACCESS;
     }
 
+    CT_NOINSTR void ct_track_alloc(void* ptr, size_t req_size, size_t alloc_size, const char* site,
+                                   unsigned char kind)
+    {
+        ct_lock_acquire();
+        (void)ct_table_insert(ptr, req_size, alloc_size, site, kind);
+        ct_lock_release();
+
+        ct_track_shadow_alloc(ptr, req_size, alloc_size);
+    }
+
     CT_NODISCARD CT_NOINSTR void* ct_record_alloc(void* ptr, size_t req_size, size_t alloc_size,
                                                   const char* site, unsigned char kind)
     {
@@ -457,12 +467,29 @@ namespace
             return ptr;
         }
 
-        ct_lock_acquire();
-        (void)ct_table_insert(ptr, req_size, alloc_size, site, kind);
-        ct_lock_release();
-
-        ct_track_shadow_alloc(ptr, req_size, alloc_size);
+        ct_track_alloc(ptr, req_size, alloc_size, site, kind);
         ct_log_alloc_event("alloc", ptr, req_size ? req_size : alloc_size, site, kind);
+        return ptr;
+    }
+
+    // An allocation whose result the program never uses, logged as the POSIX runtime logs
+    // it under `label`. The instrumentation releases it right after the call when auto-free
+    // is enabled.
+    CT_NODISCARD CT_NOINSTR void* ct_record_unreachable_alloc(void* ptr, size_t size,
+                                                              const char* site, unsigned char kind,
+                                                              const char* label)
+    {
+        if (!ptr)
+        {
+            return ptr;
+        }
+
+        ct_track_alloc(ptr, size, size, site, kind);
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
+        {
+            ct_log_alloc_details(label, "unreachable", size, size, ptr, site, CTColor::Yellow,
+                                 CTLevel::Warn);
+        }
         return ptr;
     }
 
@@ -772,7 +799,13 @@ extern "C"
 
     CT_NODISCARD CT_NOINSTR void* __ct_malloc_unreachable(size_t size, const char* site)
     {
-        return __ct_malloc(size, site);
+        ct_init_env_once();
+        if (!ct_is_enabled(CT_FEATURE_ALLOC))
+        {
+            return std::malloc(size);
+        }
+        return ct_record_unreachable_alloc(std::malloc(size), size, site, CT_ALLOC_KIND_MALLOC,
+                                           "tracing-malloc-unreachable");
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_calloc(size_t count, size_t size, const char* site)
@@ -789,7 +822,13 @@ extern "C"
     CT_NODISCARD CT_NOINSTR void* __ct_calloc_unreachable(size_t count, size_t size,
                                                           const char* site)
     {
-        return __ct_calloc(count, size, site);
+        ct_init_env_once();
+        if (!ct_is_enabled(CT_FEATURE_ALLOC))
+        {
+            return std::calloc(count, size);
+        }
+        return ct_record_unreachable_alloc(std::calloc(count, size), count * size, site,
+                                           CT_ALLOC_KIND_MALLOC, "tracing-calloc-unreachable");
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_new(size_t size, const char* site)
@@ -804,7 +843,13 @@ extern "C"
 
     CT_NODISCARD CT_NOINSTR void* __ct_new_unreachable(size_t size, const char* site)
     {
-        return __ct_new(size, site);
+        ct_init_env_once();
+        if (!ct_is_enabled(CT_FEATURE_ALLOC))
+        {
+            return ::operator new(size);
+        }
+        return ct_record_unreachable_alloc(::operator new(size), size, site, CT_ALLOC_KIND_NEW,
+                                           "tracing-new-unreachable");
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_new_array(size_t size, const char* site)
@@ -819,7 +864,14 @@ extern "C"
 
     CT_NODISCARD CT_NOINSTR void* __ct_new_array_unreachable(size_t size, const char* site)
     {
-        return __ct_new_array(size, site);
+        ct_init_env_once();
+        if (!ct_is_enabled(CT_FEATURE_ALLOC))
+        {
+            return ::operator new[](size);
+        }
+        return ct_record_unreachable_alloc(::operator new[](size), size, site,
+                                           CT_ALLOC_KIND_NEW_ARRAY,
+                                           "tracing-new-array-unreachable");
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_new_nothrow(size_t size, const char* site)
@@ -835,7 +887,13 @@ extern "C"
 
     CT_NODISCARD CT_NOINSTR void* __ct_new_nothrow_unreachable(size_t size, const char* site)
     {
-        return __ct_new_nothrow(size, site);
+        ct_init_env_once();
+        if (!ct_is_enabled(CT_FEATURE_ALLOC))
+        {
+            return ::operator new(size, std::nothrow);
+        }
+        return ct_record_unreachable_alloc(::operator new(size, std::nothrow), size, site,
+                                           CT_ALLOC_KIND_NEW, "tracing-new-unreachable");
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_new_array_nothrow(size_t size, const char* site)
@@ -851,7 +909,14 @@ extern "C"
 
     CT_NODISCARD CT_NOINSTR void* __ct_new_array_nothrow_unreachable(size_t size, const char* site)
     {
-        return __ct_new_array_nothrow(size, site);
+        ct_init_env_once();
+        if (!ct_is_enabled(CT_FEATURE_ALLOC))
+        {
+            return ::operator new[](size, std::nothrow);
+        }
+        return ct_record_unreachable_alloc(::operator new[](size, std::nothrow), size, site,
+                                           CT_ALLOC_KIND_NEW_ARRAY,
+                                           "tracing-new-array-unreachable");
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_realloc(void* ptr, size_t size, const char* site)
