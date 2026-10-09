@@ -24,9 +24,10 @@ namespace compilerlib
     // Exact-match presence test.
     CT_NODISCARD bool hasArg(const std::vector<std::string>& args, llvm::StringRef opt);
 
-    // Mirrors clang's "last debug level wins" rule: -g0 turns debug info off again
-    // and -gno-* only adjusts how debug info is emitted. Every other -g* spelling
-    // (-g, -g1..3, -gline-tables-only, -gdwarf*, -ggdb*, ...) requests debug info.
+    // Whether clang emits debug information for `args`: the last option of its -g group
+    // (-g, -g1..3, -gline-tables-only, -gdwarf*, -ggdb*, ...) decides, and -g0 or -ggdb0
+    // asks for none. Options outside the group, such as -gcolumn-info, -gsplit-dwarf or
+    // -gno-column-info, only change the information another option asks for.
     CT_NODISCARD bool requestsDebugInfo(const std::vector<std::string>& args);
 
     // Target named by the last -target/--target[=] argument, else the host triple.

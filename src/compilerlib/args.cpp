@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "args_internal.hpp"
+#include "clang_compat.hpp"
 
 #include <llvm/Config/llvm-config.h>
+#include <llvm/Option/ArgList.h>
 
 #include <cstring>
 
@@ -39,24 +41,20 @@ namespace compilerlib
 
     bool requestsDebugInfo(const std::vector<std::string>& args)
     {
-        bool requested = false;
+        std::vector<const char*> argv;
+        argv.reserve(args.size());
         for (const auto& arg : args)
         {
-            llvm::StringRef flag = arg;
-            if (!flag.starts_with("-g"))
-            {
-                continue;
-            }
-            if (flag == "-g0")
-            {
-                requested = false;
-            }
-            else if (!flag.starts_with("-gno-"))
-            {
-                requested = true;
-            }
+            argv.push_back(arg.c_str());
         }
-        return requested;
+        unsigned missingIndex = 0;
+        unsigned missingCount = 0;
+        const llvm::opt::InputArgList parsed =
+            clang_compat::driverOptTable().ParseArgs(argv, missingIndex, missingCount);
+        // The rule of clang's driver, LLVM 16 to 23.
+        const llvm::opt::Arg* last = parsed.getLastArg(clang_compat::options::OPT_g_Group);
+        return last != nullptr && !last->getOption().matches(clang_compat::options::OPT_g0) &&
+               !last->getOption().matches(clang_compat::options::OPT_ggdb0);
     }
 
     llvm::Triple effectiveTargetTriple(const std::vector<std::string>& args)

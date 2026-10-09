@@ -76,6 +76,43 @@ namespace
         EXPECT_TRUE(compilerlib::requestsDebugInfo(Args{"-g", "-gno-column-info"}));
     }
 
+    // Clang emits no debug information for these options alone: they only change the
+    // information another option asks for (#189).
+    TEST(RequestsDebugInfo, ModifiersAloneDoNotRequestDebugInfo)
+    {
+        for (const char* modifier :
+             {"-gcolumn-info", "-gsplit-dwarf", "-gz", "-gpubnames", "-gstrict-dwarf"})
+        {
+            EXPECT_FALSE(compilerlib::requestsDebugInfo(Args{modifier})) << modifier;
+            EXPECT_TRUE(compilerlib::requestsDebugInfo(Args{"-g", modifier})) << modifier;
+            EXPECT_FALSE(compilerlib::requestsDebugInfo(Args{"-g", "-g0", modifier})) << modifier;
+        }
+    }
+
+    // Options of Clang's -g group other than levels, which do ask for debug information.
+    TEST(RequestsDebugInfo, OtherOptionsOfTheGGroupRequestDebugInfo)
+    {
+        for (const char* option : {"-ggdb", "-glldb", "-gmodules", "-gused", "-gdwarf"})
+        {
+            EXPECT_TRUE(compilerlib::requestsDebugInfo(Args{option})) << option;
+        }
+        EXPECT_FALSE(compilerlib::requestsDebugInfo(Args{"-ggdb0"}));
+        EXPECT_FALSE(compilerlib::requestsDebugInfo(Args{"-g", "-ggdb0"}));
+    }
+
+    // LLVM 22 put -gcodeview in the -g group: from that version on, it asks for debug
+    // information, in CodeView, as -gdwarf does in DWARF.
+    TEST(RequestsDebugInfo, CodeViewFollowsTheLlvmVersion)
+    {
+#if LLVM_VERSION_MAJOR >= 22
+        EXPECT_TRUE(compilerlib::requestsDebugInfo(Args{"-gcodeview"}));
+#else
+        EXPECT_FALSE(compilerlib::requestsDebugInfo(Args{"-gcodeview"}));
+#endif
+        EXPECT_TRUE(compilerlib::requestsDebugInfo(Args{"-g", "-gcodeview"}));
+        EXPECT_FALSE(compilerlib::requestsDebugInfo(Args{"-gcodeview", "-g0"}));
+    }
+
     TEST(EffectiveTargetTriple, DefaultsToTheHostTriple)
     {
         const llvm::Triple expected(llvm::Triple::normalize(LLVM_DEFAULT_TARGET_TRIPLE));
