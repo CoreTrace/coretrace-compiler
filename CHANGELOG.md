@@ -54,6 +54,10 @@ pull request.
   debug information, such as `-gcolumn-info` or `-gsplit-dwarf`, or given `-ggdb0`, had no debug
   information: every site was `<unknown>`. These options no longer stop the compiler from adding
   `-gline-tables-only` (#189).
+- **Unreachable allocations on Windows.** An allocation whose result the program never uses
+  is reported as unreachable, `tracing-malloc-unreachable` or `tracing-new-unreachable` for
+  instance, with its box, as on Linux and macOS; it was logged as any other. With
+  `--ct-autofree`, it is still released right after the call (#192, #188).
 
 ### Tests and CI
 
