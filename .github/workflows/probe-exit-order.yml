@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Probe of #187, on its draft pull request only: never merged.
+name: Probe Windows exit order
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths: [ 'probe/exit-order/**', '.github/workflows/probe-exit-order.yml' ]
+
+jobs:
+  probe:
+    name: Exit order (${{ matrix.crt }} CRT)
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        crt: [static, dll]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run the probe
+      shell: bash
+      run: bash probe/exit-order/run.sh ${{ matrix.crt }}
