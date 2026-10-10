@@ -32,8 +32,8 @@ int main()
     Derived obj;
     Base* base = &obj;
 
-    void* target = reinterpret_cast<void*>(
-        GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetTickCount"));
+    void* target =
+        reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetTickCount"));
     if (!target)
     {
         std::puts("ct_vtable_diag_mismatch_windows: GetProcAddress failed");
