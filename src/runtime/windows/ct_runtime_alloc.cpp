@@ -122,43 +122,23 @@ namespace
         ct_shadow_poison_range(ptr, size);
     }
 
-    CT_NOINSTR void ct_log_alloc_event(const char* action, void* ptr, size_t size, const char* site,
-                                       unsigned char kind)
-    {
-        if (!ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
-        {
-            return;
-        }
-
-        ct_log(CTLevel::Info, "ct: {} ptr={:p} size={} kind={} site={}\n", action, ptr, size,
-               ct_kind_name(kind), ct_site_name(site));
-    }
-
-    CT_NOINSTR void ct_log_skip_event(const char* action, void* ptr, const char* reason)
-    {
-        ct_log(CTLevel::Warn, "ct: {} skipped ptr={:p} ({})\n", action, ptr, reason);
-    }
-
-    CT_NODISCARD CT_NOINSTR const char* ct_release_api_name(CtReleaseApi api)
+    // The label of a release, as both runtimes trace it.
+    CT_NODISCARD CT_NOINSTR const char* ct_release_label(CtReleaseApi api)
     {
         switch (api)
         {
         case CtReleaseApi::Free:
-            return "free";
-        case CtReleaseApi::Delete:
-            return "delete";
+            return "tracing-free";
         case CtReleaseApi::DeleteArray:
-            return "delete[]";
-        case CtReleaseApi::DeleteNothrow:
-            return "delete-nothrow";
         case CtReleaseApi::DeleteArrayNothrow:
-            return "delete[]-nothrow";
-        case CtReleaseApi::DeleteDestroying:
-            return "destroying-delete";
         case CtReleaseApi::DeleteArrayDestroying:
-            return "destroying-delete[]";
+            return "tracing-delete-array";
+        case CtReleaseApi::Delete:
+        case CtReleaseApi::DeleteNothrow:
+        case CtReleaseApi::DeleteDestroying:
+            return "tracing-delete";
         }
-        return "release";
+        return "tracing-free";
     }
 
     CT_NODISCARD CT_NOINSTR const char* ct_expected_kind_label(CtReleaseApi api)
@@ -213,15 +193,6 @@ namespace
             return kind == CT_ALLOC_KIND_NEW_ARRAY;
         }
         return false;
-    }
-
-    CT_NOINSTR void ct_log_deallocator_mismatch(const char* action, void* ptr,
-                                                unsigned char recorded_kind, const char* expected,
-                                                const char* site)
-    {
-        ct_log(CTLevel::Warn,
-               "ct: deallocator mismatch action={} ptr={:p} expected={} recorded={} site={}\n",
-               action, ptr, expected, ct_kind_name(recorded_kind), ct_site_name(site));
     }
 
     CT_NODISCARD CT_NOINSTR int ct_table_remove_with_state(void* ptr, unsigned char new_state,
@@ -363,11 +334,14 @@ namespace
         ct_shadow_unpoison_range(ptr, size);
     }
 
-    CT_NOINSTR void ct_release_tracked_pointer(void* ptr, CtReleaseApi api, const char* site)
+    // `trace` false leaves the release out of the trace, for realloc, which traces the resize
+    // instead; its diagnostics stay.
+    CT_NOINSTR void ct_release_tracked_pointer(void* ptr, CtReleaseApi api, const char* site,
+                                               bool trace = true)
     {
         ct_init_env_once();
 
-        const char* action = ct_release_api_name(api);
+        const char* label = ct_release_label(api);
         unsigned char kind = ct_default_kind_for_release_api(api);
         if (!ct_is_enabled(CT_FEATURE_ALLOC))
         {
@@ -377,7 +351,7 @@ namespace
 
         if (!ptr)
         {
-            ct_log_skip_event(action, ptr, "null");
+            ct_log_release_null(label);
             ct_release_by_called_api(ptr, api, kind);
             return;
         }
@@ -391,27 +365,30 @@ namespace
 
         if (found == -1)
         {
-            ct_log(CTLevel::Warn, "ct: {} skipped ptr={:p} (already freed) site={} alloc_site={}\n",
-                   action, ptr, ct_site_name(site), ct_site_name(alloc_site));
+            ct_log_double_free(label, ptr, site, alloc_site);
             return;
         }
         if (found == 0)
         {
             // A block the runtime did not track, such as one the C++ library allocated: its
             // release is traced like any other, not reported.
-            if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
+            if (trace && ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
             {
-                ct_log(CTLevel::Info, "ct: {} ptr={:p} (unknown)\n", action, ptr);
+                ct_log_release_unknown(label, ptr);
             }
             ct_release_by_called_api(ptr, api, kind);
             return;
         }
 
         ct_track_shadow_free(ptr, size);
-        ct_log_alloc_event(action, ptr, size, alloc_site, kind);
+        if (trace && ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
+        {
+            ct_log_release(label, ptr, size, ct_kind_name(kind), alloc_site);
+        }
         if (!ct_release_api_matches_kind(api, kind))
         {
-            ct_log_deallocator_mismatch(action, ptr, kind, ct_expected_kind_label(api), alloc_site);
+            ct_log_deallocator_mismatch(label, ptr, ct_expected_kind_label(api), ct_kind_name(kind),
+                                        alloc_site);
         }
         ct_quarantine_push({ptr, size, static_cast<unsigned char>(api), kind});
     }
@@ -459,8 +436,10 @@ namespace
         ct_track_shadow_alloc(ptr, req_size, alloc_size);
     }
 
+    // An allocation, traced under `label`, as the POSIX runtime traces it.
     CT_NODISCARD CT_NOINSTR void* ct_record_alloc(void* ptr, size_t req_size, size_t alloc_size,
-                                                  const char* site, unsigned char kind)
+                                                  const char* site, unsigned char kind,
+                                                  const char* label)
     {
         if (!ptr)
         {
@@ -468,7 +447,11 @@ namespace
         }
 
         ct_track_alloc(ptr, req_size, alloc_size, site, kind);
-        ct_log_alloc_event("alloc", ptr, req_size ? req_size : alloc_size, site, kind);
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
+        {
+            ct_log_alloc_details(label, "reachable", req_size, alloc_size, ptr, site,
+                                 CTColor::Yellow, CTLevel::Info);
+        }
         return ptr;
     }
 
@@ -516,7 +499,6 @@ namespace
         ct_lock_release();
 
         ct_track_shadow_alloc(new_ptr, size, size);
-        ct_log_alloc_event("realloc", new_ptr, size, site, CT_ALLOC_KIND_MALLOC);
     }
 
     CT_NODISCARD CT_NOINSTR int ct_remove_for_release(void* ptr, unsigned char new_state,
@@ -536,7 +518,7 @@ namespace
         }
         if (!ptr)
         {
-            ct_log_skip_event("auto-free", ptr, "null");
+            ct_log_autofree_skipped(ptr, nullptr);
             return;
         }
 
@@ -550,12 +532,11 @@ namespace
 
         if (found <= 0)
         {
-            ct_log_skip_event("auto-free", ptr, found == 0 ? "unknown" : "already freed");
+            ct_log_autofree_skipped(ptr, found == 0 ? "unknown" : "already freed");
             return;
         }
 
-        ct_log(CTLevel::Warn, "ct: auto-free ptr={:p} size={} site={}\n", ptr, size,
-               ct_site_name(site));
+        ct_log_autofree(ptr, size, site);
 
         if (kind == CT_ALLOC_KIND_MMAP)
         {
@@ -794,7 +775,8 @@ extern "C"
         {
             return std::malloc(size);
         }
-        return ct_record_alloc(std::malloc(size), size, size, site, CT_ALLOC_KIND_MALLOC);
+        return ct_record_alloc(std::malloc(size), size, size, site, CT_ALLOC_KIND_MALLOC,
+                               "tracing-malloc");
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_malloc_unreachable(size_t size, const char* site)
@@ -816,7 +798,8 @@ extern "C"
         {
             return std::calloc(count, size);
         }
-        return ct_record_alloc(std::calloc(count, size), total, total, site, CT_ALLOC_KIND_MALLOC);
+        return ct_record_alloc(std::calloc(count, size), total, total, site, CT_ALLOC_KIND_MALLOC,
+                               "tracing-calloc");
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_calloc_unreachable(size_t count, size_t size,
@@ -838,7 +821,8 @@ extern "C"
         {
             return ::operator new(size);
         }
-        return ct_record_alloc(::operator new(size), size, size, site, CT_ALLOC_KIND_NEW);
+        return ct_record_alloc(::operator new(size), size, size, site, CT_ALLOC_KIND_NEW,
+                               "tracing-new");
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_new_unreachable(size_t size, const char* site)
@@ -859,7 +843,8 @@ extern "C"
         {
             return ::operator new[](size);
         }
-        return ct_record_alloc(::operator new[](size), size, size, site, CT_ALLOC_KIND_NEW_ARRAY);
+        return ct_record_alloc(::operator new[](size), size, size, site, CT_ALLOC_KIND_NEW_ARRAY,
+                               "tracing-new-array");
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_new_array_unreachable(size_t size, const char* site)
@@ -882,7 +867,7 @@ extern "C"
             return ::operator new(size, std::nothrow);
         }
         return ct_record_alloc(::operator new(size, std::nothrow), size, size, site,
-                               CT_ALLOC_KIND_NEW);
+                               CT_ALLOC_KIND_NEW, "tracing-new");
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_new_nothrow_unreachable(size_t size, const char* site)
@@ -904,7 +889,7 @@ extern "C"
             return ::operator new[](size, std::nothrow);
         }
         return ct_record_alloc(::operator new[](size, std::nothrow), size, size, site,
-                               CT_ALLOC_KIND_NEW_ARRAY);
+                               CT_ALLOC_KIND_NEW_ARRAY, "tracing-new-array");
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_new_array_nothrow_unreachable(size_t size, const char* site)
@@ -926,50 +911,74 @@ extern "C"
         {
             return std::realloc(ptr, size);
         }
-        if (!ptr)
-        {
-            return __ct_malloc(size, site);
-        }
-        if (size == 0)
-        {
-            __ct_free(ptr, site);
-            return nullptr;
-        }
 
+        size_t old_size = 0;
         size_t old_req_size = 0;
         unsigned char state = CT_ENTRY_EMPTY;
-        ct_lock_acquire();
-        (void)ct_table_lookup(ptr, nullptr, &old_req_size, nullptr, &state);
-        ct_lock_release();
+        if (ptr)
+        {
+            ct_lock_acquire();
+            (void)ct_table_lookup(ptr, &old_size, &old_req_size, nullptr, &state);
+            ct_lock_release();
+        }
         // A block recorded as freed is in the quarantine, which will release it: the C
         // library must not release it first.
         if (state == CT_ENTRY_FREED || state == CT_ENTRY_AUTOFREED)
         {
-            ct_log(CTLevel::Warn, "ct: realloc skipped ptr={:p} (already freed) site={}\n", ptr,
-                   ct_site_name(site));
+            ct_log_realloc_freed(ptr, site);
             return nullptr;
         }
-        // A tracked block is never resized in place, nor released by the C library: the
-        // contents move to a new block and the old one goes to the quarantine, as on POSIX.
-        if (state == CT_ENTRY_USED)
+
+        // As on POSIX, one trace for the resize, whichever way it goes. A tracked block is
+        // never resized in place, nor released by the C library: the contents move to a new
+        // block and the old one goes to the quarantine. Other blocks go through the C
+        // library's realloc.
+        void* new_ptr = nullptr;
+        const char* status = "updated";
+        if (!ptr)
         {
-            void* moved = __ct_malloc(size, site);
-            if (!moved)
+            new_ptr = std::malloc(size);
+            if (new_ptr)
             {
-                return nullptr;
+                ct_track_alloc(new_ptr, size, size, site, CT_ALLOC_KIND_MALLOC);
             }
-            std::memcpy(moved, ptr, old_req_size < size ? old_req_size : size);
-            __ct_free(ptr, site);
-            return moved;
+            status = "allocated";
         }
-
-        void* new_ptr = std::realloc(ptr, size);
-        if (!new_ptr)
+        else if (size == 0)
         {
-            return nullptr;
+            ct_release_tracked_pointer(ptr, CtReleaseApi::Free, site, /*trace=*/false);
+            status = "freed";
+        }
+        else if (state == CT_ENTRY_USED)
+        {
+            new_ptr = std::malloc(size);
+            if (new_ptr)
+            {
+                ct_track_alloc(new_ptr, size, size, site, CT_ALLOC_KIND_MALLOC);
+                std::memcpy(new_ptr, ptr, old_req_size < size ? old_req_size : size);
+                ct_release_tracked_pointer(ptr, CtReleaseApi::Free, site, /*trace=*/false);
+                status = "moved";
+            }
+        }
+        else
+        {
+            new_ptr = std::realloc(ptr, size);
+            if (new_ptr)
+            {
+                ct_record_realloc(ptr, new_ptr, size, site);
+                status = new_ptr == ptr ? "in-place" : "moved";
+            }
+        }
+        if (!new_ptr && size > 0)
+        {
+            status = "failed";
         }
 
-        ct_record_realloc(ptr, new_ptr, size, site);
+        if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
+        {
+            ct_log_realloc_details("tracing-realloc", status, old_req_size, old_size, ptr, size,
+                                   new_ptr ? size : 0, new_ptr, site, CTColor::Yellow);
+        }
         return new_ptr;
     }
 
@@ -991,7 +1000,8 @@ extern "C"
         *out = ptr;
         if (ct_is_enabled(CT_FEATURE_ALLOC))
         {
-            (void)ct_record_alloc(ptr, size, size, site, CT_ALLOC_KIND_ALIGNED);
+            (void)ct_record_alloc(ptr, size, size, site, CT_ALLOC_KIND_ALIGNED,
+                                  "tracing-posix-memalign");
         }
         return 0;
     }
@@ -1010,7 +1020,8 @@ extern "C"
         {
             return ptr;
         }
-        return ct_record_alloc(ptr, size, size, site, CT_ALLOC_KIND_ALIGNED);
+        return ct_record_alloc(ptr, size, size, site, CT_ALLOC_KIND_ALIGNED,
+                               "tracing-aligned-alloc");
     }
 
     CT_NODISCARD CT_NOINSTR void* __ct_mmap(void* addr, size_t len, int prot, int flags, int fd,
@@ -1036,7 +1047,7 @@ extern "C"
         {
             return ptr;
         }
-        return ct_record_alloc(ptr, len, len, site, CT_ALLOC_KIND_MMAP);
+        return ct_record_alloc(ptr, len, len, site, CT_ALLOC_KIND_MMAP, "tracing-mmap");
     }
 
     CT_NODISCARD CT_NOINSTR int __ct_munmap(void* addr, size_t len, const char* site)
@@ -1047,12 +1058,12 @@ extern "C"
         size_t size = 0;
         const char* alloc_site = nullptr;
         unsigned char kind = CT_ALLOC_KIND_MMAP;
+        int found = 0;
 
         if (ct_is_enabled(CT_FEATURE_ALLOC))
         {
             ct_lock_acquire();
-            const int found =
-                ct_remove_for_release(addr, CT_ENTRY_FREED, &size, &alloc_site, &kind);
+            found = ct_remove_for_release(addr, CT_ENTRY_FREED, &size, &alloc_site, &kind);
             ct_lock_release();
             if (found > 0)
             {
@@ -1067,7 +1078,17 @@ extern "C"
             return -1;
         }
 
-        ct_log_alloc_event("munmap", addr, size, site ? site : alloc_site, CT_ALLOC_KIND_MMAP);
+        if (ct_is_enabled(CT_FEATURE_ALLOC) && ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
+        {
+            if (found > 0)
+            {
+                ct_log_release("tracing-munmap", addr, size, ct_kind_name(kind), alloc_site);
+            }
+            else
+            {
+                ct_log_release_unknown("tracing-munmap", addr);
+            }
+        }
         return 0;
     }
 
