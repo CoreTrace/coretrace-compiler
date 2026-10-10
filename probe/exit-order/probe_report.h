@@ -53,6 +53,7 @@ static void probe_report(const char* event)
 {
     HMODULE exe = GetModuleHandleW(NULL);
     CRITICAL_SECTION* lock = (CRITICAL_SECTION*)(void*)GetProcAddress(exe, "probe_cs");
+    SRWLOCK* srw = (SRWLOCK*)(void*)GetProcAddress(exe, "probe_srw");
     HANDLE* holder = (HANDLE*)(void*)GetProcAddress(exe, "probe_holder");
     const char* holder_state = "none";
     if (holder != NULL && *holder != NULL)
@@ -72,9 +73,24 @@ static void probe_report(const char* event)
             lock_state = "held";
         }
     }
+    // The runtime's lock is an SRWLOCK: its try-acquire must return, whoever holds it.
+    const char* srw_state = "none";
+    if (srw != NULL)
+    {
+        if (TryAcquireSRWLockExclusive(srw))
+        {
+            srw_state = "free";
+            ReleaseSRWLockExclusive(srw);
+        }
+        else
+        {
+            srw_state = "held";
+        }
+    }
     char line[256];
-    _snprintf_s(line, sizeof line, _TRUNCATE, "event=%s loader_lock=%d holder=%s lock=%s\n",
-                event, probe_loader_lock_held(), holder_state, lock_state);
+    _snprintf_s(line, sizeof line, _TRUNCATE,
+                "event=%s loader_lock=%d holder=%s lock=%s srw=%s\n", event,
+                probe_loader_lock_held(), holder_state, lock_state, srw_state);
     probe_write(line);
     if (probe_check_enabled("heap"))
     {

@@ -6,11 +6,14 @@
 
 __declspec(dllimport) int probe_user_touch(void);
 __declspec(dllimport) int probe_helper_touch(void);
+__declspec(dllimport) int probe_cxx_touch(void);
 
 // Held forever by `holder`, which ExitProcess kills: the runtime's lock, taken by a thread
 // at the moment the process exits.
 __declspec(dllexport) CRITICAL_SECTION probe_cs;
 __declspec(dllexport) HANDLE probe_holder;
+// The runtime's lock, an SRWLOCK, also held forever by `holder`.
+__declspec(dllexport) SRWLOCK probe_srw = SRWLOCK_INIT;
 
 __declspec(dllexport) void probe_exe_report(const char* event)
 {
@@ -21,6 +24,7 @@ static DWORD WINAPI hold_lock(LPVOID unused)
 {
     (void)unused;
     EnterCriticalSection(&probe_cs);
+    AcquireSRWLockExclusive(&probe_srw);
     Sleep(INFINITE);
     return 0;
 }
@@ -89,6 +93,12 @@ int main(int argc, char** argv)
     atexit(exe_atexit);
     probe_user_touch();
     probe_helper_touch();
+    probe_cxx_touch();
+    // Loaded at run time and never freed: the loader detaches it at exit too.
+    if (LoadLibraryW(L"probe_dyn.dll") == NULL)
+    {
+        probe_write("event=probe_dyn.dll-not-loaded\n");
+    }
     probe_write("event=main-ends\n");
     if (strcmp(mode, "exit") == 0)
     {

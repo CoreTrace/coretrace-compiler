@@ -11,9 +11,12 @@ clang --version | head -1
 build() { clang ${flags[@]+"${flags[@]}"} -O1 "$@" || exit 1; }
 build -shared "${here}/probe_user.c" -o "${out}/probe_user.dll"
 build -shared "${here}/probe_helper.c" -o "${out}/probe_helper.dll"
+build -shared "${here}/probe_dep.c" -o "${out}/probe_dep.dll"
+build -shared "${here}/probe_cxx.cpp" "${out}/probe_dep.lib" -o "${out}/probe_cxx.dll"
+build -shared "${here}/probe_dyn.c" -o "${out}/probe_dyn.dll"
 # The import order decides which DLL the loader initializes first, and detaches last.
-build "${here}/probe_exe.c" "${out}/probe_helper.lib" "${out}/probe_user.lib" -o "${out}/helper_first.exe"
-build "${here}/probe_exe.c" "${out}/probe_user.lib" "${out}/probe_helper.lib" -o "${out}/user_first.exe"
+build "${here}/probe_exe.c" "${out}/probe_helper.lib" "${out}/probe_user.lib" "${out}/probe_cxx.lib" -o "${out}/helper_first.exe"
+build "${here}/probe_exe.c" "${out}/probe_user.lib" "${out}/probe_cxx.lib" "${out}/probe_helper.lib" -o "${out}/user_first.exe"
 for checks in none heap lowio stdio; do
   for exe in helper_first user_first; do
     for mode in return exit exitprocess; do
