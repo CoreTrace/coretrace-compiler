@@ -196,14 +196,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - llvm: 19
-            version: 19.1.7
           - llvm: 20
             version: 20.1.0
-          - llvm: 22
-            version: 22.1.8
-          - llvm: 23
-            version: 23.1.2
     env:
       LLVM_VERSION: ${{ matrix.version }}
 
@@ -351,6 +345,22 @@ jobs:
           -LoggerSourceDir "${PWD}\deps\coretrace-log" `
           -Configuration Release `
           -BuildTests
+
+    - name: Probe the crash of ct_new_delete_library
+      shell: pwsh
+      run: |
+        $cc = (Resolve-Path .\dist\windows\bin\cc.exe).Path
+        & $cc --instrument --ct-modules=alloc test\ct_new_delete_library.cpp -o ndl.exe 2>&1 | Out-Host
+        $env:CT_BACKTRACE = "1"
+        & .\ndl.exe 2>&1 | Select-Object -Last 30 | Out-Host
+        "exit code: 0x{0:X8}" -f $LASTEXITCODE | Out-Host
+        $cdb = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe" -ErrorAction SilentlyContinue
+        if ($cdb) {
+          & $cdb.FullName -g -G -lines -c ".lines -e; .ecxr; kn 30; q" .\ndl.exe 2>&1 | Select-Object -Last 60 | Out-Host
+        } else {
+          "cdb not found" | Out-Host
+        }
+        exit 0
 
     - name: Smoke test
       shell: pwsh

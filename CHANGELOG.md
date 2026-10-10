@@ -22,6 +22,12 @@ pull request.
   compilations keep LTO (#170, #163).
 - **Diagnostics of instrumented compilations** are printed as clang prints them, with source
   excerpts and option names, instead of one line each (#172).
+- **Traces of allocation events.** A release names the kind and the site of the allocation:
+  `tracing-free ptr=... size=16 kind=malloc alloc_site=...`. On Windows, the runtime traces in
+  the words of Linux and macOS: `tracing-malloc` and the other allocation boxes, `tracing-free`,
+  `tracing-delete` and `tracing-delete-array`, `(double free)`, one `tracing-realloc` box per
+  resize, and the auto-free lines. It used `ct: alloc`, `ct: free` and
+  `skipped ... (already freed)` (#195, #188).
 
 ### Fixes
 
