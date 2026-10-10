@@ -259,8 +259,11 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t s
     return 0;
 }
 
-CT_NODISCARD CT_NOINSTR int ct_table_remove(void* ptr, size_t* size_out, size_t* req_size_out,
-                                            const char** site_out)
+// ct_table_remove, which also gives the kind of the allocation.
+CT_NODISCARD CT_NOINSTR static int ct_table_remove_with_kind(void* ptr, size_t* size_out,
+                                                             size_t* req_size_out,
+                                                             const char** site_out,
+                                                             unsigned char* kind_out)
 {
     size_t idx = ct_hash_ptr(ptr, ct_alloc_table_mask);
 
@@ -287,6 +290,10 @@ CT_NODISCARD CT_NOINSTR int ct_table_remove(void* ptr, size_t* size_out, size_t*
             {
                 *site_out = entry->site;
             }
+            if (kind_out)
+            {
+                *kind_out = entry->kind;
+            }
             if (ct_alloc_count > 0)
             {
                 --ct_alloc_count;
@@ -309,11 +316,43 @@ CT_NODISCARD CT_NOINSTR int ct_table_remove(void* ptr, size_t* size_out, size_t*
             {
                 *site_out = entry->site;
             }
+            if (kind_out)
+            {
+                *kind_out = entry->kind;
+            }
             return -1;
         }
     }
 
     return 0;
+}
+
+CT_NODISCARD CT_NOINSTR int ct_table_remove(void* ptr, size_t* size_out, size_t* req_size_out,
+                                            const char** site_out)
+{
+    return ct_table_remove_with_kind(ptr, size_out, req_size_out, site_out, nullptr);
+}
+
+// The kind of an allocation, as releases name it.
+CT_NODISCARD CT_NOINSTR static const char* ct_alloc_kind_name(unsigned char kind)
+{
+    switch (kind)
+    {
+    case CT_ALLOC_KIND_MALLOC:
+        return "malloc";
+    case CT_ALLOC_KIND_NEW:
+        return "new";
+    case CT_ALLOC_KIND_NEW_ARRAY:
+        return "new[]";
+    case CT_ALLOC_KIND_MMAP:
+        return "mmap";
+    case CT_ALLOC_KIND_SBRK:
+        return "sbrk";
+    case CT_ALLOC_KIND_OBJC:
+        return "objc";
+    default:
+        return "unknown";
+    }
 }
 
 CT_NODISCARD CT_NOINSTR int ct_table_remove_autofree(void* ptr, size_t* size_out,
@@ -541,25 +580,6 @@ CT_NODISCARD CT_NOINSTR size_t ct_forget_allocation(void* ptr, unsigned char kin
     return size;
 }
 
-CT_NOINSTR static void ct_log_realloc_details(const char* label, const char* status,
-                                              size_t old_req_size, size_t old_real_size,
-                                              void* old_ptr, size_t new_req_size,
-                                              size_t new_real_size, void* new_ptr, const char* site,
-                                              CTColor color)
-{
-    ct_log(CTLevel::Warn, "{}{}{} :: tid={} site={}\n", ct_color(color), label,
-           ct_color(CTColor::Reset), ct_thread_id(), ct_site_name(site));
-    ct_log(CTLevel::Warn, "┌-----------------------------------┐\n");
-    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "status", status);
-    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "old_req_size", old_req_size);
-    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "new_req_size", new_req_size);
-    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "old_alloc_size", old_real_size);
-    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "new_alloc_size", new_real_size);
-    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "old_ptr", std::format("{:p}", old_ptr));
-    ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "new_ptr", std::format("{:p}", new_ptr));
-    ct_log(CTLevel::Warn, "└-----------------------------------┘\n");
-}
-
 CT_NODISCARD CT_NOINSTR static void* ct_malloc_impl(size_t size, const char* site, int unreachable)
 {
     ct_init_env_once();
@@ -770,8 +790,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, con
     // must not release it first.
     if (old_state == CT_ENTRY_FREED || old_state == CT_ENTRY_AUTOFREED)
     {
-        ct_log(CTLevel::Warn, "{}tracing-realloc ptr={:p} (freed) site={}{}\n",
-               ct_color(CTColor::Red), ptr, ct_site_name(site), ct_color(CTColor::Reset));
+        ct_log_realloc_freed(ptr, site);
         return nullptr;
     }
 
@@ -932,12 +951,13 @@ CT_NOINSTR static void ct_release_tracked_pointer(void* ptr, CtReleaseApi api, c
     size_t size = 0;
     size_t req_size = 0;
     const char* alloc_site = nullptr;
+    unsigned char recorded_kind = CT_ALLOC_KIND_NEW;
     int found = 0;
     (void)req_size;
 
     ct_lock_acquire();
     if (ptr)
-        found = ct_table_remove(ptr, &size, &req_size, &alloc_site);
+        found = ct_table_remove_with_kind(ptr, &size, &req_size, &alloc_site, &recorded_kind);
 
     ct_lock_release();
 
@@ -945,16 +965,13 @@ CT_NOINSTR static void ct_release_tracked_pointer(void* ptr, CtReleaseApi api, c
 
     if (!ptr)
     {
-        ct_log(CTLevel::Warn, "{}{} ptr=null{}\n", ct_color(CTColor::Yellow), label,
-               ct_color(CTColor::Reset));
+        ct_log_release_null(label);
         ct_release_by_api(ptr, api);
         return;
     }
     if (found == -1)
     {
-        ct_log(CTLevel::Warn, "{}{} ptr={:p} (double free) site={} alloc_site={}{}\n",
-               ct_color(CTColor::Red), label, ptr, ct_site_name(site), ct_site_name(alloc_site),
-               ct_color(CTColor::Reset));
+        ct_log_double_free(label, ptr, site, alloc_site);
         return;
     }
     if (found == 0)
@@ -963,8 +980,7 @@ CT_NOINSTR static void ct_release_tracked_pointer(void* ptr, CtReleaseApi api, c
         // release is traced like any other, not reported.
         if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
-            ct_log(CTLevel::Info, "{}{} ptr={:p} (unknown){}\n", ct_color(CTColor::Cyan), label,
-                   ptr, ct_color(CTColor::Reset));
+            ct_log_release_unknown(label, ptr);
         }
         ct_release_by_api(ptr, api);
         return;
@@ -977,8 +993,7 @@ CT_NOINSTR static void ct_release_tracked_pointer(void* ptr, CtReleaseApi api, c
 
     if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
     {
-        ct_log(CTLevel::Info, "{}{} ptr={:p} size={}{}\n", ct_color(CTColor::Cyan), label, ptr,
-               size, ct_color(CTColor::Reset));
+        ct_log_release(label, ptr, size, ct_alloc_kind_name(recorded_kind), alloc_site);
     }
 
     const unsigned char kind =
@@ -1152,13 +1167,14 @@ extern "C"
         size_t size = 0;
         size_t req_size = 0;
         const char* alloc_site = nullptr;
+        unsigned char kind = CT_ALLOC_KIND_MMAP;
         int found = 0;
         (void)req_size;
 
         ct_lock_acquire();
         if (addr)
         {
-            found = ct_table_remove(addr, &size, &req_size, &alloc_site);
+            found = ct_table_remove_with_kind(addr, &size, &req_size, &alloc_site, &kind);
         }
         ct_lock_release();
 
@@ -1169,8 +1185,14 @@ extern "C"
 
         if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
-            ct_log(CTLevel::Info, "{}tracing-munmap ptr={:p} size={}{}\n", ct_color(CTColor::Cyan),
-                   addr, len, ct_color(CTColor::Reset));
+            if (found > 0)
+            {
+                ct_log_release("tracing-munmap", addr, len, ct_alloc_kind_name(kind), alloc_site);
+            }
+            else
+            {
+                ct_log_release_unknown("tracing-munmap", addr);
+            }
         }
 
         return munmap(addr, len);
@@ -1290,25 +1312,19 @@ extern "C"
             {
                 (void)sbrk(-static_cast<intptr_t>(size));
                 ct_forget_returned_block(ptr, size);
-                ct_log(CTLevel::Warn, "{}auto-free ptr={:p} size={} site={}{}\n",
-                       ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
-                       ct_color(CTColor::Reset));
+                ct_log_autofree(ptr, size, site);
                 return;
             }
 #pragma clang diagnostic pop
-            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} (sbrk not top){}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr, ct_color(CTColor::Reset));
+            ct_log_autofree_skipped(ptr, "sbrk not top");
 #else
             (void)size;
-            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} (sbrk not supported){}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr, ct_color(CTColor::Reset));
+            ct_log_autofree_skipped(ptr, "sbrk not supported");
 #endif
             return;
         }
 
-        ct_log(CTLevel::Warn, "{}auto-free ptr={:p} size={} site={}{}\n",
-               ct_color(CTColor::BgBrightYellow), ptr, size, ct_site_name(site),
-               ct_color(CTColor::Reset));
+        ct_log_autofree(ptr, size, site);
 
         if (api == CtAutoFreeApi::Munmap)
         {
@@ -1350,8 +1366,7 @@ extern "C"
         }
         if (!ptr)
         {
-            ct_log(CTLevel::Warn, "{}ct: auto-free ptr=null{}\n", ct_color(CTColor::BgBrightYellow),
-                   ct_color(CTColor::Reset));
+            ct_log_autofree_skipped(ptr, nullptr);
             return;
         }
 
@@ -1386,9 +1401,7 @@ extern "C"
         }
         if (found <= 0)
         {
-            ct_log(CTLevel::Warn, "{}ct: auto-free skipped ptr={:p} ({}){}\n",
-                   ct_color(CTColor::BgBrightYellow), ptr, found == 0 ? "unknown" : "already freed",
-                   ct_color(CTColor::Reset));
+            ct_log_autofree_skipped(ptr, found == 0 ? "unknown" : "already freed");
             return;
         }
 
@@ -1432,28 +1445,26 @@ extern "C"
         size_t size = 0;
         size_t req_size = 0;
         const char* alloc_site = nullptr;
+        unsigned char kind = CT_ALLOC_KIND_MALLOC;
         int found = 0;
         (void)req_size;
 
         ct_lock_acquire();
         if (ptr)
         {
-            found = ct_table_remove(ptr, &size, &req_size, &alloc_site);
+            found = ct_table_remove_with_kind(ptr, &size, &req_size, &alloc_site, &kind);
         }
         ct_lock_release();
 
         if (!ptr)
         {
-            ct_log(CTLevel::Warn, "{}tracing-free ptr=null{}\n", ct_color(CTColor::Yellow),
-                   ct_color(CTColor::Reset));
+            ct_log_release_null("tracing-free");
             free(ptr);
             return;
         }
         if (found == -1)
         {
-            ct_log(CTLevel::Warn, "{}tracing-free ptr={:p} (double free) site={} alloc_site={}{}\n",
-                   ct_color(CTColor::Red), ptr, ct_site_name(site), ct_site_name(alloc_site),
-                   ct_color(CTColor::Reset));
+            ct_log_double_free("tracing-free", ptr, site, alloc_site);
             return;
         }
         if (found == 0)
@@ -1462,8 +1473,7 @@ extern "C"
             // traced like any other, not reported.
             if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
             {
-                ct_log(CTLevel::Info, "{}tracing-free ptr={:p} (unknown){}\n",
-                       ct_color(CTColor::Cyan), ptr, ct_color(CTColor::Reset));
+                ct_log_release_unknown("tracing-free", ptr);
             }
             free(ptr);
             return;
@@ -1476,8 +1486,7 @@ extern "C"
 
         if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
-            ct_log(CTLevel::Info, "{}tracing-free ptr={:p} size={}{}\n", ct_color(CTColor::Cyan),
-                   ptr, size, ct_color(CTColor::Reset));
+            ct_log_release("tracing-free", ptr, size, ct_alloc_kind_name(kind), alloc_site);
         }
         ct_quarantine_push(
             {ptr, size, static_cast<unsigned char>(CtReleaseApi::Free), CT_ALLOC_KIND_MALLOC});
