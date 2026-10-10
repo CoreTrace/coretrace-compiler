@@ -186,6 +186,7 @@ def main() -> int:
     undefined_ref_src = FIXTURES / "undefined_ref.c"
     alloc_site_src = FIXTURES / "alloc_site.c"
     new_delete_src = FIXTURES / "new_delete.cpp"
+    alloc_trace_src = FIXTURES / "alloc_trace.cpp"
     exit_frees_src = FIXTURES / "exit_frees.cpp"
     exit_terminator_src = FIXTURES / "exit_terminator.c"
     crash_src = FIXTURES / "crash.c"
@@ -732,6 +733,31 @@ def main() -> int:
         ],
     )
 
+    # Runtime behaviour: every system traces allocations and releases in the same words; a
+    # release names the kind and the site of its allocation (#188).
+    tc_runtime_alloc_trace = TestCase(
+        name="runtime_alloc_trace_vocabulary",
+        plan=CompilePlan(
+            name="runtime_alloc_trace_vocabulary",
+            sources=[Path("alloc_trace.cpp")],
+            out=None,
+            extra_args=["--instrument", "--ct-modules=alloc", "-o", "alloc_trace_app"],
+        ),
+        assertions=[
+            assert_exit_code(0),
+            assert_output_exists_at("alloc_trace_app"),
+            assert_run_artifact(
+                "alloc_trace_app", 0,
+                ["tracing-malloc :: tid=", "tracing-realloc :: tid=", "status           : moved",
+                 "tracing-free ptr=", "kind=malloc alloc_site=",
+                 "tracing-new :: tid=", "tracing-delete ptr=", "kind=new alloc_site=",
+                 "tracing-new-array :: tid=", "tracing-delete-array ptr=",
+                 "kind=new[] alloc_site="],
+                stderr_excludes=["ct: alloc ptr=", "ct: free ptr=", "ct: delete ptr=",
+                                 "ct: delete[] ptr=", "ct: realloc ptr=", "ct: leaks detected"]),
+        ],
+    )
+
     # Runtime behaviour: the leak report comes after the program's exit-time code, which
     # releases blocks too, such as the destructors of global objects.
     tc_runtime_leak_report_after_destructors = TestCase(
@@ -1049,6 +1075,7 @@ def main() -> int:
     runtime_cases = [
         tc_runtime_leak_report,
         tc_runtime_cpp_leak_report,
+        tc_runtime_alloc_trace,
         tc_runtime_leak_report_after_destructors,
         tc_runtime_bounds_without_trace,
         tc_runtime_bounds_stack,
@@ -1110,7 +1137,7 @@ def main() -> int:
             copy_fixtures(ws, [src, debug_src, cpp_src, cpp_as_c_src, vtable_src,
                                leak_src, overflow_src, broken_src, codegen_error_src,
                                undefined_ref_src,
-                               alloc_site_src, new_delete_src, exit_frees_src, exit_terminator_src, crash_src,
+                               alloc_site_src, new_delete_src, alloc_trace_src, exit_frees_src, exit_terminator_src, crash_src,
                                trace_threads_src, trace_objc_src, leak_objc_src,
                                new_delete_objc_src, objc_alloc_forms_src, objc_objects_src,
                                objcxx_objects_src, objc_autofree_scan_src,
