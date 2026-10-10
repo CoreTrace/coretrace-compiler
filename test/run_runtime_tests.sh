@@ -125,6 +125,7 @@ expect_stderr() {
     ct_vtable_diag_fake.cpp) echo "vtable resolve failed" ;;
     ct_vtable_diag_freed.cpp) echo "vptr on freed object" ;;
     ct_vtable_diag_mismatch.cpp) echo "module mismatch" ;;
+    ct_vtable_diag_mismatch_windows.cpp) echo "warn *: module mismatch between vtable and target" ;;
     ct_vtable_diag_stack_target.cpp) echo "target in non-exec memory" ;;
     *) echo "" ;;
   esac
@@ -271,6 +272,7 @@ TESTS=(
   ct_vtable_diag_fake.cpp
   ct_vtable_diag_freed.cpp
   ct_vtable_diag_mismatch.cpp
+  ct_vtable_diag_mismatch_windows.cpp
   ct_vtable_diag_stack_target.cpp
   ct_vtable_uaf.cpp
 )
