@@ -50,6 +50,10 @@ pull request.
 - **`--ct-autofree` under ThreadSanitizer.** With `-fsanitize=thread`, ThreadSanitizer's access
   checks made blocks look escaping, so the autofree released nothing and those blocks were
   reported as leaks (#183, #182).
+- **Leak report on Windows.** It runs after the exit-time code of the DLLs the program links
+  with, whose releases it reported as leaks, and when the program calls `ExitProcess`, where it
+  did not run. If a thread terminated at exit held the allocation table, the report says it is
+  skipped instead of waiting (#200, #187).
 - **`-gcolumn-info` without `-g`.** An instrumented compilation given only options that change
   debug information, such as `-gcolumn-info` or `-gsplit-dwarf`, or given `-ggdb0`, had no debug
   information: every site was `<unknown>`. These options no longer stop the compiler from adding
