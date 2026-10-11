@@ -50,6 +50,10 @@ pull request.
 - **`--ct-autofree` under ThreadSanitizer.** With `-fsanitize=thread`, ThreadSanitizer's access
   checks made blocks look escaping, so the autofree released nothing and those blocks were
   reported as leaks (#183, #182).
+- **Runtime re-entering itself on Windows.** The program's instrumented copies of inline functions
+  of the standard library could be linked into the runtime, whose own allocations, a trace being
+  formatted for instance, then re-entered it until the stack overflowed. The runtime no longer
+  tracks the allocations it makes for itself (#198, #197).
 - **Leak report on Windows.** It runs after the exit-time code of the DLLs the program links
   with, whose releases it reported as leaks, and when the program calls `ExitProcess`, where it
   did not run. If a thread terminated at exit held the allocation table, the report says it is
