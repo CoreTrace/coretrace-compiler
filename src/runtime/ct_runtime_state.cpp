@@ -64,6 +64,7 @@ int ct_early_trace = 0;
 size_t ct_early_trace_count = 0;
 size_t ct_early_trace_limit = 200;
 thread_local const char* ct_current_site = nullptr;
+thread_local unsigned ct_runtime_depth = 0;
 
 namespace
 {

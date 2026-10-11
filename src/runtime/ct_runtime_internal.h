@@ -122,6 +122,8 @@ extern int ct_early_trace;
 extern size_t ct_early_trace_count;
 extern size_t ct_early_trace_limit;
 extern thread_local const char* ct_current_site;
+// How many scopes of runtime work this thread is in (CtRuntimeScope).
+extern thread_local unsigned ct_runtime_depth;
 
 #define CT_FEATURE_TRACE (1ull << 0)
 #define CT_FEATURE_ALLOC (1ull << 1)
@@ -284,6 +286,30 @@ CT_NOINSTR inline void ct_write_prefix_nolock(CTLevel level)
     ct_write_raw(" ", 1);
 }
 
+// Runtime work on this thread, for its lifetime; scopes nest. The program's copies of inline
+// library functions are instrumented, and the linker may keep them for the runtime too: on
+// Windows, the MSVC standard library is in headers only, so an allocation the runtime makes
+// for itself, a string it formats for instance, reaches its allocation entry points (#197).
+// Inside a scope, those entry points pass it to the allocator without tracking or tracing it.
+struct CtRuntimeScope
+{
+    CT_NOINSTR CtRuntimeScope() noexcept
+    {
+        ++ct_runtime_depth;
+    }
+    CT_NOINSTR ~CtRuntimeScope()
+    {
+        --ct_runtime_depth;
+    }
+    CtRuntimeScope(const CtRuntimeScope&) = delete;
+    CtRuntimeScope& operator=(const CtRuntimeScope&) = delete;
+};
+
+CT_NODISCARD CT_NOINSTR inline bool ct_in_runtime_scope(void)
+{
+    return ct_runtime_depth != 0;
+}
+
 struct CtLogLockGuard
 {
     CT_NOINSTR CtLogLockGuard()
@@ -306,6 +332,7 @@ CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... arg
         return;
     }
 
+    CtRuntimeScope scope;
     try
     {
         std::string msg = std::vformat(fmt, std::make_format_args(args...));
