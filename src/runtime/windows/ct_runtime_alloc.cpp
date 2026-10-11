@@ -1184,9 +1184,11 @@ namespace
 {
     CT_NOINSTR void NTAPI ct_report_leaks_at_exit(PVOID module, DWORD reason, PVOID reserved)
     {
-        (void)module;
-        // `reserved` is null when the module is unloaded, not null when the process exits.
-        if (reason == DLL_PROCESS_DETACH && reserved != nullptr)
+        // The executable detaches only when the process exits, and then with a null
+        // `reserved`; a DLL that links the runtime has a non-null one then, and a null one
+        // when FreeLibrary unloads it, which is no exit.
+        if (reason == DLL_PROCESS_DETACH &&
+            (reserved != nullptr || module == GetModuleHandleW(nullptr)))
         {
             (void)ct_report_leaks();
         }
