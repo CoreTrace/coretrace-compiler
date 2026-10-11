@@ -168,11 +168,6 @@ FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-ove
 #                allocated, and only those.
 known_failure() {
   case "$1" in
-    # On Windows, the report, a terminator of the executable, runs before the exit-time
-    # code of the DLLs it depends on (#187).
-    ct_leak_exit_shared_library.cpp)
-      [[ "${ON_WINDOWS}" -eq 1 ]] && echo leak-report && return 0
-      ;;
   esac
   return 1
 }
