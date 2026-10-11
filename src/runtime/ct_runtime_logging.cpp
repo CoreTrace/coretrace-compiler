@@ -72,18 +72,31 @@ CT_NODISCARD CT_NOINSTR const char* ct_site_name(const char* site)
     return "<unknown>";
 }
 
+namespace
+{
+#if defined(_WIN32)
+    // ASCII, as the other boxes of the Windows runtime: a console or a reader that decodes the
+    // output with a legacy code page, such as cp1252, garbles UTF-8 box-drawing characters.
+    constexpr const char* kBoxTop = "+-----------------------------------+\n";
+    constexpr const char* kBoxBottom = "+-----------------------------------+\n";
+#else
+    constexpr const char* kBoxTop = "┌-----------------------------------┐\n";
+    constexpr const char* kBoxBottom = "└-----------------------------------┘\n";
+#endif
+} // namespace
+
 CT_NOINSTR void ct_log_alloc_details(const char* label, const char* status, size_t req_size,
                                      size_t real_size, void* ptr, const char* site, CTColor color,
                                      CTLevel lvl)
 {
     ct_log(lvl, "{}{}{} :: tid={} site={}\n", ct_color(color), label, ct_color(CTColor::Reset),
            ct_thread_id(), ct_site_name(site));
-    ct_log(lvl, "┌-----------------------------------┐\n");
+    ct_log(lvl, kBoxTop);
     ct_log(lvl, "| {:<16} : {:<14} |\n", "status", status);
     ct_log(lvl, "| {:<16} : {:<14} |\n", "req_size", req_size);
     ct_log(lvl, "| {:<16} : {:<14} |\n", "total_alloc_size", real_size);
     ct_log(lvl, "| {:<16} : {:<14} |\n", "ptr", std::format("{:p}", ptr));
-    ct_log(lvl, "└-----------------------------------┘\n");
+    ct_log(lvl, kBoxBottom);
 }
 
 CT_NOINSTR void ct_log_realloc_details(const char* label, const char* status, size_t old_req_size,
@@ -93,7 +106,7 @@ CT_NOINSTR void ct_log_realloc_details(const char* label, const char* status, si
 {
     ct_log(CTLevel::Warn, "{}{}{} :: tid={} site={}\n", ct_color(color), label,
            ct_color(CTColor::Reset), ct_thread_id(), ct_site_name(site));
-    ct_log(CTLevel::Warn, "┌-----------------------------------┐\n");
+    ct_log(CTLevel::Warn, kBoxTop);
     ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "status", status);
     ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "old_req_size", old_req_size);
     ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "new_req_size", new_req_size);
@@ -101,7 +114,7 @@ CT_NOINSTR void ct_log_realloc_details(const char* label, const char* status, si
     ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "new_alloc_size", new_real_size);
     ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "old_ptr", std::format("{:p}", old_ptr));
     ct_log(CTLevel::Warn, "| {:<16} : {:<14} |\n", "new_ptr", std::format("{:p}", new_ptr));
-    ct_log(CTLevel::Warn, "└-----------------------------------┘\n");
+    ct_log(CTLevel::Warn, kBoxBottom);
 }
 
 CT_NOINSTR void ct_log_realloc_freed(void* ptr, const char* site)
