@@ -47,4 +47,27 @@ namespace
         EXPECT_FALSE(other_thread_in_scope);
         EXPECT_TRUE(ct_in_runtime_scope());
     }
+
+#if defined(_WIN32)
+    // A block allocated inside a scope is the runtime's: not in the table. The same
+    // allocation outside one is the program's, and tracked.
+    TEST(RuntimeScope, KeepsTheRuntimesOwnAllocationsUntracked)
+    {
+        unsigned char state = CT_ENTRY_EMPTY;
+        void* own = nullptr;
+        {
+            CtRuntimeScope scope;
+            own = __ct_malloc(32, "test:runtime");
+            ASSERT_NE(own, nullptr);
+            EXPECT_EQ(ct_table_lookup(own, nullptr, nullptr, nullptr, &state), 0);
+            __ct_free(own, "test:runtime");
+        }
+
+        void* program = __ct_malloc(32, "test:program");
+        ASSERT_NE(program, nullptr);
+        ASSERT_EQ(ct_table_lookup(program, nullptr, nullptr, nullptr, &state), 1);
+        EXPECT_EQ(state, CT_ENTRY_USED);
+        __ct_free(program, "test:program");
+    }
+#endif
 } // namespace
