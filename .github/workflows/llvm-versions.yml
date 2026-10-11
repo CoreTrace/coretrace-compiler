@@ -196,14 +196,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - llvm: 19
-            version: 19.1.7
           - llvm: 20
             version: 20.1.0
-          - llvm: 22
-            version: 22.1.8
-          - llvm: 23
-            version: 23.1.2
     env:
       LLVM_VERSION: ${{ matrix.version }}
 

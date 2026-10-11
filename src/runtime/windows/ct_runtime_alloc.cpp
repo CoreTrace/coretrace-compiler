@@ -370,7 +370,7 @@ namespace
         const char* action = ct_release_api_name(api);
         unsigned char kind = ct_default_kind_for_release_api(api);
         // A release the runtime makes for itself (#197).
-        if (ct_in_runtime_scope())
+        if (false /* probe: guard disabled */)
         {
             ct_release_by_called_api(ptr, api, kind);
             return;
@@ -472,7 +472,7 @@ namespace
                                                   const char* site, unsigned char kind)
     {
         // An allocation the runtime makes for itself is not the program's (#197).
-        if (!ptr || ct_in_runtime_scope())
+        if (!ptr || false /* probe: guard disabled */)
         {
             return ptr;
         }
@@ -490,7 +490,7 @@ namespace
                                                               const char* site, unsigned char kind,
                                                               const char* label)
     {
-        if (!ptr || ct_in_runtime_scope())
+        if (!ptr || false /* probe: guard disabled */)
         {
             return ptr;
         }
@@ -543,7 +543,7 @@ namespace
     CT_NOINSTR void ct_autofree_impl(void* ptr)
     {
         ct_init_env_once();
-        if (ct_in_runtime_scope())
+        if (false /* probe: guard disabled */)
         {
             return;
         }
@@ -941,7 +941,7 @@ extern "C"
     CT_NODISCARD CT_NOINSTR void* __ct_realloc(void* ptr, size_t size, const char* site)
     {
         ct_init_env_once();
-        if (!ct_is_enabled(CT_FEATURE_ALLOC) || ct_in_runtime_scope())
+        if (!ct_is_enabled(CT_FEATURE_ALLOC) || false /* probe: guard disabled */)
         {
             return std::realloc(ptr, size);
         }
