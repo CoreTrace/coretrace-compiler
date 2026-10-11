@@ -127,6 +127,8 @@ expect_stderr() {
     ct_vtable_diag_freed.cpp) echo "vptr on freed object" ;;
     ct_vtable_diag_mismatch.cpp) echo "module mismatch" ;;
     ct_vtable_diag_mismatch_windows.cpp) echo "warn *: module mismatch between vtable and target" ;;
+    ct_dealloc_mismatch_windows.cpp)
+      echo 'tracing-delete ptr=.* (deallocator mismatch) expected=new recorded=new\[\] alloc_site=[^ ]*ct_dealloc_mismatch_windows\.cpp:7:' ;;
     ct_vtable_diag_stack_target.cpp) echo "target in non-exec memory" ;;
     *) echo "" ;;
   esac
@@ -201,6 +203,10 @@ skip_reason() {
   # The Windows counterparts of fixtures that use POSIX interfaces.
   if [[ "${ON_WINDOWS}" -eq 0 ]]; then
     case "$1" in
+      ct_dealloc_mismatch_windows.cpp)
+        echo "checks a diagnostic only the Windows runtime makes"
+        return 0
+        ;;
       *_windows.c|*_windows.cpp)
         echo "uses the Windows API"
         return 0
@@ -258,6 +264,7 @@ TESTS=(
   ct_new_delete_variants.cpp
   ct_new_delete_library.cpp
   ct_double_delete_site.cpp
+  ct_dealloc_mismatch_windows.cpp
   ct_leak_static_destructor.cpp
   ct_leak_destructor_function.c
   ct_leak_exit_uninstrumented_first.cpp
