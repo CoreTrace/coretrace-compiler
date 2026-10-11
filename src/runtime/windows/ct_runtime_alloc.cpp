@@ -585,25 +585,23 @@ namespace
             {ptr, size, static_cast<unsigned char>(ct_release_api_for_kind(kind)), kind});
     }
 
-}
-
-// Constructed in this file's init_seg, so destroyed after the program's static objects
-// and before its terminators. From there on, releases do not log: the logger's state may
-// already be destroyed.
-struct CtExitLogging
-{
-    // User-provided, so that the object is initialized dynamically, in this file's
-    // init_seg: clang registers the destructor of a constant-initialized object from
-    // .CRT$XCU, with the program's own objects.
-    CT_NOINSTR CtExitLogging() {}
-
-    CT_NOINSTR ~CtExitLogging()
+    // Constructed in this file's init_seg, so destroyed after the program's static objects
+    // and before its terminators. From there on, releases do not log: the logger's state may
+    // already be destroyed.
+    struct CtExitLogging
     {
-        ct_disable_logging();
-    }
-};
+        // User-provided, so that the object is initialized dynamically, in this file's
+        // init_seg: clang registers the destructor of a constant-initialized object from
+        // .CRT$XCU, with the program's own objects.
+        CT_NOINSTR CtExitLogging() {}
 
-CtExitLogging ct_exit_logging;
+        CT_NOINSTR ~CtExitLogging()
+        {
+            ct_disable_logging();
+        }
+    };
+
+    CtExitLogging ct_exit_logging;
 } // namespace
 
 // Runs at process exit from a TLS callback of the executable (ct_report_leaks_tls_callback):
