@@ -36,6 +36,7 @@ if(TARGET ct_instrument_runtime)
     runtime_bounds_test.cpp
     runtime_demangle_test.cpp
     runtime_quarantine_test.cpp
+    runtime_scope_test.cpp
     runtime_table_test.cpp
   )
   target_include_directories(runtime_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)

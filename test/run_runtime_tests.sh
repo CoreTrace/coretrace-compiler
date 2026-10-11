@@ -56,7 +56,8 @@ flags_for() {
     # Clang enables sized deallocation by default only from version 19 on.
     ct_new_delete_sized.cpp) echo "--ct-modules=alloc -fsized-deallocation" ;;
     # Without a log line per allocation: that is a million lines here.
-    ct_threads_stress.c) echo "--ct-modules=alloc,bounds --ct-no-alloc-trace" ;;
+    ct_threads_stress.c|ct_threads_stress_windows.c)
+      echo "--ct-modules=alloc,bounds --ct-no-alloc-trace" ;;
     ct_fork_threads.c) echo "--ct-modules=alloc --ct-no-alloc-trace" ;;
     ct_alloc_unreachable_autofree.c|ct_new_unreachable_autofree.cpp)
       echo "--ct-modules=alloc --ct-autofree" ;;
@@ -93,9 +94,9 @@ expect_exit() {
 # or "any" (libc-dependent, not checked).
 expect_leaks() {
   case "$1" in
-    ct_alloc_basic.c|ct_new_delete.cpp) echo 1 ;;   # deliberate unreachable allocation
+    ct_alloc_basic.c|ct_new_delete.cpp|ct_alloc_unreachable_stl.cpp) echo 1 ;;  # deliberate unreachable allocation
     ct_leak_site.c) echo 1 ;;
-    ct_threads_stress.c) echo 8 ;;                  # one per thread
+    ct_threads_stress.c|ct_threads_stress_windows.c) echo 8 ;;  # one per thread
     ct_realloc_zero.c) echo any ;;                  # realloc(p, 0) may allocate or free per libc
     *) echo none ;;
   esac
@@ -112,7 +113,8 @@ expect_stderr() {
     ct_bounds_stack_overflow.c|ct_bounds_stack_callee.c|ct_bounds_stack_container_of.c|\
     ct_bounds_stack_default_modules.c|ct_bounds_stack_longjmp.c)
       echo "stack-buffer-overflow" ;;
-    ct_new_delete.cpp|ct_new_unreachable_autofree.cpp) echo "tracing-new-unreachable" ;;
+    ct_new_delete.cpp|ct_new_unreachable_autofree.cpp|ct_alloc_unreachable_stl.cpp)
+      echo "tracing-new-unreachable" ;;
     # Leaks and double frees name where the memory came from; a double free also names
     # where it happens.
     ct_leak_site.c) echo 'ct: leak ptr=.* alloc_site=[^ ]*ct_leak_site\.c:8:' ;;
@@ -124,6 +126,7 @@ expect_stderr() {
     ct_vtable_diag_fake.cpp) echo "vtable resolve failed" ;;
     ct_vtable_diag_freed.cpp) echo "vptr on freed object" ;;
     ct_vtable_diag_mismatch.cpp) echo "module mismatch" ;;
+    ct_vtable_diag_mismatch_windows.cpp) echo "warn *: module mismatch between vtable and target" ;;
     ct_vtable_diag_stack_target.cpp) echo "target in non-exec memory" ;;
     *) echo "" ;;
   esac
@@ -143,6 +146,8 @@ expect_stdout() {
     ct_leak_static_destructor.cpp|ct_leak_destructor_function.c|\
     ct_leak_exit_uninstrumented_first.cpp|ct_leak_exit_shared_library.cpp) echo "ok" ;;
     ct_threads_stress.c) echo "damaged=0" ;;
+    ct_threads_stress_windows.c) echo "threads=8 rounds=20000 damaged=0" ;;
+    ct_alloc_unreachable_stl.cpp) echo "size=64" ;;
     ct_fork_threads.c) echo "hung=0" ;;
     *) echo "" ;;
   esac
@@ -193,6 +198,15 @@ skip_reason() {
         ;;
     esac
   fi
+  # The Windows counterparts of fixtures that use POSIX interfaces.
+  if [[ "${ON_WINDOWS}" -eq 0 ]]; then
+    case "$1" in
+      *_windows.c|*_windows.cpp)
+        echo "uses the Windows API"
+        return 0
+        ;;
+    esac
+  fi
   if [[ "${ON_WINDOWS}" -eq 1 ]]; then
     case "$1" in
       ct_threads_stress.c)
@@ -235,9 +249,11 @@ TESTS=(
   ct_bounds_heap_use_after_free.c
   ct_realloc_zero.c
   ct_threads_stress.c
+  ct_threads_stress_windows.c
   ct_fork_threads.c
   ct_new_delete.cpp
   ct_new_unreachable_autofree.cpp
+  ct_alloc_unreachable_stl.cpp
   ct_new_delete_sized.cpp
   ct_new_delete_variants.cpp
   ct_new_delete_library.cpp
@@ -255,6 +271,7 @@ TESTS=(
   ct_vtable_diag_fake.cpp
   ct_vtable_diag_freed.cpp
   ct_vtable_diag_mismatch.cpp
+  ct_vtable_diag_mismatch_windows.cpp
   ct_vtable_diag_stack_target.cpp
   ct_vtable_uaf.cpp
 )

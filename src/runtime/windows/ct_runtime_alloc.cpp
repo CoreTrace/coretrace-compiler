@@ -343,6 +343,13 @@ namespace
 
         const char* label = ct_release_label(api);
         unsigned char kind = ct_default_kind_for_release_api(api);
+        // A release the runtime makes for itself (#197).
+        if (ct_in_runtime_scope())
+        {
+            ct_release_by_called_api(ptr, api, kind);
+            return;
+        }
+        CtRuntimeScope scope;
         if (!ct_is_enabled(CT_FEATURE_ALLOC))
         {
             ct_release_by_called_api(ptr, api, kind);
@@ -429,6 +436,8 @@ namespace
     CT_NOINSTR void ct_track_alloc(void* ptr, size_t req_size, size_t alloc_size, const char* site,
                                    unsigned char kind)
     {
+        // The table allocates its records.
+        CtRuntimeScope scope;
         ct_lock_acquire();
         (void)ct_table_insert(ptr, req_size, alloc_size, site, kind);
         ct_lock_release();
@@ -441,11 +450,13 @@ namespace
                                                   const char* site, unsigned char kind,
                                                   const char* label)
     {
-        if (!ptr)
+        // An allocation the runtime makes for itself is not the program's (#197).
+        if (!ptr || ct_in_runtime_scope())
         {
             return ptr;
         }
 
+        CtRuntimeScope scope;
         ct_track_alloc(ptr, req_size, alloc_size, site, kind);
         if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
@@ -462,11 +473,12 @@ namespace
                                                               const char* site, unsigned char kind,
                                                               const char* label)
     {
-        if (!ptr)
+        if (!ptr || ct_in_runtime_scope())
         {
             return ptr;
         }
 
+        CtRuntimeScope scope;
         ct_track_alloc(ptr, size, size, site, kind);
         if (ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {
@@ -478,6 +490,7 @@ namespace
 
     CT_NOINSTR void ct_record_realloc(void* old_ptr, void* new_ptr, size_t size, const char* site)
     {
+        CtRuntimeScope scope;
         if (!new_ptr)
         {
             return;
@@ -512,6 +525,11 @@ namespace
     CT_NOINSTR void ct_autofree_impl(void* ptr)
     {
         ct_init_env_once();
+        if (ct_in_runtime_scope())
+        {
+            return;
+        }
+        CtRuntimeScope scope;
         if (!ct_is_enabled(CT_FEATURE_ALLOC) || !ct_is_enabled(CT_FEATURE_AUTOFREE))
         {
             return;
@@ -555,6 +573,7 @@ namespace
     // lock-free writers.
     CT_NOINSTR void ct_report_leaks()
     {
+        CtRuntimeScope scope;
         std::vector<std::pair<void*, CtAllocEntry>> leaks;
 
         ct_lock_acquire();
@@ -907,7 +926,7 @@ extern "C"
     CT_NODISCARD CT_NOINSTR void* __ct_realloc(void* ptr, size_t size, const char* site)
     {
         ct_init_env_once();
-        if (!ct_is_enabled(CT_FEATURE_ALLOC))
+        if (!ct_is_enabled(CT_FEATURE_ALLOC) || ct_in_runtime_scope())
         {
             return std::realloc(ptr, size);
         }
