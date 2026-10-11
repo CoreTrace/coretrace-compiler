@@ -456,6 +456,7 @@ extern "C"
 {
     CT_NOINSTR void __ct_vtable_dump(void* this_ptr, const char* site, const char* static_type)
     {
+        CtRuntimeScope scope;
         ct_init_env_once();
         ct_log_vtable_diag_state();
 
@@ -535,6 +536,7 @@ extern "C"
     CT_NOINSTR void __ct_vcall_trace(void* this_ptr, void* target, const char* site,
                                      const char* static_type)
     {
+        CtRuntimeScope scope;
         ct_init_env_once();
         ct_log_vtable_diag_state();
 

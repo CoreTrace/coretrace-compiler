@@ -55,6 +55,7 @@ extern "C"
             ct_trace_started.store(1, std::memory_order_release);
         }
 
+        CtRuntimeScope scope;
         std::string demangled;
         if (ct_demangle(func, demangled))
         {
@@ -86,6 +87,7 @@ extern "C"
             return;
         }
 
+        CtRuntimeScope scope;
         std::string demangled;
         if (ct_demangle(func, demangled))
         {
@@ -106,6 +108,7 @@ extern "C"
 
     CT_NOINSTR void __ct_trace_exit_i64(const char* func, long long value)
     {
+        CtRuntimeScope scope;
         ct_log_exit_value(func, std::format("{}", value));
     }
 
@@ -116,11 +119,13 @@ extern "C"
             ct_log_exit_value(func, "nullptr");
             return;
         }
+        CtRuntimeScope scope;
         ct_log_exit_value(func, std::format("{:p}", value));
     }
 
     CT_NOINSTR void __ct_trace_exit_f64(const char* func, double value)
     {
+        CtRuntimeScope scope;
         ct_log_exit_value(func, std::format("{}", value));
     }
 

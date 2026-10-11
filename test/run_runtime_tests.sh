@@ -94,7 +94,7 @@ expect_exit() {
 # or "any" (libc-dependent, not checked).
 expect_leaks() {
   case "$1" in
-    ct_alloc_basic.c|ct_new_delete.cpp) echo 1 ;;   # deliberate unreachable allocation
+    ct_alloc_basic.c|ct_new_delete.cpp|ct_alloc_unreachable_stl.cpp) echo 1 ;;  # deliberate unreachable allocation
     ct_leak_site.c) echo 1 ;;
     ct_threads_stress.c|ct_threads_stress_windows.c) echo 8 ;;  # one per thread
     ct_realloc_zero.c) echo any ;;                  # realloc(p, 0) may allocate or free per libc
@@ -113,7 +113,8 @@ expect_stderr() {
     ct_bounds_stack_overflow.c|ct_bounds_stack_callee.c|ct_bounds_stack_container_of.c|\
     ct_bounds_stack_default_modules.c|ct_bounds_stack_longjmp.c)
       echo "stack-buffer-overflow" ;;
-    ct_new_delete.cpp|ct_new_unreachable_autofree.cpp) echo "tracing-new-unreachable" ;;
+    ct_new_delete.cpp|ct_new_unreachable_autofree.cpp|ct_alloc_unreachable_stl.cpp)
+      echo "tracing-new-unreachable" ;;
     # Leaks and double frees name where the memory came from; a double free also names
     # where it happens.
     ct_leak_site.c) echo 'ct: leak ptr=.* alloc_site=[^ ]*ct_leak_site\.c:8:' ;;
@@ -146,6 +147,7 @@ expect_stdout() {
     ct_leak_exit_uninstrumented_first.cpp|ct_leak_exit_shared_library.cpp) echo "ok" ;;
     ct_threads_stress.c) echo "damaged=0" ;;
     ct_threads_stress_windows.c) echo "threads=8 rounds=20000 damaged=0" ;;
+    ct_alloc_unreachable_stl.cpp) echo "size=64" ;;
     ct_fork_threads.c) echo "hung=0" ;;
     *) echo "" ;;
   esac
@@ -255,6 +257,7 @@ TESTS=(
   ct_fork_threads.c
   ct_new_delete.cpp
   ct_new_unreachable_autofree.cpp
+  ct_alloc_unreachable_stl.cpp
   ct_new_delete_sized.cpp
   ct_new_delete_variants.cpp
   ct_new_delete_library.cpp
