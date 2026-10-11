@@ -8,7 +8,6 @@
 #include <new>
 #include <unordered_map>
 #include <utility>
-#include <vector>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -586,38 +585,62 @@ namespace
             {ptr, size, static_cast<unsigned char>(ct_release_api_for_kind(kind)), kind});
     }
 
-    // The leak report, a .CRT$XT terminator: the CRT runs it after the destructors of every
-    // static object and the program's own .CRT$XTU terminators, which release blocks too.
-    // The logger's state is gone by then, and logging off (ct_exit_logging): only the
-    // lock-free writers.
-    CT_NOINSTR void ct_report_leaks()
+}
+
+// Constructed in this file's init_seg, so destroyed after the program's static objects
+// and before its terminators. From there on, releases do not log: the logger's state may
+// already be destroyed.
+struct CtExitLogging
+{
+    // User-provided, so that the object is initialized dynamically, in this file's
+    // init_seg: clang registers the destructor of a constant-initialized object from
+    // .CRT$XCU, with the program's own objects.
+    CT_NOINSTR CtExitLogging() {}
+
+    CT_NOINSTR ~CtExitLogging()
     {
-        CtRuntimeScope scope;
-        std::vector<std::pair<void*, CtAllocEntry>> leaks;
+        ct_disable_logging();
+    }
+};
 
-        ct_lock_acquire();
-        for (const auto& [ptr, entry] : ct_alloc_table())
-        {
-            if (entry.state == CT_ENTRY_USED)
-            {
-                leaks.push_back({ptr, entry});
-            }
-        }
-        ct_lock_release();
+CtExitLogging ct_exit_logging;
+} // namespace
 
-        if (leaks.empty())
-        {
-            return;
-        }
+// Runs at process exit from a TLS callback of the executable (ct_report_leaks_tls_callback):
+// after the destructors of the program's static objects, its exit handlers, its terminators
+// and the exit-time code of every DLL, which release blocks too (#187). The loader lock is
+// held by then, and ExitProcess has killed every other thread, maybe while it held a lock
+// that nothing will release: the report waits for no lock, allocates nothing, loads nothing,
+// and writes with the lock-free writers only, logging being off.
+CT_NOINSTR bool ct_report_leaks(void)
+{
+    CtRuntimeScope scope;
+    if (!TryAcquireSRWLockExclusive(&ct_alloc_lock))
+    {
+        ct_write_prefix_nolock(CTLevel::Warn);
+        ct_write_cstr("ct: leak report skipped: another thread holds the allocation table\n");
+        return false;
+    }
 
+    size_t count = 0;
+    for (const auto& [ptr, entry] : ct_alloc_table())
+    {
+        count += entry.state == CT_ENTRY_USED ? 1 : 0;
+    }
+    if (count != 0)
+    {
         ct_write_prefix_nolock(CTLevel::Error);
         ct_write_cstr("ct: leaks detected count=");
-        ct_write_dec(leaks.size());
+        ct_write_dec(count);
         ct_write_cstr("\n");
 
         size_t reported = 0;
-        for (const auto& [ptr, entry] : leaks)
+        for (const auto& [ptr, entry] : ct_alloc_table())
         {
+            if (entry.state != CT_ENTRY_USED)
+            {
+                continue;
+            }
             ct_write_prefix_nolock(CTLevel::Warn);
             ct_write_cstr("ct: leak ptr=");
             ct_write_hex(reinterpret_cast<uintptr_t>(ptr));
@@ -635,25 +658,9 @@ namespace
             }
         }
     }
-
-    // Constructed in this file's init_seg, so destroyed after the program's static objects
-    // and before its terminators. From there on, releases do not log: the logger's state may
-    // already be destroyed.
-    struct CtExitLogging
-    {
-        // User-provided, so that the object is initialized dynamically, in this file's
-        // init_seg: clang registers the destructor of a constant-initialized object from
-        // .CRT$XCU, with the program's own objects.
-        CT_NOINSTR CtExitLogging() {}
-
-        CT_NOINSTR ~CtExitLogging()
-        {
-            ct_disable_logging();
-        }
-    };
-
-    CtExitLogging ct_exit_logging;
-} // namespace
+    ReleaseSRWLockExclusive(&ct_alloc_lock);
+    return true;
+}
 
 CT_NOINSTR void ct_lock_acquire(void)
 {
@@ -1170,13 +1177,30 @@ extern "C"
         ct_release_tracked_pointer(ptr, CtReleaseApi::DeleteArrayDestroying, site);
     }
 
-    // The report is a .CRT$XTY terminator (ct_report_leaks_at_exit), which needs no
+    // The report runs from a TLS callback (ct_report_leaks_tls_callback), which needs no
     // scheduling.
     CT_NOINSTR void __ct_schedule_leak_report(void) {}
 }
 
-// .CRT$XTY: after the program's terminators, which take .CRT$XTU, and before the CRT's own,
-// .CRT$XTZ closing the list.
-#pragma section(".CRT$XTY", read)
-__declspec(allocate(".CRT$XTY"))
-__attribute__((used)) static void (*const ct_report_leaks_at_exit)(void) = ct_report_leaks;
+namespace
+{
+    CT_NOINSTR void NTAPI ct_report_leaks_at_exit(PVOID module, DWORD reason, PVOID reserved)
+    {
+        (void)module;
+        // `reserved` is null when the module is unloaded, not null when the process exits.
+        if (reason == DLL_PROCESS_DETACH && reserved != nullptr)
+        {
+            (void)ct_report_leaks();
+        }
+    }
+} // namespace
+
+// A TLS callback of the executable runs at process exit after the exit-time code of every
+// DLL, whether the program returns from main, calls exit() or ExitProcess: the terminators
+// of the C runtime run before the DLLs, and not at all on ExitProcess (#187). .CRT$XLY
+// comes after the sections of the program's own TLS callbacks.
+#pragma comment(linker, "/INCLUDE:_tls_used")
+#pragma comment(linker, "/INCLUDE:ct_report_leaks_tls_callback")
+#pragma section(".CRT$XLY", read)
+extern "C" __declspec(allocate(".CRT$XLY")) __attribute__((used))
+const PIMAGE_TLS_CALLBACK ct_report_leaks_tls_callback = ct_report_leaks_at_exit;
