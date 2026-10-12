@@ -363,4 +363,30 @@ CT_NOINSTR void ct_log_alloc_details(const char* label, const char* status, size
                                      size_t real_size, void* ptr, const char* site, CTColor color,
                                      CTLevel lvl);
 
+// The other allocation events, in the words both runtimes use. `label` names the API, such
+// as tracing-free, tracing-delete-array or tracing-munmap; `kind` is the name of the kind of
+// allocation the runtime recorded, such as malloc, new[] or mmap.
+// A resize: `status` is allocated, in-place, moved, updated, freed or failed.
+CT_NOINSTR void ct_log_realloc_details(const char* label, const char* status, size_t old_req_size,
+                                       size_t old_real_size, void* old_ptr, size_t new_req_size,
+                                       size_t new_real_size, void* new_ptr, const char* site,
+                                       CTColor color);
+// A resize of a block already released.
+CT_NOINSTR void ct_log_realloc_freed(void* ptr, const char* site);
+// The release of a tracked block, with the kind and the site of its allocation.
+CT_NOINSTR void ct_log_release(const char* label, void* ptr, size_t size, const char* kind,
+                               const char* alloc_site);
+// The release of a block the runtime did not track, such as one a library allocated.
+CT_NOINSTR void ct_log_release_unknown(const char* label, void* ptr);
+CT_NOINSTR void ct_log_release_null(const char* label);
+// A second release of a block: `site` is where it happens.
+CT_NOINSTR void ct_log_double_free(const char* label, void* ptr, const char* site,
+                                   const char* alloc_site);
+// A release through an API that does not match the allocation's, such as delete on malloc.
+CT_NOINSTR void ct_log_deallocator_mismatch(const char* label, void* ptr, const char* expected,
+                                            const char* recorded, const char* alloc_site);
+CT_NOINSTR void ct_log_autofree(void* ptr, size_t size, const char* site);
+// An auto-free that releases nothing: a null pointer, or `reason`.
+CT_NOINSTR void ct_log_autofree_skipped(void* ptr, const char* reason);
+
 #endif // CT_RUNTIME_INTERNAL_H
