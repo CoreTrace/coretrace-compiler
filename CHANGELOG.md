@@ -54,6 +54,10 @@ pull request.
   of the standard library could be linked into the runtime, whose own allocations, a trace being
   formatted for instance, then re-entered it until the stack overflowed. The runtime no longer
   tracks the allocations it makes for itself (#198, #197).
+- **Leak report on Windows.** It runs after the exit-time code of the DLLs the program links
+  with, whose releases it reported as leaks, and when the program calls `ExitProcess`, where it
+  did not run. If a thread terminated at exit held the allocation table, the report says it is
+  skipped instead of waiting (#200, #187).
 - **`-gcolumn-info` without `-g`.** An instrumented compilation given only options that change
   debug information, such as `-gcolumn-info` or `-gsplit-dwarf`, or given `-ggdb0`, had no debug
   information: every site was `<unknown>`. These options no longer stop the compiler from adding

@@ -95,7 +95,7 @@ expect_exit() {
 expect_leaks() {
   case "$1" in
     ct_alloc_basic.c|ct_new_delete.cpp|ct_alloc_unreachable_stl.cpp) echo 1 ;;  # deliberate unreachable allocation
-    ct_leak_site.c) echo 1 ;;
+    ct_leak_site.c|ct_leak_exit_process_windows.c) echo 1 ;;
     ct_threads_stress.c|ct_threads_stress_windows.c) echo 8 ;;  # one per thread
     ct_realloc_zero.c) echo any ;;                  # realloc(p, 0) may allocate or free per libc
     *) echo none ;;
@@ -144,7 +144,8 @@ expect_stdout() {
     ct_bounds_stack_deep_valid.c) echo "again=" ;;
     ct_bounds_freed_address_reuse.c) echo "sum=" ;;
     ct_leak_static_destructor.cpp|ct_leak_destructor_function.c|\
-    ct_leak_exit_uninstrumented_first.cpp|ct_leak_exit_shared_library.cpp) echo "ok" ;;
+    ct_leak_exit_uninstrumented_first.cpp|ct_leak_exit_shared_library.cpp|\
+    ct_leak_exit_process_windows.c) echo "ok" ;;
     ct_threads_stress.c) echo "damaged=0" ;;
     ct_threads_stress_windows.c) echo "threads=8 rounds=20000 damaged=0" ;;
     ct_alloc_unreachable_stl.cpp) echo "size=64" ;;
@@ -167,11 +168,6 @@ FORBIDDEN_STDERR=("heap-buffer-overflow" "heap-use-after-free" "stack-buffer-ove
 #                allocated, and only those.
 known_failure() {
   case "$1" in
-    # On Windows, the report, a terminator of the executable, runs before the exit-time
-    # code of the DLLs it depends on (#187).
-    ct_leak_exit_shared_library.cpp)
-      [[ "${ON_WINDOWS}" -eq 1 ]] && echo leak-report && return 0
-      ;;
   esac
   return 1
 }
@@ -266,6 +262,7 @@ TESTS=(
   ct_leak_destructor_function.c
   ct_leak_exit_uninstrumented_first.cpp
   ct_leak_exit_shared_library.cpp
+  ct_leak_exit_process_windows.c
   ct_shadow_pages.c
   ct_vtable_basic.cpp
   ct_vtable_interface.cpp
