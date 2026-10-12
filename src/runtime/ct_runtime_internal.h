@@ -353,6 +353,12 @@ CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... arg
 
 // An allocation, as both runtimes log it: `label` and the site, then a box with `status`
 // ("reachable", "unreachable"), the requested and the allocated sizes, and the address.
+#if defined(_WIN32)
+// The leak report of the Windows runtime, which runs at process exit. False when it was
+// skipped, another thread holding the allocation table (#187).
+CT_NOINSTR bool ct_report_leaks(void);
+#endif
+
 CT_NOINSTR void ct_log_alloc_details(const char* label, const char* status, size_t req_size,
                                      size_t real_size, void* ptr, const char* site, CTColor color,
                                      CTLevel lvl);

@@ -15,7 +15,7 @@ first checks that the installed LLVM is the version the job is named after:
 | --- | --- | --- | --- |
 | Linux (Ubuntu 24.04) | 16 to 23 | the same version's clang; GCC for LLVM 20 | unit, smoke, install, runtime fixtures at `-O0` and `-O2`, pass fuzzing |
 | macOS 15 | 19, 20, 23 (Homebrew) | AppleClang | unit, smoke, install, runtime fixtures at `-O0` and `-O2`, pass fuzzing |
-| Windows (Server 2022) | 19.1.7, 20.1.0, 22.1.8, 23.1.2 (official archives) | the archive's clang-cl | unit, smoke, install, runtime fixtures at `-O0` and `-O2` under Git Bash, without those that need POSIX or that #188 tracks; #187 is an expected failure |
+| Windows (Server 2022) | 19.1.7, 20.1.0, 22.1.8, 23.1.2 (official archives) | the archive's clang-cl | unit, smoke, install, runtime fixtures at `-O0` and `-O2` under Git Bash, without those that need POSIX or that #188 tracks |
 
 How instrumented code is compiled, and what differs between LLVM versions: see
 [LLVM versions](#llvm-versions).
@@ -217,7 +217,7 @@ What the tests check, in CI:
 | `atexit` handlers registered by instrumented code | yes | yes | yes |
 | Destructor functions (`__attribute__((destructor))`) of default priority, in instrumented code | yes | yes | yes |
 | The same in objects compiled without `--instrument` and linked before the instrumented ones | yes | yes (#161) | yes |
-| The same in a shared library the program links with | yes (#158) | yes (#158) | no, reported as leaks (#187) |
+| The same in a shared library the program links with | yes (#158) | yes (#158) | yes (#187) |
 | A terminator placed in `.CRT$XTU`, in instrumented code | — | — | yes |
 
 On Linux, the report is registered from the program's last destructor function, and glibc runs it
@@ -225,10 +225,11 @@ once every shared library has run its exit-time code. On macOS, the exit-time co
 and of its dylibs is one list, run in reverse order of registration; the report's handler runs the
 rest of that list before reporting, so the report comes last whichever tool links the program.
 
-On Windows, the report is itself a terminator, in `.CRT$XTY`, and the runtime's allocation table
-and its lock are never destroyed: blocks can still be released after the destructors of every
-static object. Windows runs the exit-time code of a DLL when it unloads it, after the program's
-terminators: the blocks that code releases are reported as leaks (#187).
+On Windows, the report runs from a TLS callback of the executable, when it detaches at process
+exit: after the program's exit-time code and that of every DLL, whether the program returns from
+`main`, calls `exit()` or calls `ExitProcess`, which skips the C runtime's exit handlers. The loader
+lock is held then, and every other thread has been terminated: if one of them held the runtime's
+allocation table, the report says `ct: leak report skipped` instead of waiting for it (#187).
 
 ## LLVM versions
 
