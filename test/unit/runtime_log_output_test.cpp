@@ -36,9 +36,10 @@ namespace
     {
         return _dup(fd);
     }
+    // As POSIX dup2: `to` on success. _dup2 returns 0.
     int ct_test_dup2(int from, int to)
     {
-        return _dup2(from, to);
+        return _dup2(from, to) == 0 ? to : -1;
     }
     int ct_test_close(int fd)
     {
