@@ -195,6 +195,10 @@ skip_reason() {
         echo "calls puts from another module, which ThreadSanitizer intercepts in the program"
         return 0
         ;;
+      ct_backtrace_full_stderr.c)
+        echo "its crash handler allocates through the dynamic loader, which ThreadSanitizer reports as a signal-unsafe call, exiting with its own status"
+        return 0
+        ;;
     esac
   fi
   # The Windows counterparts of fixtures that use POSIX interfaces.
