@@ -88,6 +88,11 @@ pull request.
   most 4096 names, about 800 KiB when full. On macOS, `bench/virtual_calls.cpp` with the
   vtable module runs in 9.4 s instead of 87 s with its trace sent to `/dev/null`, and
   `bench/alloc_churn.c` with the default options in 6.3 s instead of 22.8 s (#205, #185).
+- **Vtable diagnostics.** With `--ct-vtable-diag`, the paths of the modules of a vtable and of
+  a call target are resolved through a cache, checked with a `stat()` at every call, instead of
+  `realpath()` at every call; the trace is the same. On macOS, `bench/virtual_calls.cpp` with
+  the vtable diagnostics runs in 9.6 s instead of 22.2 s; on Linux, where `realpath()` is
+  cheaper, the gain is small (#210, #185).
 
 ### Tests and CI
 
