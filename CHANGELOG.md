@@ -68,7 +68,8 @@ pull request.
   `--ct-autofree`, it is still released right after the call (#192, #188).
 - **Log output on a non-blocking stderr.** Lines were lost when the program had set stderr
   non-blocking and its reader fell behind: a write refused with `EAGAIN` dropped the rest of
-  the line. The runtime now waits until stderr takes more (#205, #185).
+  the line. The runtime now waits until stderr takes more; the crash handler of
+  `CT_BACKTRACE=1` does not, so that the process still ends (#205, #185).
 - **Boxes of concurrent threads.** The lines of a box could interleave with the lines of
   other threads; each box is now written at once (#205, #185).
 
