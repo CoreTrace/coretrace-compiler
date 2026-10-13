@@ -6,6 +6,7 @@
 // decoded before. The libraries are built from reload/ct_reload_library.cpp.
 #include <gtest/gtest.h>
 
+#include <sstream>
 #include <string>
 
 #if defined(_WIN32)
@@ -98,14 +99,20 @@ namespace
                 boxes = testing::internal::GetCapturedStderr();
             }
 
-            const std::string type = std::string(build.name) + "::Widget";
-            size_t count = 0;
-            for (size_t at = boxes.find(type); at != std::string::npos;
-                 at = boxes.find(type, at + 1))
+            // The type line of each box names the type of the library loaded now: decoded,
+            // reload_a::Widget, or as the Windows runtime prints an RTTI name it does not
+            // decode, .?AUWidget@reload_a@@.
+            size_t types = 0;
+            std::istringstream lines(boxes);
+            for (std::string line; std::getline(lines, line);)
             {
-                ++count;
+                if (line.find(" type ") != std::string::npos)
+                {
+                    ++types;
+                    EXPECT_NE(line.find(build.name), std::string::npos) << line;
+                }
             }
-            EXPECT_EQ(count, 2u) << boxes;
+            EXPECT_EQ(types, 2u) << boxes;
             EXPECT_EQ(boxes.find(build.other), std::string::npos) << boxes;
 #if !defined(_WIN32)
             // The Windows runtime names a target from debug information the test libraries
