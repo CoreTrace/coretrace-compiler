@@ -58,6 +58,10 @@ if(TARGET ct_instrument_runtime)
   target_compile_definitions(runtime_unit_tests PRIVATE
     CT_RELOAD_LIBRARY_A="$<TARGET_FILE:ct_reload_a>"
     CT_RELOAD_LIBRARY_B="$<TARGET_FILE:ct_reload_b>")
+  if(NOT WIN32)
+    # The module comparison of the POSIX vtable diagnostics.
+    target_sources(runtime_unit_tests PRIVATE runtime_vtable_modules_test.cpp)
+  endif()
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
     target_sources(runtime_unit_tests PRIVATE runtime_objc_test.cpp)
