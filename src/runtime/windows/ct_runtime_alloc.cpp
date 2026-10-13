@@ -70,23 +70,27 @@ namespace
 
     constexpr size_t kIndexInitialCapacity = size_t{1} << 12;
 
-    // The index of the blocks the table records, live or freed, by address, for
-    // ct_table_lookup_containing (#185). It holds a block while its record is one the lookup
-    // sees, and changes with the record, under ct_alloc_lock.
-    CT_NODISCARD CT_NOINSTR ct_block_index* ct_alloc_index()
-    {
-        alignas(uintptr_t) static unsigned char
-            storage[ct_block_index_storage_size(kIndexInitialCapacity)];
-        static ct_block_index index;
-        static bool ready = false;
-        if (!ready)
-        {
-            ct_block_index_init(&index, storage, kIndexInitialCapacity);
-            ready = true;
-        }
-        return &index;
-    }
+} // namespace
 
+// The index of the blocks the table records, live or freed, by address, for
+// ct_table_lookup_containing (#185). It holds a block while its record is one the lookup sees,
+// and changes with the record, under ct_alloc_lock.
+CT_NODISCARD CT_NOINSTR ct_block_index* ct_alloc_index()
+{
+    alignas(
+        uintptr_t) static unsigned char storage[ct_block_index_storage_size(kIndexInitialCapacity)];
+    static ct_block_index index;
+    static bool ready = false;
+    if (!ready)
+    {
+        ct_block_index_init(&index, storage, kIndexInitialCapacity);
+        ready = true;
+    }
+    return &index;
+}
+
+namespace
+{
     // A record the containing lookup sees: a live or freed block, of some size.
     CT_NODISCARD CT_NOINSTR bool ct_entry_is_indexed(const void* ptr, const CtAllocEntry& entry)
     {

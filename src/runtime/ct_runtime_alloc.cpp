@@ -86,7 +86,7 @@ CT_NOINSTR void ct_alloc_table_storage_bounds(uintptr_t* begin, uintptr_t* end)
 static ct_block_index ct_alloc_index_state;
 static bool ct_alloc_index_ready = false;
 
-CT_NODISCARD CT_NOINSTR static ct_block_index* ct_alloc_index(void)
+CT_NODISCARD CT_NOINSTR ct_block_index* ct_alloc_index(void)
 {
     if (!ct_alloc_index_ready)
     {

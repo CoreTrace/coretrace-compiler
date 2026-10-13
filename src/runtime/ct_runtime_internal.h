@@ -170,6 +170,9 @@ CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void* ptr, void** b
                                                        size_t* size_out, size_t* req_size_out,
                                                        const char** site_out,
                                                        unsigned char* state_out);
+// The index of the table's blocks by address (ct_runtime_block_index.h), which
+// ct_table_lookup_containing goes through. ct_alloc_lock held.
+CT_NODISCARD CT_NOINSTR struct ct_block_index* ct_alloc_index(void);
 CT_NOINSTR void ct_shadow_poison_range(const void* addr, size_t size);
 CT_NOINSTR void ct_shadow_unpoison_range(const void* addr, size_t size);
 CT_NODISCARD CT_NOINSTR int ct_shadow_check_access(const void* ptr, size_t access_size,
