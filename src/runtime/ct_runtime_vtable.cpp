@@ -3,6 +3,7 @@
 
 #include "ct_runtime_demangle_cache.h"
 #include "ct_runtime_helpers.h"
+#include "ct_runtime_path_cache.h"
 
 #include <cstddef>
 #include <cstdlib>
@@ -182,18 +183,24 @@ namespace
         return path.substr(pos + 1, end - pos - 1);
     }
 
+    // The modules' resolved paths, see ct_runtime_path_cache.h. Never destroyed: code that
+    // runs at exit still prints boxes.
+    CT_NODISCARD CT_NOINSTR CtPathCache& ct_path_cache()
+    {
+        alignas(CtPathCache) static unsigned char storage[sizeof(CtPathCache)];
+        static CtPathCache* const cache = new (storage) CtPathCache();
+        return *cache;
+    }
+
+    // realpath() of `path`, empty when it fails.
     CT_NODISCARD CT_NOINSTR std::string ct_make_realpath(const std::string& path)
     {
-        if (path.empty())
+        std::string resolved;
+        if (!ct_path_cache().resolve(path.c_str(), resolved))
         {
             return {};
         }
-        char resolved[PATH_MAX];
-        if (!realpath(path.c_str(), resolved))
-        {
-            return {};
-        }
-        return std::string(resolved);
+        return resolved;
     }
 
     CT_NODISCARD CT_NOINSTR std::string ct_framework_name(const std::string& path)
