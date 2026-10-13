@@ -152,6 +152,7 @@ expect_stdout() {
     ct_threads_stress_windows.c) echo "threads=8 rounds=20000 damaged=0" ;;
     ct_alloc_unreachable_stl.cpp) echo "size=64" ;;
     ct_fork_threads.c) echo "hung=0" ;;
+    ct_backtrace_full_stderr.c) echo "crash status=139" ;;
     *) echo "" ;;
   esac
 }
@@ -194,6 +195,10 @@ skip_reason() {
         echo "calls puts from another module, which ThreadSanitizer intercepts in the program"
         return 0
         ;;
+      ct_backtrace_full_stderr.c)
+        echo "its crash handler allocates through the dynamic loader, which ThreadSanitizer reports as a signal-unsafe call, exiting with its own status"
+        return 0
+        ;;
     esac
   fi
   # The Windows counterparts of fixtures that use POSIX interfaces.
@@ -217,6 +222,10 @@ skip_reason() {
         ;;
       ct_fork_threads.c)
         echo "uses fork and pthreads, which Windows does not provide"
+        return 0
+        ;;
+      ct_backtrace_full_stderr.c)
+        echo "uses fork and POSIX signals, which Windows does not provide"
         return 0
         ;;
       ct_vtable_diag_mismatch.cpp)
@@ -253,6 +262,7 @@ TESTS=(
   ct_threads_stress.c
   ct_threads_stress_windows.c
   ct_fork_threads.c
+  ct_backtrace_full_stderr.c
   ct_new_delete.cpp
   ct_new_unreachable_autofree.cpp
   ct_alloc_unreachable_stl.cpp

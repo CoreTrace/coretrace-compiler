@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "ct_runtime_vtable_shared.h"
 
+#include "ct_runtime_demangle_cache.h"
 #include "ct_runtime_helpers.h"
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <cstring>
 #include <format>
 #include <mutex>
+#include <new>
 #include <string>
 #include <typeinfo>
 #include <vector>
@@ -302,6 +304,15 @@ namespace
         return reinterpret_cast<const CtRttiTypeDescriptor*>(type_addr);
     }
 
+    // The names of dynamic types and of call targets. Never destroyed: code that runs at exit
+    // still prints boxes.
+    CT_NODISCARD CT_NOINSTR CtDemangleCache& ct_name_cache()
+    {
+        alignas(CtDemangleCache) static unsigned char storage[sizeof(CtDemangleCache)];
+        static CtDemangleCache* const cache = new (storage) CtDemangleCache(ct_demangle);
+        return *cache;
+    }
+
     CT_NODISCARD CT_NOINSTR std::string
     ct_format_type_name(const CtRttiTypeDescriptor* type_descriptor)
     {
@@ -317,7 +328,7 @@ namespace
         }
 
         std::string demangled;
-        if (ct_demangle(raw_name, demangled))
+        if (ct_name_cache().demangle(raw_name, demangled))
         {
             return demangled;
         }
@@ -366,6 +377,7 @@ namespace
             return;
         }
 
+        CtLogBlock box;
         size_t label_width = 0;
         size_t value_width = 0;
         for (const auto& line : lines)
@@ -550,7 +562,7 @@ extern "C"
         if (target && ct_lookup_symbol_name(target, symbol_name))
         {
             std::string pretty;
-            if (ct_demangle(symbol_name.c_str(), pretty))
+            if (ct_name_cache().demangle(symbol_name.c_str(), pretty))
             {
                 demangled_name = pretty;
             }

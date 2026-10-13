@@ -1,9 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "ct_runtime_internal.h"
 
-#if !defined(_WIN32)
-#include <pthread.h>
+#if defined(_WIN32)
+#include <io.h>
 
+#include <algorithm>
+#include <cstdio>
+#include <limits>
+#else
+#include <poll.h>
+#include <pthread.h>
+#endif
+
+#if !defined(_WIN32)
 namespace
 {
     // Never destroyed: code that runs at exit still logs.
@@ -25,6 +34,113 @@ CT_NOINSTR void ct_log_lock_acquire(void) {}
 
 CT_NOINSTR void ct_log_lock_release(void) {}
 #endif
+
+namespace
+{
+    // The buffer of the outermost CtLogBlock of this thread, if any. A raw pointer, with
+    // nothing to destroy when the thread ends.
+    thread_local std::string* ct_log_block_buffer = nullptr;
+    // What the logger's output on this thread does when stderr is full.
+    thread_local CtStderrFull ct_log_when_stderr_full = CtStderrFull::Wait;
+} // namespace
+
+CT_NOINSTR void ct_write_stderr(const char* data, size_t size, CtStderrFull when_full)
+{
+#if defined(_WIN32)
+    // _write blocks on a full pipe: there is no non-blocking stderr to give up on.
+    (void)when_full;
+    const int fd = _fileno(stderr);
+    while (size > 0)
+    {
+        const size_t chunk = std::min(size, static_cast<size_t>((std::numeric_limits<int>::max)()));
+        const int written = _write(fd, data, static_cast<unsigned int>(chunk));
+        if (written <= 0)
+        {
+            return;
+        }
+        data += written;
+        size -= static_cast<size_t>(written);
+    }
+#else
+    while (size > 0)
+    {
+        const ssize_t written = write(STDERR_FILENO, data, size);
+        if (written > 0)
+        {
+            data += written;
+            size -= static_cast<size_t>(written);
+            continue;
+        }
+        if (written < 0 && errno == EINTR)
+        {
+            continue;
+        }
+        if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) &&
+            when_full == CtStderrFull::Wait)
+        {
+            // A non-blocking descriptor that is full: wait until it takes more.
+            pollfd ready{STDERR_FILENO, POLLOUT, 0};
+            if (poll(&ready, 1, -1) >= 0 || errno == EINTR)
+            {
+                continue;
+            }
+        }
+        return;
+    }
+#endif
+}
+
+CT_NOINSTR void ct_log_sink(const char* data, size_t size)
+{
+    std::string* buffer = ct_log_block_buffer;
+    if (buffer)
+    {
+        try
+        {
+            buffer->append(data, size);
+            return;
+        }
+        catch (...)
+        {
+            // No memory for the block: what it holds goes out first, then this, in order.
+            ct_write_stderr(buffer->data(), buffer->size(), ct_log_when_stderr_full);
+            buffer->clear();
+        }
+    }
+    ct_write_stderr(data, size, ct_log_when_stderr_full);
+}
+
+CT_NOINSTR CtLogBlock::CtLogBlock() : outermost_(ct_log_block_buffer == nullptr)
+{
+    if (outermost_)
+    {
+        ct_log_block_buffer = &buffer_;
+    }
+}
+
+CT_NOINSTR CtLogBlock::~CtLogBlock()
+{
+    if (!outermost_ || ct_log_block_buffer != &buffer_)
+    {
+        return;
+    }
+    ct_log_block_buffer = nullptr;
+    if (!buffer_.empty())
+    {
+        CtLogLockGuard lock;
+        ct_write_stderr(buffer_.data(), buffer_.size());
+    }
+}
+
+CT_NOINSTR void ct_log_block_abandon(void)
+{
+    ct_log_block_buffer = nullptr;
+}
+
+CT_NOINSTR void ct_log_stop_waiting_for_stderr(void)
+{
+    ct_log_when_stderr_full = CtStderrFull::GiveUp;
+}
 
 // #############################################
 //  Runtime-specific string utilities
@@ -89,6 +205,7 @@ CT_NOINSTR void ct_log_alloc_details(const char* label, const char* status, size
                                      size_t real_size, void* ptr, const char* site, CTColor color,
                                      CTLevel lvl)
 {
+    CtLogBlock box;
     ct_log(lvl, "{}{}{} :: tid={} site={}\n", ct_color(color), label, ct_color(CTColor::Reset),
            ct_thread_id(), ct_site_name(site));
     ct_log(lvl, kBoxTop);
@@ -104,6 +221,7 @@ CT_NOINSTR void ct_log_realloc_details(const char* label, const char* status, si
                                        size_t new_real_size, void* new_ptr, const char* site,
                                        CTColor color)
 {
+    CtLogBlock box;
     ct_log(CTLevel::Warn, "{}{}{} :: tid={} site={}\n", ct_color(color), label,
            ct_color(CTColor::Reset), ct_thread_id(), ct_site_name(site));
     ct_log(CTLevel::Warn, kBoxTop);

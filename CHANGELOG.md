@@ -66,6 +66,12 @@ pull request.
   is reported as unreachable, `tracing-malloc-unreachable` or `tracing-new-unreachable` for
   instance, with its box, as on Linux and macOS; it was logged as any other. With
   `--ct-autofree`, it is still released right after the call (#192, #188).
+- **Log output on a non-blocking stderr.** Lines were lost when the program had set stderr
+  non-blocking and its reader fell behind: a write refused with `EAGAIN` dropped the rest of
+  the line. The runtime now waits until stderr takes more; the crash handler of
+  `CT_BACKTRACE=1` does not, so that the process still ends (#205, #185).
+- **Boxes of concurrent threads.** The lines of a box could interleave with the lines of
+  other threads; each box is now written at once (#205, #185).
 
 ### Performance
 
@@ -76,6 +82,12 @@ pull request.
   instead of 58 µs; the rest is the trace output. The index adds 1.75 MiB of static storage
   on Linux and macOS, and 28 to 56 bytes per recorded block beyond its initial capacity
   (#203, #185).
+- **Trace output.** Each log line, and each allocation, vtable and virtual call box, is
+  written in one system call instead of one per piece of each line, with the same bytes; the
+  names of types and call targets in the vtable boxes are demangled once, in a cache of at
+  most 4096 names, about 800 KiB when full. On macOS, `bench/virtual_calls.cpp` with the
+  vtable module runs in 9.4 s instead of 87 s with its trace sent to `/dev/null`, and
+  `bench/alloc_churn.c` with the default options in 6.3 s instead of 22.8 s (#205, #185).
 
 ### Tests and CI
 
