@@ -42,9 +42,22 @@ if(TARGET ct_instrument_runtime)
     runtime_quarantine_test.cpp
     runtime_scope_test.cpp
     runtime_table_test.cpp
+    runtime_vtable_reload_test.cpp
   )
   target_include_directories(runtime_unit_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
-  target_link_libraries(runtime_unit_tests PRIVATE ct_instrument_runtime coretrace_logger GTest::gtest_main)
+  target_link_libraries(runtime_unit_tests PRIVATE ct_instrument_runtime coretrace_logger GTest::gtest_main
+    ${CMAKE_DL_LIBS})
+  # Two builds of one library, with names of their own, that runtime_vtable_reload_test.cpp
+  # loads, unloads and loads again.
+  foreach(build a b)
+    add_library(ct_reload_${build} MODULE reload/ct_reload_library.cpp)
+    target_compile_definitions(ct_reload_${build} PRIVATE CT_RELOAD_NAMESPACE=reload_${build})
+    coretrace_force_msvc_runtime(ct_reload_${build})
+    add_dependencies(runtime_unit_tests ct_reload_${build})
+  endforeach()
+  target_compile_definitions(runtime_unit_tests PRIVATE
+    CT_RELOAD_LIBRARY_A="$<TARGET_FILE:ct_reload_a>"
+    CT_RELOAD_LIBRARY_B="$<TARGET_FILE:ct_reload_b>")
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
     target_sources(runtime_unit_tests PRIVATE runtime_objc_test.cpp)

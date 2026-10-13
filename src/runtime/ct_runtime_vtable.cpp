@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "ct_runtime_vtable_shared.h"
 
+#include "ct_runtime_demangle_cache.h"
 #include "ct_runtime_helpers.h"
 
 #include <cstddef>
 #include <cstdlib>
 #include <stdlib.h>
 #include <limits.h>
+#include <new>
 #include <typeinfo>
 #include <vector>
 #include <pthread.h>
@@ -86,6 +88,15 @@ namespace
         return false;
     }
 
+    // The names of dynamic types and of call targets. Never destroyed: code that runs at exit
+    // still prints boxes.
+    CT_NODISCARD CT_NOINSTR CtDemangleCache& ct_name_cache()
+    {
+        alignas(CtDemangleCache) static unsigned char storage[sizeof(CtDemangleCache)];
+        static CtDemangleCache* const cache = new (storage) CtDemangleCache(ct_demangle_any);
+        return *cache;
+    }
+
     CT_NODISCARD CT_NOINSTR bool ct_lookup_symbol(const void* addr, const char** name_out,
                                                   const char** object_out)
     {
@@ -141,7 +152,7 @@ namespace
 
         std::string demangled;
         const char* name = typeinfo->name();
-        if (ct_demangle_any(name, demangled))
+        if (ct_name_cache().demangle(name, demangled))
         {
             return demangled;
         }
@@ -807,7 +818,7 @@ extern "C"
         std::string demangled;
         if (target && ct_lookup_symbol(target, &sym, nullptr) && sym)
         {
-            (void)ct_demangle_any(sym, demangled);
+            (void)ct_name_cache().demangle(sym, demangled);
         }
 
         std::string this_value = this_ptr ? std::format("{:p}", this_ptr) : "<null>";
