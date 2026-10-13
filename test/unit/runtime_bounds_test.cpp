@@ -6,6 +6,7 @@
 // valid exactly as the allocator does for live allocations. The runtime state touched
 // here (features, abort mode, table entries, shadow bytes) is restored by every test.
 #include "ct_runtime_internal.h"
+#include "ct_runtime_quarantine.h"
 
 #include <gtest/gtest.h>
 
@@ -46,6 +47,7 @@ namespace
             for (char* block : inserted_)
             {
                 (void)ct_table_remove(block, nullptr, nullptr, nullptr);
+                ct_table_forget_freed(block);
             }
             ct_lock_release();
             ct_set_bounds_abort(savedAbort_);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "ct_runtime_alloc_internal.h"
+#include "ct_runtime_block_index.h"
 #include "ct_runtime_quarantine.h"
 
 #include <cstdlib>
@@ -25,8 +26,14 @@
 #define CT_ALLOC_TABLE_MAX_BITS 20u
 #define CT_ALLOC_TABLE_SIZE (1u << CT_ALLOC_TABLE_BITS)
 
-static struct ct_alloc_entry ct_alloc_table_storage[CT_ALLOC_TABLE_SIZE];
-struct ct_alloc_entry* ct_alloc_table = ct_alloc_table_storage;
+// The initial storage of the table and of its index (ct_alloc_index), side by side: both hold
+// the address of every block they record, and the conservative scan skips this one range.
+static struct
+{
+    struct ct_alloc_entry table[CT_ALLOC_TABLE_SIZE];
+    alignas(uintptr_t) unsigned char index[ct_block_index_storage_size(CT_ALLOC_TABLE_SIZE)];
+} ct_alloc_storage;
+struct ct_alloc_entry* ct_alloc_table = ct_alloc_storage.table;
 static size_t ct_alloc_table_bits = CT_ALLOC_TABLE_BITS;
 size_t ct_alloc_table_size = CT_ALLOC_TABLE_SIZE;
 size_t ct_alloc_table_mask = CT_ALLOC_TABLE_SIZE - 1u;
@@ -68,8 +75,53 @@ CT_NOINSTR static void ct_warn_alloc_table_full(void)
 
 CT_NOINSTR void ct_alloc_table_storage_bounds(uintptr_t* begin, uintptr_t* end)
 {
-    *begin = reinterpret_cast<uintptr_t>(ct_alloc_table_storage);
-    *end = reinterpret_cast<uintptr_t>(ct_alloc_table_storage + CT_ALLOC_TABLE_SIZE);
+    *begin = reinterpret_cast<uintptr_t>(&ct_alloc_storage);
+    *end = reinterpret_cast<uintptr_t>(&ct_alloc_storage + 1);
+}
+
+// The index of the blocks the table records, live or freed, by address, for
+// ct_table_lookup_containing (#185). It holds a block while its record is one the lookup sees,
+// and changes with the record, under ct_alloc_lock. It starts in ct_alloc_storage, at the
+// table's initial capacity.
+static ct_block_index ct_alloc_index_state;
+static bool ct_alloc_index_ready = false;
+
+CT_NODISCARD CT_NOINSTR ct_block_index* ct_alloc_index(void)
+{
+    if (!ct_alloc_index_ready)
+    {
+        ct_block_index_init(&ct_alloc_index_state, ct_alloc_storage.index, CT_ALLOC_TABLE_SIZE);
+        ct_alloc_index_ready = true;
+    }
+    return &ct_alloc_index_state;
+}
+
+// A record the containing lookup sees: a live or freed block, of some size.
+CT_NODISCARD CT_NOINSTR static bool ct_entry_is_indexed(const struct ct_alloc_entry* entry)
+{
+    return (entry->state == CT_ENTRY_USED || entry->state == CT_ENTRY_FREED ||
+            entry->state == CT_ENTRY_AUTOFREED) &&
+           entry->ptr && entry->size != 0;
+}
+
+// Called before a record changes and after it, so that the index follows it.
+CT_NOINSTR static void ct_unindex_entry(const struct ct_alloc_entry* entry)
+{
+    if (ct_entry_is_indexed(entry))
+    {
+        ct_block_index_remove(ct_alloc_index(), reinterpret_cast<uintptr_t>(entry->ptr),
+                              entry->size);
+    }
+}
+
+CT_NOINSTR static void ct_index_entry(const struct ct_alloc_entry* entry)
+{
+    if (ct_entry_is_indexed(entry))
+    {
+        // On failure, the index is marked incomplete and the lookup scans the table.
+        (void)ct_block_index_add(ct_alloc_index(), reinterpret_cast<uintptr_t>(entry->ptr),
+                                 entry->size);
+    }
 }
 
 CT_NODISCARD CT_NOINSTR size_t ct_hash_ptr(const void* ptr, size_t mask)
@@ -150,7 +202,7 @@ CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
         }
     }
 
-    if (ct_alloc_table != ct_alloc_table_storage)
+    if (ct_alloc_table != ct_alloc_storage.table)
         std::free(ct_alloc_table);
 
     ct_alloc_table = new_table;
@@ -167,6 +219,8 @@ CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
 CT_NOINSTR static void ct_claim_entry(struct ct_alloc_entry* entry, void* ptr, size_t req_size,
                                       size_t size, const char* site, unsigned char kind)
 {
+    // The record may hold a freed block, of this address or another one.
+    ct_unindex_entry(entry);
     entry->ptr = ptr;
     entry->size = size;
     entry->req_size = req_size;
@@ -175,6 +229,7 @@ CT_NOINSTR static void ct_claim_entry(struct ct_alloc_entry* entry, void* ptr, s
     entry->mark = 0;
     entry->state = CT_ENTRY_USED;
     ++ct_alloc_count;
+    ct_index_entry(entry);
 }
 
 CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t size,
@@ -196,11 +251,13 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t s
             {
                 if (entry->ptr == ptr)
                 {
+                    ct_unindex_entry(entry);
                     entry->size = size;
                     entry->req_size = req_size;
                     entry->site = site;
                     entry->kind = kind;
                     entry->mark = 0;
+                    ct_index_entry(entry);
                     return 1;
                 }
                 continue;
@@ -468,10 +525,11 @@ CT_NODISCARD CT_NOINSTR int ct_table_lookup(const void* ptr, size_t* size_out, s
     return 0;
 }
 
-CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void* ptr, void** base_out,
-                                                       size_t* size_out, size_t* req_size_out,
-                                                       const char** site_out,
-                                                       unsigned char* state_out)
+// ct_table_lookup_containing over every record, for when the index misses blocks.
+CT_NODISCARD CT_NOINSTR static int ct_table_scan_containing(const void* ptr, void** base_out,
+                                                            size_t* size_out, size_t* req_size_out,
+                                                            const char** site_out,
+                                                            unsigned char* state_out)
 {
     if (!ptr)
         return 0;
@@ -516,6 +574,52 @@ CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void* ptr, void** b
     }
 
     return 0;
+}
+
+CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void* ptr, void** base_out,
+                                                       size_t* size_out, size_t* req_size_out,
+                                                       const char** site_out,
+                                                       unsigned char* state_out)
+{
+    if (!ptr)
+        return 0;
+
+    const ct_block_index* index = ct_alloc_index();
+    if (index->incomplete)
+    {
+        return ct_table_scan_containing(ptr, base_out, size_out, req_size_out, site_out, state_out);
+    }
+
+    uintptr_t base = 0;
+    size_t size = 0;
+    if (!ct_block_index_find(index, reinterpret_cast<uintptr_t>(ptr), &base, &size))
+        return 0;
+
+    const struct ct_alloc_entry* entry = ct_table_find_entry(reinterpret_cast<void*>(base));
+    if (!entry)
+        return 0;
+
+    if (base_out)
+    {
+        *base_out = entry->ptr;
+    }
+    if (size_out)
+    {
+        *size_out = entry->size;
+    }
+    if (req_size_out)
+    {
+        *req_size_out = entry->req_size;
+    }
+    if (site_out)
+    {
+        *site_out = entry->site;
+    }
+    if (state_out)
+    {
+        *state_out = entry->state;
+    }
+    return 1;
 }
 
 CT_NODISCARD CT_NOINSTR static size_t ct_malloc_usable_size(void* ptr, size_t fallback)
@@ -568,6 +672,7 @@ CT_NODISCARD CT_NOINSTR size_t ct_forget_allocation(void* ptr, unsigned char kin
     if (entry && entry->state == CT_ENTRY_USED && entry->kind == kind)
     {
         size = entry->size;
+        ct_unindex_entry(entry);
         entry->state = CT_ENTRY_TOMB;
         --ct_alloc_count;
     }
@@ -919,6 +1024,7 @@ CT_NOINSTR void ct_table_forget_freed(void* ptr)
     struct ct_alloc_entry* entry = ct_table_find_entry(ptr);
     if (entry && (entry->state == CT_ENTRY_FREED || entry->state == CT_ENTRY_AUTOFREED))
     {
+        ct_unindex_entry(entry);
         entry->state = CT_ENTRY_TOMB;
     }
 }

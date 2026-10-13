@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "ct_runtime_block_index.h"
 #include "ct_runtime_internal.h"
 #include "ct_runtime_quarantine.h"
 
@@ -65,6 +66,56 @@ namespace
         alignas(CtAllocTable) static unsigned char storage[sizeof(CtAllocTable)];
         static CtAllocTable* const table = new (storage) CtAllocTable();
         return *table;
+    }
+
+    constexpr size_t kIndexInitialCapacity = size_t{1} << 12;
+
+} // namespace
+
+// The index of the blocks the table records, live or freed, by address, for
+// ct_table_lookup_containing (#185). It holds a block while its record is one the lookup sees,
+// and changes with the record, under ct_alloc_lock.
+CT_NODISCARD CT_NOINSTR ct_block_index* ct_alloc_index()
+{
+    alignas(
+        uintptr_t) static unsigned char storage[ct_block_index_storage_size(kIndexInitialCapacity)];
+    static ct_block_index index;
+    static bool ready = false;
+    if (!ready)
+    {
+        ct_block_index_init(&index, storage, kIndexInitialCapacity);
+        ready = true;
+    }
+    return &index;
+}
+
+namespace
+{
+    // A record the containing lookup sees: a live or freed block, of some size.
+    CT_NODISCARD CT_NOINSTR bool ct_entry_is_indexed(const void* ptr, const CtAllocEntry& entry)
+    {
+        return (entry.state == CT_ENTRY_USED || entry.state == CT_ENTRY_FREED ||
+                entry.state == CT_ENTRY_AUTOFREED) &&
+               ptr && entry.size != 0;
+    }
+
+    // Called before a record changes and after it, so that the index follows it.
+    CT_NOINSTR void ct_unindex_entry(const void* ptr, const CtAllocEntry& entry)
+    {
+        if (ct_entry_is_indexed(ptr, entry))
+        {
+            ct_block_index_remove(ct_alloc_index(), reinterpret_cast<uintptr_t>(ptr), entry.size);
+        }
+    }
+
+    CT_NOINSTR void ct_index_entry(const void* ptr, const CtAllocEntry& entry)
+    {
+        if (ct_entry_is_indexed(ptr, entry))
+        {
+            // On failure, the index is marked incomplete and the lookup scans the table.
+            (void)ct_block_index_add(ct_alloc_index(), reinterpret_cast<uintptr_t>(ptr),
+                                     entry.size);
+        }
     }
 
     CT_NODISCARD CT_NOINSTR const char* ct_kind_name(unsigned char kind)
@@ -502,12 +553,7 @@ namespace
                                              nullptr);
         }
 
-        auto& entry = ct_alloc_table()[new_ptr];
-        entry.size = size;
-        entry.req_size = size;
-        entry.site = site;
-        entry.state = CT_ENTRY_USED;
-        entry.kind = CT_ALLOC_KIND_MALLOC;
+        (void)ct_table_insert(new_ptr, size, size, site, CT_ALLOC_KIND_MALLOC);
         ct_lock_release();
 
         ct_track_shadow_alloc(new_ptr, size, size);
@@ -662,11 +708,14 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t s
     try
     {
         auto& entry = ct_alloc_table()[ptr];
+        // The record may hold a freed block of this address, or a live one of another size.
+        ct_unindex_entry(ptr, entry);
         entry.size = size;
         entry.req_size = req_size;
         entry.site = site;
         entry.state = CT_ENTRY_USED;
         entry.kind = kind;
+        ct_index_entry(ptr, entry);
         return 1;
     }
     catch (...)
@@ -682,6 +731,7 @@ CT_NOINSTR void ct_table_forget_freed(void* ptr)
     if (it != ct_alloc_table().end() &&
         (it->second.state == CT_ENTRY_FREED || it->second.state == CT_ENTRY_AUTOFREED))
     {
+        ct_unindex_entry(it->first, it->second);
         ct_alloc_table().erase(it);
     }
 }
@@ -733,16 +783,12 @@ CT_NODISCARD CT_NOINSTR int ct_table_lookup(const void* ptr, size_t* size_out, s
     return 1;
 }
 
-CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void* ptr, void** base_out,
-                                                       size_t* size_out, size_t* req_size_out,
-                                                       const char** site_out,
-                                                       unsigned char* state_out)
+// ct_table_lookup_containing over every record, for when the index misses blocks.
+CT_NODISCARD CT_NOINSTR static int ct_table_scan_containing(const void* ptr, void** base_out,
+                                                            size_t* size_out, size_t* req_size_out,
+                                                            const char** site_out,
+                                                            unsigned char* state_out)
 {
-    if (!ptr)
-    {
-        return 0;
-    }
-
     const uintptr_t value = reinterpret_cast<uintptr_t>(ptr);
     for (const auto& [base_ptr, entry] : ct_alloc_table())
     {
@@ -786,6 +832,58 @@ CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void* ptr, void** b
     }
 
     return 0;
+}
+
+CT_NODISCARD CT_NOINSTR int ct_table_lookup_containing(const void* ptr, void** base_out,
+                                                       size_t* size_out, size_t* req_size_out,
+                                                       const char** site_out,
+                                                       unsigned char* state_out)
+{
+    if (!ptr)
+    {
+        return 0;
+    }
+
+    const ct_block_index* index = ct_alloc_index();
+    if (index->incomplete)
+    {
+        return ct_table_scan_containing(ptr, base_out, size_out, req_size_out, site_out, state_out);
+    }
+
+    uintptr_t base = 0;
+    size_t size = 0;
+    if (!ct_block_index_find(index, reinterpret_cast<uintptr_t>(ptr), &base, &size))
+    {
+        return 0;
+    }
+    const auto it = ct_alloc_table().find(reinterpret_cast<void*>(base));
+    if (it == ct_alloc_table().end())
+    {
+        return 0;
+    }
+
+    const CtAllocEntry& entry = it->second;
+    if (base_out)
+    {
+        *base_out = it->first;
+    }
+    if (size_out)
+    {
+        *size_out = entry.size;
+    }
+    if (req_size_out)
+    {
+        *req_size_out = entry.req_size;
+    }
+    if (site_out)
+    {
+        *site_out = entry.site;
+    }
+    if (state_out)
+    {
+        *state_out = entry.state;
+    }
+    return 1;
 }
 
 extern "C"

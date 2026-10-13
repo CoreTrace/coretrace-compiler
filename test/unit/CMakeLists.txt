@@ -34,6 +34,7 @@ if(TARGET ct_instrument_runtime)
   # releases what it inserts.
   add_executable(runtime_unit_tests
     runtime_bounds_test.cpp
+    runtime_block_index_test.cpp
     runtime_demangle_test.cpp
     runtime_leak_report_test.cpp
     runtime_quarantine_test.cpp
