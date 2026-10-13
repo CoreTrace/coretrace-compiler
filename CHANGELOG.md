@@ -67,6 +67,16 @@ pull request.
   instance, with its box, as on Linux and macOS; it was logged as any other. With
   `--ct-autofree`, it is still released right after the call (#192, #188).
 
+### Performance
+
+- **Virtual calls with the vtable module.** The runtime finds the block that contains an
+  address through an index of the blocks by address, instead of a pass over every record of
+  the allocation table, which ran at every virtual call; the bounds checks of shadow-aggressive
+  mode use it too. On `bench/virtual_calls.cpp` on macOS, a virtual call costs about 28 µs
+  instead of 58 µs; the rest is the trace output. The index adds 1.75 MiB of static storage
+  on Linux and macOS, and 28 to 56 bytes per recorded block beyond its initial capacity
+  (#203, #185).
+
 ### Tests and CI
 
 - The LLVM versions workflow builds and tests Windows with LLVM 23.1.2, with zlib and zstd
