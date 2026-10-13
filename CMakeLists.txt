@@ -191,6 +191,7 @@ if(CORETRACE_COMPILER_BUILD_RUNTIME)
     src/runtime/ct_runtime_autofree_scan.cpp
     src/runtime/ct_runtime_backtrace.cpp
     src/runtime/ct_runtime_env.cpp
+    src/runtime/ct_runtime_path_cache.cpp
     src/runtime/ct_runtime_vtable.cpp
   )
   if(WIN32)

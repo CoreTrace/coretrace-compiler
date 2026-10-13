@@ -6,6 +6,7 @@
 #include "ct_runtime_config.h"
 #include "ct_runtime_demangle_cache.h"
 #include "ct_runtime_internal.h"
+#include "ct_runtime_path_cache.h"
 
 #include <pthread.h>
 
@@ -52,10 +53,12 @@ CT_NOINSTR static void ct_lock_runtime_for_fork(void)
     ct_shadow_lock_acquire();
     ct_log_lock_acquire();
     ct_demangle_cache_lock_acquire();
+    ct_path_cache_lock_acquire();
 }
 
 CT_NOINSTR static void ct_unlock_runtime_after_fork(void)
 {
+    ct_path_cache_lock_release();
     ct_demangle_cache_lock_release();
     ct_log_lock_release();
     ct_shadow_lock_release();
