@@ -10,6 +10,7 @@ namespace
     constexpr uint32_t kNone = 0xffffffffu;
     // Blocks of up to 16 bytes share the first class.
     constexpr unsigned kFirstClass = 4;
+    constexpr size_t kMaxCapacity = size_t{1} << 31;
 
     CT_NODISCARD CT_NOINSTR unsigned ct_block_class(size_t size)
     {
@@ -62,12 +63,11 @@ namespace
     // there is no memory for it.
     CT_NODISCARD CT_NOINSTR bool ct_block_index_grow(ct_block_index* index)
     {
-        const size_t capacity = index->capacity * 2;
-        // Slots are 32-bit.
-        if (capacity > kNone)
+        if (index->capacity > index->max_capacity / 2)
         {
             return false;
         }
+        const size_t capacity = index->capacity * 2;
         void* storage = std::malloc(ct_block_index_storage_size(capacity));
         if (!storage)
         {
@@ -104,6 +104,7 @@ CT_NOINSTR void ct_block_index_init(ct_block_index* index, void* storage, size_t
     std::memset(index, 0, sizeof(*index));
     ct_block_index_layout(index, storage, capacity);
     index->free_head = kNone;
+    index->max_capacity = kMaxCapacity;
     index->initial_storage = storage;
 }
 

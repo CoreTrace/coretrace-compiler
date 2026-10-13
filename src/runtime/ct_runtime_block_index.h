@@ -28,6 +28,9 @@ struct ct_block_index
     // The first block of each bucket.
     uint32_t* heads;
     size_t capacity;
+    // The capacity the index stops growing at, a power of two: at most 2^31, its slots being
+    // 32-bit.
+    size_t max_capacity;
     // Slots used once; the slots below it are blocks or free.
     size_t used;
     uint32_t free_head;

@@ -144,6 +144,30 @@ namespace
         EXPECT_EQ(index.index.capacity, Index::kInitialCapacity);
     }
 
+    TEST(BlockIndex, StopsGrowingAtItsMaximumCapacity)
+    {
+        Index index;
+        constexpr size_t kMaxCapacity = 2 * Index::kInitialCapacity;
+        index.index.max_capacity = kMaxCapacity;
+        for (uintptr_t i = 0; i < kMaxCapacity; ++i)
+        {
+            ASSERT_TRUE(ct_block_index_add(&index.index, 0x58000000u + i * 64, 64)) << i;
+        }
+        EXPECT_FALSE(index.index.incomplete);
+
+        // One block too many: the index stays as it was, and says it misses a block.
+        EXPECT_FALSE(ct_block_index_add(&index.index, 0x58100000u, 64));
+        EXPECT_TRUE(index.index.incomplete);
+        EXPECT_EQ(index.index.capacity, kMaxCapacity);
+        EXPECT_FALSE(index.find(0x58100000u + 8));
+        for (uintptr_t i = 0; i < kMaxCapacity; ++i)
+        {
+            uintptr_t base = 0;
+            ASSERT_TRUE(index.find(0x58000000u + i * 64 + 63, &base)) << i;
+            ASSERT_EQ(base, 0x58000000u + i * 64);
+        }
+    }
+
     // Blocks of random sizes, apart from one another, and random addresses in and around them:
     // the index answers as a pass over every block does.
     TEST(BlockIndex, AnswersAsAPassOverEveryBlock)
