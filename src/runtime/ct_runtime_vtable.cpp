@@ -50,7 +50,6 @@ namespace
         bool exec_known = false;
         bool is_exec = false;
         std::string path;
-        std::string realpath;
         std::string basename;
         std::string install_name;
         std::string framework;
@@ -261,7 +260,6 @@ namespace
     CT_NOINSTR void ct_fill_module_paths(CtModuleInfo& info, const std::string& path)
     {
         info.path = path;
-        info.realpath = ct_make_realpath(path);
         info.basename = ct_basename(path);
         info.framework = ct_framework_name(path);
     }
@@ -317,9 +315,11 @@ namespace
         auto match = [](const std::string& a, const std::string& b)
         { return !a.empty() && !b.empty() && a == b; };
 
-        if (match(lhs.realpath, rhs.realpath) || match(lhs.path, rhs.path) ||
-            match(lhs.basename, rhs.basename) || match(lhs.install_name, rhs.install_name) ||
-            match(lhs.framework, rhs.framework))
+        // The canonical paths last: realpath() walks the file system, and the other criteria
+        // usually decide.
+        if (match(lhs.path, rhs.path) || match(lhs.basename, rhs.basename) ||
+            match(lhs.install_name, rhs.install_name) || match(lhs.framework, rhs.framework) ||
+            match(ct_make_realpath(lhs.path), ct_make_realpath(rhs.path)))
         {
             return true;
         }
@@ -528,10 +528,18 @@ namespace
             std::string exe = ct_executable_path();
             if (!exe.empty())
             {
-                std::string exe_real = ct_make_realpath(exe);
-                if (out.path == exe || (!exe_real.empty() && out.realpath == exe_real))
+                // The canonical paths only when the paths differ.
+                if (out.path == exe)
                 {
                     out.is_main = true;
+                }
+                else
+                {
+                    std::string exe_real = ct_make_realpath(exe);
+                    if (!exe_real.empty() && ct_make_realpath(out.path) == exe_real)
+                    {
+                        out.is_main = true;
+                    }
                 }
             }
             return true;
