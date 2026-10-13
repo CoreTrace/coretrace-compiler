@@ -10,6 +10,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
+#include <future>
 #include <cstdint>
 #include <sstream>
 #include <string>
@@ -155,6 +157,49 @@ namespace
             const std::string expected = "line " + std::to_string(i) + " of the partial-write test";
             ASSERT_NE(lines[i].find(expected), std::string::npos) << lines[i];
         }
+    }
+#endif
+
+#if !defined(_WIN32)
+    // What the crash handler writes: on a full non-blocking stderr, the writer gives up rather
+    // than wait for a reader, so that the process can end. Other writes wait.
+    TEST(LogOutput, AWriteThatMustNotWaitGivesUpOnAFullStderr)
+    {
+        int fds[2];
+        ASSERT_EQ(pipe(fds), 0);
+        ASSERT_EQ(fcntl(fds[0], F_SETFL, fcntl(fds[0], F_GETFL) | O_NONBLOCK), 0);
+        ASSERT_EQ(fcntl(fds[1], F_SETFL, fcntl(fds[1], F_GETFL) | O_NONBLOCK), 0);
+        const int saved = dup(2);
+        ASSERT_EQ(dup2(fds[1], 2), 2);
+        close(fds[1]);
+        char block[4096];
+        std::memset(block, 'x', sizeof(block));
+        while (write(2, block, sizeof(block)) > 0)
+        {
+        }
+
+        std::promise<void> done;
+        std::future<void> finished = done.get_future();
+        std::thread writer(
+            [&done]
+            {
+                ct_write_stderr("report\n", 7, CtStderrFull::GiveUp);
+                done.set_value();
+            });
+        const bool returned =
+            finished.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+        // A writer that waits ends once the pipe is read: the test ends either way.
+        while (finished.wait_for(std::chrono::milliseconds(10)) != std::future_status::ready)
+        {
+            while (read(fds[0], block, sizeof(block)) > 0)
+            {
+            }
+        }
+        writer.join();
+        dup2(saved, 2);
+        close(saved);
+        close(fds[0]);
+        EXPECT_TRUE(returned) << "the write waited for stderr to be read";
     }
 #endif
 

@@ -40,11 +40,15 @@ namespace
     // The buffer of the outermost CtLogBlock of this thread, if any. A raw pointer, with
     // nothing to destroy when the thread ends.
     thread_local std::string* ct_log_block_buffer = nullptr;
+    // What the logger's output on this thread does when stderr is full.
+    thread_local CtStderrFull ct_log_when_stderr_full = CtStderrFull::Wait;
 } // namespace
 
-CT_NOINSTR void ct_write_stderr(const char* data, size_t size)
+CT_NOINSTR void ct_write_stderr(const char* data, size_t size, CtStderrFull when_full)
 {
 #if defined(_WIN32)
+    // _write blocks on a full pipe: there is no non-blocking stderr to give up on.
+    (void)when_full;
     const int fd = _fileno(stderr);
     while (size > 0)
     {
@@ -71,7 +75,8 @@ CT_NOINSTR void ct_write_stderr(const char* data, size_t size)
         {
             continue;
         }
-        if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) &&
+            when_full == CtStderrFull::Wait)
         {
             // A non-blocking descriptor that is full: wait until it takes more.
             pollfd ready{STDERR_FILENO, POLLOUT, 0};
@@ -98,11 +103,11 @@ CT_NOINSTR void ct_log_sink(const char* data, size_t size)
         catch (...)
         {
             // No memory for the block: what it holds goes out first, then this, in order.
-            ct_write_stderr(buffer->data(), buffer->size());
+            ct_write_stderr(buffer->data(), buffer->size(), ct_log_when_stderr_full);
             buffer->clear();
         }
     }
-    ct_write_stderr(data, size);
+    ct_write_stderr(data, size, ct_log_when_stderr_full);
 }
 
 CT_NOINSTR CtLogBlock::CtLogBlock() : outermost_(ct_log_block_buffer == nullptr)
@@ -130,6 +135,11 @@ CT_NOINSTR CtLogBlock::~CtLogBlock()
 CT_NOINSTR void ct_log_block_abandon(void)
 {
     ct_log_block_buffer = nullptr;
+}
+
+CT_NOINSTR void ct_log_stop_waiting_for_stderr(void)
+{
+    ct_log_when_stderr_full = CtStderrFull::GiveUp;
 }
 
 // #############################################

@@ -11,8 +11,10 @@ namespace
 
     CT_NOINSTR void ct_signal_handler(int signo)
     {
-        // A box this thread was writing would never be: the report goes out on its own.
+        // A box this thread was writing would never be: the report goes out on its own, and
+        // the process ends even when stderr is too full to take it.
         ct_log_block_abandon();
+        ct_log_stop_waiting_for_stderr();
         ct_disable_logging();
         ct_write_prefix_nolock(CTLevel::Error);
         ct_write_str(ct_color(CTColor::Red));

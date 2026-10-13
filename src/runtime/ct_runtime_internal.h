@@ -218,9 +218,22 @@ CT_NODISCARD CT_NOINSTR inline int ct_log_is_enabled(void)
 // The logger's output, as the runtime routes it: into the log block this thread is filling,
 // or to stderr (see CtLogBlock).
 CT_NOINSTR void ct_log_sink(const char* data, size_t size);
-// Writes every byte to stderr, in order: through partial writes, interrupted calls and a
-// descriptor set non-blocking. Gives up when the descriptor fails otherwise.
-CT_NOINSTR void ct_write_stderr(const char* data, size_t size);
+// What the writer does when stderr is non-blocking and full.
+enum class CtStderrFull
+{
+    // Waits until it takes more: the output of a running program.
+    Wait,
+    // Gives up on the rest: the output of a signal handler, which must let the process end.
+    GiveUp
+};
+// Writes every byte to stderr, in order, through partial writes and interrupted calls; when
+// a non-blocking stderr is full, as `when_full` says. Gives up when the descriptor fails
+// otherwise.
+CT_NOINSTR void ct_write_stderr(const char* data, size_t size,
+                                CtStderrFull when_full = CtStderrFull::Wait);
+// From now on, what this thread logs gives up on a full stderr instead of waiting: for a
+// signal handler that does not return, and must let the process end, reported or not.
+CT_NOINSTR void ct_log_stop_waiting_for_stderr(void);
 
 CT_NOINSTR inline void ct_enable_logging(void)
 {
