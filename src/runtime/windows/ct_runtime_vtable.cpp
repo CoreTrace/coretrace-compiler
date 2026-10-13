@@ -366,6 +366,7 @@ namespace
             return;
         }
 
+        CtLogBlock box;
         size_t label_width = 0;
         size_t value_width = 0;
         for (const auto& line : lines)

@@ -571,6 +571,7 @@ namespace
             return;
         }
 
+        CtLogBlock box;
         const char* safe_tag = tag ? tag : "BOX";
         const char* safe_title = title ? title : safe_tag;
 

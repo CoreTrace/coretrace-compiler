@@ -35,6 +35,13 @@ CT_NOINSTR void ct_log_lock_acquire(void) {}
 CT_NOINSTR void ct_log_lock_release(void) {}
 #endif
 
+namespace
+{
+    // The buffer of the outermost CtLogBlock of this thread, if any. A raw pointer, with
+    // nothing to destroy when the thread ends.
+    thread_local std::string* ct_log_block_buffer = nullptr;
+} // namespace
+
 CT_NOINSTR void ct_write_stderr(const char* data, size_t size)
 {
 #if defined(_WIN32)
@@ -80,7 +87,49 @@ CT_NOINSTR void ct_write_stderr(const char* data, size_t size)
 
 CT_NOINSTR void ct_log_sink(const char* data, size_t size)
 {
+    std::string* buffer = ct_log_block_buffer;
+    if (buffer)
+    {
+        try
+        {
+            buffer->append(data, size);
+            return;
+        }
+        catch (...)
+        {
+            // No memory for the block: what it holds goes out first, then this, in order.
+            ct_write_stderr(buffer->data(), buffer->size());
+            buffer->clear();
+        }
+    }
     ct_write_stderr(data, size);
+}
+
+CT_NOINSTR CtLogBlock::CtLogBlock() : outermost_(ct_log_block_buffer == nullptr)
+{
+    if (outermost_)
+    {
+        ct_log_block_buffer = &buffer_;
+    }
+}
+
+CT_NOINSTR CtLogBlock::~CtLogBlock()
+{
+    if (!outermost_ || ct_log_block_buffer != &buffer_)
+    {
+        return;
+    }
+    ct_log_block_buffer = nullptr;
+    if (!buffer_.empty())
+    {
+        CtLogLockGuard lock;
+        ct_write_stderr(buffer_.data(), buffer_.size());
+    }
+}
+
+CT_NOINSTR void ct_log_block_abandon(void)
+{
+    ct_log_block_buffer = nullptr;
 }
 
 // #############################################
@@ -146,6 +195,7 @@ CT_NOINSTR void ct_log_alloc_details(const char* label, const char* status, size
                                      size_t real_size, void* ptr, const char* site, CTColor color,
                                      CTLevel lvl)
 {
+    CtLogBlock box;
     ct_log(lvl, "{}{}{} :: tid={} site={}\n", ct_color(color), label, ct_color(CTColor::Reset),
            ct_thread_id(), ct_site_name(site));
     ct_log(lvl, kBoxTop);
@@ -161,6 +211,7 @@ CT_NOINSTR void ct_log_realloc_details(const char* label, const char* status, si
                                        size_t new_real_size, void* new_ptr, const char* site,
                                        CTColor color)
 {
+    CtLogBlock box;
     ct_log(CTLevel::Warn, "{}{}{} :: tid={} site={}\n", ct_color(color), label,
            ct_color(CTColor::Reset), ct_thread_id(), ct_site_name(site));
     ct_log(CTLevel::Warn, kBoxTop);

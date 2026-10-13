@@ -215,7 +215,8 @@ CT_NODISCARD CT_NOINSTR inline int ct_log_is_enabled(void)
     return coretrace::log_is_enabled() ? 1 : 0;
 }
 
-// The logger's output, as the runtime routes it: to stderr.
+// The logger's output, as the runtime routes it: into the log block this thread is filling,
+// or to stderr (see CtLogBlock).
 CT_NOINSTR void ct_log_sink(const char* data, size_t size);
 // Writes every byte to stderr, in order: through partial writes, interrupted calls and a
 // descriptor set non-blocking. Gives up when the descriptor fails otherwise.
@@ -334,6 +335,29 @@ struct CtLogLockGuard
     CtLogLockGuard& operator=(const CtLogLockGuard&) = delete;
 };
 
+// The lines this thread logs while a block lives, written to stderr at once when the
+// outermost block of the thread ends: a box is one write, which no line of another thread
+// can split. The lines are the logger's, prefix included. Blocks nest; the inner ones join
+// the outermost.
+class CtLogBlock
+{
+  public:
+    CT_NOINSTR CtLogBlock();
+    CT_NOINSTR ~CtLogBlock();
+    CtLogBlock(const CtLogBlock&) = delete;
+    CtLogBlock& operator=(const CtLogBlock&) = delete;
+
+  private:
+    // The buffer is allocated and freed as runtime work (#197).
+    CtRuntimeScope scope_;
+    std::string buffer_;
+    bool outermost_;
+};
+
+// Forgets the block this thread is filling, unwritten, so that what follows goes straight to
+// stderr: for a signal handler that does not return to the code filling it.
+CT_NOINSTR void ct_log_block_abandon(void);
+
 template <typename... Args>
 CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... args)
 {
@@ -351,6 +375,8 @@ CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... arg
             return;
         }
 
+        // One write for the line, or for the box it belongs to.
+        CtLogBlock block;
         CtLogLockGuard lock;
         coretrace::write_log_line(level, {}, msg, std::source_location::current());
     }

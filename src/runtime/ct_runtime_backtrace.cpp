@@ -11,6 +11,8 @@ namespace
 
     CT_NOINSTR void ct_signal_handler(int signo)
     {
+        // A box this thread was writing would never be: the report goes out on its own.
+        ct_log_block_abandon();
         ct_disable_logging();
         ct_write_prefix_nolock(CTLevel::Error);
         ct_write_str(ct_color(CTColor::Red));
