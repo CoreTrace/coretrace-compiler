@@ -215,8 +215,15 @@ CT_NODISCARD CT_NOINSTR inline int ct_log_is_enabled(void)
     return coretrace::log_is_enabled() ? 1 : 0;
 }
 
+// The logger's output, as the runtime routes it: to stderr.
+CT_NOINSTR void ct_log_sink(const char* data, size_t size);
+// Writes every byte to stderr, in order: through partial writes, interrupted calls and a
+// descriptor set non-blocking. Gives up when the descriptor fails otherwise.
+CT_NOINSTR void ct_write_stderr(const char* data, size_t size);
+
 CT_NOINSTR inline void ct_enable_logging(void)
 {
+    coretrace::set_sink(ct_log_sink);
     coretrace::enable_logging();
 }
 

@@ -1,9 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "ct_runtime_internal.h"
 
-#if !defined(_WIN32)
-#include <pthread.h>
+#if defined(_WIN32)
+#include <io.h>
 
+#include <algorithm>
+#include <cstdio>
+#include <limits>
+#else
+#include <poll.h>
+#include <pthread.h>
+#endif
+
+#if !defined(_WIN32)
 namespace
 {
     // Never destroyed: code that runs at exit still logs.
@@ -25,6 +34,54 @@ CT_NOINSTR void ct_log_lock_acquire(void) {}
 
 CT_NOINSTR void ct_log_lock_release(void) {}
 #endif
+
+CT_NOINSTR void ct_write_stderr(const char* data, size_t size)
+{
+#if defined(_WIN32)
+    const int fd = _fileno(stderr);
+    while (size > 0)
+    {
+        const size_t chunk = std::min(size, static_cast<size_t>((std::numeric_limits<int>::max)()));
+        const int written = _write(fd, data, static_cast<unsigned int>(chunk));
+        if (written <= 0)
+        {
+            return;
+        }
+        data += written;
+        size -= static_cast<size_t>(written);
+    }
+#else
+    while (size > 0)
+    {
+        const ssize_t written = write(STDERR_FILENO, data, size);
+        if (written > 0)
+        {
+            data += written;
+            size -= static_cast<size_t>(written);
+            continue;
+        }
+        if (written < 0 && errno == EINTR)
+        {
+            continue;
+        }
+        if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        {
+            // A non-blocking descriptor that is full: wait until it takes more.
+            pollfd ready{STDERR_FILENO, POLLOUT, 0};
+            if (poll(&ready, 1, -1) >= 0 || errno == EINTR)
+            {
+                continue;
+            }
+        }
+        return;
+    }
+#endif
+}
+
+CT_NOINSTR void ct_log_sink(const char* data, size_t size)
+{
+    ct_write_stderr(data, size);
+}
 
 // #############################################
 //  Runtime-specific string utilities

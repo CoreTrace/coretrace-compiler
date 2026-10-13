@@ -37,6 +37,7 @@ if(TARGET ct_instrument_runtime)
     runtime_block_index_test.cpp
     runtime_demangle_test.cpp
     runtime_leak_report_test.cpp
+    runtime_log_output_test.cpp
     runtime_quarantine_test.cpp
     runtime_scope_test.cpp
     runtime_table_test.cpp
