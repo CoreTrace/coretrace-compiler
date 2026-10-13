@@ -231,6 +231,7 @@ if(CORETRACE_COMPILER_BUILD_RUNTIME)
     src/runtime/ct_runtime_config.cpp
     ${CT_RUNTIME_PLATFORM_SOURCES}
     src/runtime/ct_runtime_block_index.cpp
+    src/runtime/ct_runtime_demangle_cache.cpp
     src/runtime/ct_runtime_bounds.cpp
     src/runtime/ct_runtime_logging.cpp
     src/runtime/ct_runtime_quarantine.cpp

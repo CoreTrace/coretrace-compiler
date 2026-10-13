@@ -35,6 +35,7 @@ if(TARGET ct_instrument_runtime)
   add_executable(runtime_unit_tests
     runtime_bounds_test.cpp
     runtime_block_index_test.cpp
+    runtime_demangle_cache_test.cpp
     runtime_demangle_test.cpp
     runtime_leak_report_test.cpp
     runtime_log_output_test.cpp
