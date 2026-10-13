@@ -71,6 +71,7 @@ namespace
         EXPECT_EQ(size, 32u);
         EXPECT_EQ(req, 24u);
         EXPECT_STREQ(site, "site:1");
+        ct_table_forget_freed(ptr);
     }
 
     TEST(AllocTable, RemovedEntryStaysVisibleAsFreed)
@@ -85,6 +86,7 @@ namespace
         EXPECT_EQ(state, CT_ENTRY_FREED);
         // A second release of the same pointer is not a live removal.
         EXPECT_NE(ct_table_remove(ptr, nullptr, nullptr, nullptr), 1);
+        ct_table_forget_freed(ptr);
     }
 
     TEST(AllocTable, UnknownPointerIsNotFound)
@@ -115,6 +117,7 @@ namespace
                   0);
 
         ASSERT_EQ(ct_table_remove(ptr, nullptr, nullptr, nullptr), 1);
+        ct_table_forget_freed(ptr);
     }
 
     TEST(AllocTable, ReinsertingAFreedAddressMakesItLiveAgain)
@@ -133,6 +136,7 @@ namespace
         EXPECT_EQ(size, 48u);
         EXPECT_STREQ(site, "second");
         ASSERT_EQ(ct_table_remove(ptr, nullptr, nullptr, nullptr), 1);
+        ct_table_forget_freed(ptr);
     }
 
 #if !defined(_WIN32)
@@ -195,6 +199,10 @@ namespace
         {
             ASSERT_EQ(ct_table_remove(fakeAddress(i, 0x40000000u), nullptr, nullptr, nullptr), 1)
                 << "remove " << i;
+        }
+        for (uintptr_t i = 0; i < kCount; ++i)
+        {
+            ct_table_forget_freed(fakeAddress(i, 0x40000000u));
         }
     }
     // The containing lookup, with the index behind it (#185). Each test uses addresses of its
