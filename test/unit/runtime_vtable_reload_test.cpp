@@ -99,9 +99,9 @@ namespace
                 boxes = testing::internal::GetCapturedStderr();
             }
 
-            // The type line of each box names the type of the library loaded now: decoded,
-            // reload_a::Widget, or as the Windows runtime prints an RTTI name it does not
-            // decode, .?AUWidget@reload_a@@.
+            // The type line of each box names the type of the library loaded now, and not the
+            // other's: decoded, reload_a::Widget, or as the Windows runtime prints an RTTI name
+            // it does not decode, .?AUWidget@reload_a@@.
             size_t types = 0;
             std::istringstream lines(boxes);
             for (std::string line; std::getline(lines, line);)
@@ -110,13 +110,15 @@ namespace
                 {
                     ++types;
                     EXPECT_NE(line.find(build.name), std::string::npos) << line;
+                    EXPECT_EQ(line.find(build.other), std::string::npos) << line;
                 }
             }
             EXPECT_EQ(types, 2u) << boxes;
-            EXPECT_EQ(boxes.find(build.other), std::string::npos) << boxes;
 #if !defined(_WIN32)
-            // The Windows runtime names a target from debug information the test libraries
-            // do not carry.
+            // No line names the other library, and the target's symbol is the function of the
+            // library loaded now. Not on Windows, where DbgHelp still names the function of a
+            // DLL unloaded since (#208).
+            EXPECT_EQ(boxes.find(build.other), std::string::npos) << boxes;
             EXPECT_NE(boxes.find(std::string(build.name) + "::describe(int)"), std::string::npos)
                 << boxes;
 #endif
