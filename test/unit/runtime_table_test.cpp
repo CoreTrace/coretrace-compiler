@@ -196,4 +196,139 @@ namespace
                 << "remove " << i;
         }
     }
+    // The containing lookup, with the index behind it (#185). Each test uses addresses of its
+    // own, above every other test's, and leaves no live block.
+    struct Containing
+    {
+        bool found = false;
+        void* base = nullptr;
+        size_t size = 0;
+        unsigned char state = 0;
+    };
+
+    Containing lookupContaining(uintptr_t address)
+    {
+        Containing result;
+        result.found =
+            ct_table_lookup_containing(reinterpret_cast<const void*>(address), &result.base,
+                                       &result.size, nullptr, nullptr, &result.state) == 1;
+        return result;
+    }
+
+    TEST(AllocTable, ContainingLookupSeesAQuarantinedBlock)
+    {
+        TableLock lock;
+        void* ptr = fakeAddress(0, 0x70000000u);
+        ASSERT_EQ(ct_table_insert(ptr, 200, 208, "quarantined", kKindMalloc), 1);
+        ASSERT_EQ(ct_table_remove(ptr, nullptr, nullptr, nullptr), 1);
+
+        const Containing inside = lookupContaining(0x70000000u + 100);
+        ASSERT_TRUE(inside.found);
+        EXPECT_EQ(inside.base, ptr);
+        EXPECT_EQ(inside.size, 208u);
+        EXPECT_EQ(inside.state, CT_ENTRY_FREED);
+        ct_table_forget_freed(ptr);
+    }
+
+    TEST(AllocTable, ContainingLookupForgetsABlockReturnedToTheAllocator)
+    {
+        TableLock lock;
+        void* ptr = fakeAddress(0, 0x70100000u);
+        ASSERT_EQ(ct_table_insert(ptr, 64, 64, "returned", kKindMalloc), 1);
+        ASSERT_EQ(ct_table_remove(ptr, nullptr, nullptr, nullptr), 1);
+        ct_table_forget_freed(ptr);
+
+        EXPECT_FALSE(lookupContaining(0x70100000u + 8).found);
+    }
+
+    TEST(AllocTable, ContainingLookupFollowsTheReuseOfAnAddress)
+    {
+        TableLock lock;
+        void* ptr = fakeAddress(0, 0x70200000u);
+        // Returned to the allocator, then handed out again, smaller.
+        ASSERT_EQ(ct_table_insert(ptr, 256, 256, "before", kKindMalloc), 1);
+        ASSERT_EQ(ct_table_remove(ptr, nullptr, nullptr, nullptr), 1);
+        ct_table_forget_freed(ptr);
+        ASSERT_EQ(ct_table_insert(ptr, 32, 32, "after", kKindMalloc), 1);
+
+        const Containing inside = lookupContaining(0x70200000u + 16);
+        ASSERT_TRUE(inside.found);
+        EXPECT_EQ(inside.size, 32u);
+        EXPECT_EQ(inside.state, CT_ENTRY_USED);
+        EXPECT_FALSE(lookupContaining(0x70200000u + 100).found);
+
+        ASSERT_EQ(ct_table_remove(ptr, nullptr, nullptr, nullptr), 1);
+        ct_table_forget_freed(ptr);
+    }
+
+    TEST(AllocTable, ContainingLookupFollowsAFreedAddressHandedOutAgain)
+    {
+        TableLock lock;
+        void* ptr = fakeAddress(0, 0x70300000u);
+        // Its freed record is taken over by the new block, of another size.
+        ASSERT_EQ(ct_table_insert(ptr, 256, 256, "before", kKindMalloc), 1);
+        ASSERT_EQ(ct_table_remove(ptr, nullptr, nullptr, nullptr), 1);
+        ASSERT_EQ(ct_table_insert(ptr, 32, 32, "after", kKindMalloc), 1);
+
+        const Containing inside = lookupContaining(0x70300000u + 16);
+        ASSERT_TRUE(inside.found);
+        EXPECT_EQ(inside.size, 32u);
+        EXPECT_EQ(inside.state, CT_ENTRY_USED);
+        EXPECT_FALSE(lookupContaining(0x70300000u + 100).found);
+
+        ASSERT_EQ(ct_table_remove(ptr, nullptr, nullptr, nullptr), 1);
+        ct_table_forget_freed(ptr);
+    }
+
+    TEST(AllocTable, ContainingLookupFollowsTheSizeOfALiveBlock)
+    {
+        TableLock lock;
+        void* ptr = fakeAddress(0, 0x70400000u);
+        ASSERT_EQ(ct_table_insert(ptr, 64, 64, "small", kKindMalloc), 1);
+        ASSERT_EQ(ct_table_insert(ptr, 4096, 4096, "large", kKindMalloc), 1);
+
+        const Containing inside = lookupContaining(0x70400000u + 1000);
+        ASSERT_TRUE(inside.found);
+        EXPECT_EQ(inside.size, 4096u);
+
+        ASSERT_EQ(ct_table_remove(ptr, nullptr, nullptr, nullptr), 1);
+        ct_table_forget_freed(ptr);
+    }
+
+    TEST(AllocTable, ContainingLookupFindsEveryBlockAcrossTheTableGrowth)
+    {
+        // More blocks than the initial table holds, live and freed.
+        constexpr uintptr_t kCount = 70000;
+        constexpr uintptr_t kBase = 0x71000000u;
+        TableLock lock;
+        for (uintptr_t i = 0; i < kCount; ++i)
+        {
+            ASSERT_EQ(ct_table_insert(reinterpret_cast<void*>(kBase + i * 64), 48, 48, "grown",
+                                      kKindMalloc),
+                      1);
+        }
+        for (uintptr_t i = 0; i < kCount; i += 2)
+        {
+            ASSERT_EQ(
+                ct_table_remove(reinterpret_cast<void*>(kBase + i * 64), nullptr, nullptr, nullptr),
+                1);
+        }
+        for (uintptr_t i = 0; i < kCount; i += 997)
+        {
+            const Containing inside = lookupContaining(kBase + i * 64 + 47);
+            ASSERT_TRUE(inside.found) << i;
+            EXPECT_EQ(inside.base, reinterpret_cast<void*>(kBase + i * 64));
+            EXPECT_EQ(inside.state, i % 2 == 0 ? CT_ENTRY_FREED : CT_ENTRY_USED);
+            EXPECT_FALSE(lookupContaining(kBase + i * 64 + 48).found) << i;
+        }
+        for (uintptr_t i = 0; i < kCount; ++i)
+        {
+            void* ptr = reinterpret_cast<void*>(kBase + i * 64);
+            if (i % 2 == 1)
+            {
+                ASSERT_EQ(ct_table_remove(ptr, nullptr, nullptr, nullptr), 1);
+            }
+            ct_table_forget_freed(ptr);
+        }
+    }
 } // namespace
