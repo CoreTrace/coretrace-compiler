@@ -52,12 +52,24 @@ if(TARGET ct_instrument_runtime)
   foreach(build a b)
     add_library(ct_reload_${build} MODULE reload/ct_reload_library.cpp)
     target_compile_definitions(ct_reload_${build} PRIVATE CT_RELOAD_NAMESPACE=reload_${build})
+    # Without the sanitizers' references, as the runtime: a copy loaded with dlmopen, in a
+    # namespace of its own, cannot reach the runtimes the test program links.
+    if(ENABLE_DEBUG_ASAN)
+      target_compile_options(ct_reload_${build} PRIVATE -fno-sanitize=address)
+    endif()
+    if(ENABLE_DEBUG_UBSAN)
+      target_compile_options(ct_reload_${build} PRIVATE -fno-sanitize=undefined)
+    endif()
     coretrace_force_msvc_runtime(ct_reload_${build})
     add_dependencies(runtime_unit_tests ct_reload_${build})
   endforeach()
   target_compile_definitions(runtime_unit_tests PRIVATE
     CT_RELOAD_LIBRARY_A="$<TARGET_FILE:ct_reload_a>"
     CT_RELOAD_LIBRARY_B="$<TARGET_FILE:ct_reload_b>")
+  if(NOT WIN32)
+    # The module comparison of the POSIX vtable diagnostics.
+    target_sources(runtime_unit_tests PRIVATE runtime_vtable_modules_test.cpp)
+  endif()
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
     target_sources(runtime_unit_tests PRIVATE runtime_objc_test.cpp)
