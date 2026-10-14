@@ -148,13 +148,21 @@ namespace
     {
         CtDemangleCache cache(countingDemangler);
         std::atomic<bool> held{false};
+        std::atomic<bool> forked{false};
         std::thread holder(
-            [&held]
+            [&held, &forked]
             {
                 ct_demangle_cache_lock_acquire();
                 held.store(true);
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 ct_demangle_cache_lock_release();
+                // Alive until fork() has returned in the parent: a thread that had ended,
+                // unjoined, by then would be copied into the child as such, and
+                // ThreadSanitizer would report it as leaked there.
+                while (!forked.load())
+                {
+                    std::this_thread::yield();
+                }
             });
         while (!held.load())
         {
@@ -165,6 +173,8 @@ namespace
             std::string out;
             _exit(cache.demangle("m:child", out) && out == "child" ? 0 : 1);
         }
+        // Whether fork() succeeded or not, so that the holder ends and is joined.
+        forked.store(true);
         holder.join();
         ASSERT_GT(child, 0);
 
