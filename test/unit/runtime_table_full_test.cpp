@@ -137,8 +137,7 @@ namespace
     TEST(AllocTableFull, AnAllocationTheTableIsTooFullForIsReportedOutsideTheLock)
     {
         expectTheTableFullWarningOutsideTheLock(
-            []
-            {
+            [] {
                 ct_track_allocation(reinterpret_cast<void*>(uintptr_t{0x7e0000000000}), 16,
                                     "full:track", 0);
             });
