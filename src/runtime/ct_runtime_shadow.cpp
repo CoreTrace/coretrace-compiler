@@ -33,6 +33,10 @@ static size_t ct_shadow_table_size = CT_SHADOW_TABLE_SIZE;
 static size_t ct_shadow_table_mask = CT_SHADOW_TABLE_SIZE - 1u;
 static int ct_shadow_lock = 0;
 static int ct_shadow_table_full_logged = 0;
+// The size of the shadow table when it was found unable to grow, to be reported once the
+// lock is released, or 0. Logging takes the logger's locks, which a fork() may hold while it
+// waits for ct_shadow_lock: nothing is logged with ct_shadow_lock held.
+static size_t ct_shadow_table_full_pending = 0;
 
 CT_NOINSTR void ct_shadow_lock_acquire(void)
 {
@@ -170,8 +174,8 @@ CT_NODISCARD CT_NOINSTR static unsigned char* ct_shadow_get_page_locked(uintptr_
             if (create && !ct_shadow_table_full_logged)
             {
                 ct_shadow_table_full_logged = 1;
-                ct_log(CTLevel::Warn, "{}shadow table full ({} entries){}\n",
-                       ct_color(CTColor::Red), ct_shadow_table_size, ct_color(CTColor::Reset));
+                __atomic_store_n(&ct_shadow_table_full_pending, ct_shadow_table_size,
+                                 __ATOMIC_RELEASE);
             }
             return nullptr;
         }
@@ -190,6 +194,17 @@ CT_NODISCARD CT_NOINSTR static unsigned char ct_shadow_get_byte_locked(uintptr_t
         return 0xFF;
     }
     return data[offset];
+}
+
+// Logs the warning ct_shadow_get_page_locked noted, if any. ct_shadow_lock not held.
+CT_NOINSTR static void ct_report_shadow_table_full(void)
+{
+    const size_t size = __atomic_exchange_n(&ct_shadow_table_full_pending, 0, __ATOMIC_ACQ_REL);
+    if (size != 0)
+    {
+        ct_log(CTLevel::Warn, "{}shadow table full ({} entries){}\n", ct_color(CTColor::Red), size,
+               ct_color(CTColor::Reset));
+    }
 }
 
 CT_NOINSTR static void ct_shadow_set_byte_locked(uintptr_t shadow_index, unsigned char value)
@@ -227,6 +242,7 @@ CT_NOINSTR void ct_shadow_poison_range(const void* addr, size_t size)
         ct_shadow_set_byte_locked(idx, 0xFF);
     }
     ct_shadow_lock_release();
+    ct_report_shadow_table_full();
 }
 
 CT_NOINSTR void ct_shadow_unpoison_range(const void* addr, size_t size)
@@ -251,6 +267,7 @@ CT_NOINSTR void ct_shadow_unpoison_range(const void* addr, size_t size)
         ct_shadow_set_byte_locked(shadow_index + full, static_cast<unsigned char>(tail));
     }
     ct_shadow_lock_release();
+    ct_report_shadow_table_full();
 }
 
 CT_NODISCARD CT_NOINSTR int ct_shadow_check_access(const void* ptr, size_t access_size,

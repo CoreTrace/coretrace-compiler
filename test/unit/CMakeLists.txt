@@ -69,6 +69,11 @@ if(TARGET ct_instrument_runtime)
   if(NOT WIN32)
     # The module comparison of the POSIX vtable diagnostics.
     target_sources(runtime_unit_tests PRIVATE runtime_vtable_modules_test.cpp)
+    # The allocation table filled up, in a process apart from the other runtime tests.
+    add_executable(runtime_table_full_tests runtime_table_full_test.cpp)
+    target_include_directories(runtime_table_full_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+    target_link_libraries(runtime_table_full_tests PRIVATE ct_instrument_runtime coretrace_logger
+      GTest::gtest_main)
   endif()
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
@@ -82,4 +87,7 @@ include(GoogleTest)
 gtest_discover_tests(compilerlib_unit_tests)
 if(TARGET runtime_unit_tests)
   gtest_discover_tests(runtime_unit_tests)
+endif()
+if(TARGET runtime_table_full_tests)
+  gtest_discover_tests(runtime_table_full_tests)
 endif()

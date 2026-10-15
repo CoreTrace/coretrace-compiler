@@ -60,17 +60,32 @@ CT_NOINSTR void ct_lock_release(void)
     __atomic_store_n(&ct_alloc_lock, 0, __ATOMIC_RELEASE);
 }
 
-// Warns once per process that the allocation table can no longer grow; later
-// allocations go untracked. Called with ct_alloc_lock held.
-CT_NOINSTR static void ct_warn_alloc_table_full(void)
+// The size of the allocation table when it was found unable to grow, to be reported once the
+// lock is released, or 0. Logging takes the logger's locks, which a fork() may hold while it
+// waits for ct_alloc_lock: nothing is logged with ct_alloc_lock held.
+static size_t ct_alloc_table_full_pending = 0;
+
+// Notes that the allocation table can no longer grow: later allocations go untracked. Warned
+// about once per process, by ct_report_alloc_table_full. ct_alloc_lock held.
+CT_NOINSTR static void ct_note_alloc_table_full(void)
 {
     if (ct_alloc_table_full_logged)
     {
         return;
     }
     ct_alloc_table_full_logged = 1;
-    ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red),
-           ct_alloc_table_size, ct_color(CTColor::Reset));
+    __atomic_store_n(&ct_alloc_table_full_pending, ct_alloc_table_size, __ATOMIC_RELEASE);
+}
+
+// Logs the warning ct_note_alloc_table_full noted, if any. ct_alloc_lock not held.
+CT_NOINSTR static void ct_report_alloc_table_full(void)
+{
+    const size_t size = __atomic_exchange_n(&ct_alloc_table_full_pending, 0, __ATOMIC_ACQ_REL);
+    if (size != 0)
+    {
+        ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n", ct_color(CTColor::Red), size,
+               ct_color(CTColor::Reset));
+    }
 }
 
 CT_NOINSTR void ct_alloc_table_storage_bounds(uintptr_t* begin, uintptr_t* end)
@@ -657,9 +672,10 @@ CT_NOINSTR void ct_track_allocation(void* ptr, size_t size, const char* site, un
     ct_lock_acquire();
     if (!ct_table_insert(ptr, size, size, site, kind))
     {
-        ct_warn_alloc_table_full();
+        ct_note_alloc_table_full();
     }
     ct_lock_release();
+    ct_report_alloc_table_full();
 
     ct_shadow_track_alloc(ptr, size, size);
 }
@@ -697,9 +713,10 @@ CT_NODISCARD CT_NOINSTR static void* ct_malloc_impl(size_t size, const char* sit
     ct_lock_acquire();
     if (ptr && !ct_table_insert(ptr, size, real_size, site, CT_ALLOC_KIND_MALLOC))
     {
-        ct_warn_alloc_table_full();
+        ct_note_alloc_table_full();
     }
     ct_lock_release();
+    ct_report_alloc_table_full();
 
     ct_shadow_track_alloc(ptr, size, real_size);
 
@@ -746,9 +763,10 @@ CT_NODISCARD CT_NOINSTR static void* ct_calloc_impl(size_t count, size_t size, c
     ct_lock_acquire();
     if (ptr && !ct_table_insert(ptr, req_size, real_size, site, CT_ALLOC_KIND_MALLOC))
     {
-        ct_warn_alloc_table_full();
+        ct_note_alloc_table_full();
     }
     ct_lock_release();
+    ct_report_alloc_table_full();
 
     ct_shadow_track_alloc(ptr, shadow_size, real_size);
 
@@ -790,9 +808,10 @@ CT_NODISCARD CT_NOINSTR static void* ct_new_impl(size_t size, const char* site, 
     unsigned char kind = is_array ? CT_ALLOC_KIND_NEW_ARRAY : CT_ALLOC_KIND_NEW;
     if (ptr && !ct_table_insert(ptr, size, real_size, site, kind))
     {
-        ct_warn_alloc_table_full();
+        ct_note_alloc_table_full();
     }
     ct_lock_release();
+    ct_report_alloc_table_full();
 
     ct_shadow_track_alloc(ptr, size, real_size);
 
@@ -841,9 +860,10 @@ CT_NODISCARD CT_NOINSTR static void* ct_new_nothrow_impl(size_t size, const char
     ct_lock_acquire();
     if (ptr && !ct_table_insert(ptr, size, real_size, site, kind))
     {
-        ct_warn_alloc_table_full();
+        ct_note_alloc_table_full();
     }
     ct_lock_release();
+    ct_report_alloc_table_full();
 
     ct_shadow_track_alloc(ptr, size, real_size);
 
@@ -937,9 +957,10 @@ CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, con
     }
     if (new_ptr && !ct_table_insert(new_ptr, size, real_size, site, CT_ALLOC_KIND_MALLOC))
     {
-        ct_warn_alloc_table_full();
+        ct_note_alloc_table_full();
     }
     ct_lock_release();
+    ct_report_alloc_table_full();
 
     if (ct_is_enabled(CT_FEATURE_SHADOW))
     {
@@ -1196,9 +1217,10 @@ extern "C"
         ct_lock_acquire();
         if (!ct_table_insert(ptr, size, real_size, site, CT_ALLOC_KIND_MALLOC))
         {
-            ct_warn_alloc_table_full();
+            ct_note_alloc_table_full();
         }
         ct_lock_release();
+        ct_report_alloc_table_full();
 
         ct_shadow_track_alloc(ptr, size, real_size);
 
@@ -1224,9 +1246,10 @@ extern "C"
         ct_lock_acquire();
         if (ptr && !ct_table_insert(ptr, size, real_size, site, CT_ALLOC_KIND_MALLOC))
         {
-            ct_warn_alloc_table_full();
+            ct_note_alloc_table_full();
         }
         ct_lock_release();
+        ct_report_alloc_table_full();
 
         ct_shadow_track_alloc(ptr, size, real_size);
 
@@ -1252,9 +1275,10 @@ extern "C"
         ct_lock_acquire();
         if (!ct_table_insert(ptr, len, len, site, CT_ALLOC_KIND_MMAP))
         {
-            ct_warn_alloc_table_full();
+            ct_note_alloc_table_full();
         }
         ct_lock_release();
+        ct_report_alloc_table_full();
 
         ct_shadow_track_alloc(ptr, len, len);
 
@@ -1323,14 +1347,10 @@ extern "C"
             ct_lock_acquire();
             if (!ct_table_insert(prev, incr, incr, site, CT_ALLOC_KIND_SBRK))
             {
-                if (!ct_alloc_table_full_logged)
-                {
-                    ct_alloc_table_full_logged = 1;
-                    ct_log(CTLevel::Warn, "{}alloc table full ({} entries){}\n",
-                           ct_color(CTColor::Red), ct_alloc_table_size, ct_color(CTColor::Reset));
-                }
+                ct_note_alloc_table_full();
             }
             ct_lock_release();
+            ct_report_alloc_table_full();
 
             if (ct_is_enabled(CT_FEATURE_SHADOW))
             {
