@@ -156,8 +156,10 @@ CT_NOINSTR void ct_lock_acquire(void);
 CT_NOINSTR void ct_lock_release(void);
 CT_NOINSTR void ct_shadow_lock_acquire(void);
 CT_NOINSTR void ct_shadow_lock_release(void);
-// Held while a line goes through the logger, which takes its own locks inside: fork() waits
-// on it, so that no other thread is writing a line when the child is created (#133).
+// Held while the runtime writes its log output to stderr: fork() waits on it, so that no other
+// thread is writing when the child is created (#133). Never held while calling into the
+// logger, and never taken from inside it: the logger's fork() handlers take its own locks, in
+// an order relative to the runtime's handlers that neither controls.
 CT_NOINSTR void ct_log_lock_acquire(void);
 CT_NOINSTR void ct_log_lock_release(void);
 CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t size,
@@ -237,6 +239,13 @@ CT_NOINSTR void ct_log_stop_waiting_for_stderr(void);
 
 CT_NOINSTR inline void ct_enable_logging(void)
 {
+#if !defined(_WIN32)
+    // The runtime serialises its output itself: each line goes to its thread's CtLogBlock, and
+    // every write of a block to stderr is under ct_log_lock. The logger's own serialisation
+    // would call ct_log_sink under the logger's output lock, which its fork() handlers take:
+    // ct_log_sink, which may take ct_log_lock, must not run with it held.
+    coretrace::set_thread_safe(false);
+#endif
     coretrace::set_sink(ct_log_sink);
     coretrace::enable_logging();
 }
@@ -388,9 +397,8 @@ CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... arg
             return;
         }
 
-        // One write for the line, or for the box it belongs to.
+        // One write for the line, or for the box it belongs to, when the outermost block ends.
         CtLogBlock block;
-        CtLogLockGuard lock;
         coretrace::write_log_line(level, {}, msg, std::source_location::current());
     }
     catch (...)

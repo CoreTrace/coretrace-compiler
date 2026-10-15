@@ -102,11 +102,16 @@ CT_NOINSTR void ct_log_sink(const char* data, size_t size)
         }
         catch (...)
         {
-            // No memory for the block: what it holds goes out first, then this, in order.
+            // No memory for the block: what it holds goes out first, then this, in order, and
+            // in one piece, as a block would.
+            CtLogLockGuard lock;
             ct_write_stderr(buffer->data(), buffer->size(), ct_log_when_stderr_full);
             buffer->clear();
+            ct_write_stderr(data, size, ct_log_when_stderr_full);
+            return;
         }
     }
+    // Outside any block: the crash handler's report, among others, which takes no lock.
     ct_write_stderr(data, size, ct_log_when_stderr_full);
 }
 
