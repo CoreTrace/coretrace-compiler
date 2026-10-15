@@ -76,6 +76,11 @@ if(TARGET ct_instrument_runtime)
     target_include_directories(runtime_table_full_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
     target_link_libraries(runtime_table_full_tests PRIVATE ct_instrument_runtime coretrace_logger
       GTest::gtest_main)
+    # The fallback of the runtime's sink, in a process whose operator new it replaces.
+    add_executable(runtime_log_fallback_tests runtime_log_fallback_test.cpp)
+    target_include_directories(runtime_log_fallback_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+    target_link_libraries(runtime_log_fallback_tests PRIVATE ct_instrument_runtime coretrace_logger
+      GTest::gtest_main)
   endif()
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
@@ -92,4 +97,9 @@ if(TARGET runtime_unit_tests)
 endif()
 if(TARGET runtime_table_full_tests)
   gtest_discover_tests(runtime_table_full_tests)
+endif()
+if(TARGET runtime_log_fallback_tests)
+  # A limit outside the test: a writer that blocks also blocks the test's future in its
+  # destructor, past the test's own wait.
+  gtest_discover_tests(runtime_log_fallback_tests PROPERTIES TIMEOUT 120)
 endif()
