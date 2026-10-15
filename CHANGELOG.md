@@ -22,6 +22,8 @@ pull request.
   compilations keep LTO (#170, #163).
 - **Diagnostics of instrumented compilations** are printed as clang prints them, with source
   excerpts and option names, instead of one line each (#172).
+- **An empty `NO_COLOR`** no longer turns off the colors of the trace; a non-empty value still
+  does, as no-color.org specifies (coretrace-log v1.1.1, #215).
 
 ### Fixes
 
@@ -72,6 +74,11 @@ pull request.
   `CT_BACKTRACE=1` does not, so that the process still ends (#205, #185).
 - **Boxes of concurrent threads.** The lines of a box could interleave with the lines of
   other threads; each box is now written at once (#205, #185).
+- **A child of `fork()` and the trace.** A child could hang on its first log line when another
+  thread of the parent was deciding whether stderr takes colors at the time of the fork, and
+  its lines carried the pid of its parent. The runtime builds against coretrace-log v1.1.1,
+  which fixes both, and whose `fork()` handlers it no longer crosses with its own: it never
+  holds a lock of one while it takes a lock of the other (#215, #213).
 
 ### Performance
 

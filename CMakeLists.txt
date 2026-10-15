@@ -208,7 +208,7 @@ if(CORETRACE_COMPILER_BUILD_RUNTIME)
   include(FetchContent)
   # Pinned to an immutable commit so a push to coretrace-log cannot change this build.
   # Keep CORETRACE_LOG_REF in .github/workflows/llvm-versions.yml on the same commit.
-  set(CORETRACE_LOGGER_GIT_TAG "624688ad5e5d00a1d04fd72909d43fe6d948575b" CACHE STRING "coretrace-log commit or tag to build against")
+  set(CORETRACE_LOGGER_GIT_TAG "4ddd3a2a0a05a028e1c72addfce6011fa3978663" CACHE STRING "coretrace-log commit or tag to build against")
   FetchContent_Declare(coretrace_logger
     GIT_REPOSITORY https://github.com/CoreTrace/coretrace-log.git
     GIT_TAG        ${CORETRACE_LOGGER_GIT_TAG}

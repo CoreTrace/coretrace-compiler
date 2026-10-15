@@ -18,7 +18,7 @@ on:
 
 env:
   # Keep on the same commit as CORETRACE_LOGGER_GIT_TAG in CMakeLists.txt.
-  CORETRACE_LOG_REF: 624688ad5e5d00a1d04fd72909d43fe6d948575b
+  CORETRACE_LOG_REF: 4ddd3a2a0a05a028e1c72addfce6011fa3978663
 
 jobs:
   # Ubuntu 24.04 packages LLVM 16 to 19, and its libstdc++ has the <format> the runtime's

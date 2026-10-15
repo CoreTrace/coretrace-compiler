@@ -102,11 +102,18 @@ CT_NOINSTR void ct_log_sink(const char* data, size_t size)
         }
         catch (...)
         {
-            // No memory for the block: what it holds goes out first, then this, in order.
+            // No memory for the block: what it holds goes out first, then this, in order, and
+            // in one piece, as a block would.
+            CtLogLockGuard lock;
             ct_write_stderr(buffer->data(), buffer->size(), ct_log_when_stderr_full);
             buffer->clear();
+            ct_write_stderr(data, size, ct_log_when_stderr_full);
+            return;
         }
     }
+    // Outside any block. On POSIX, only the crash handler's report comes here: it must not wait
+    // for the log lock, which the thread it interrupted may hold; every other writer opens a
+    // CtLogBlock. On Windows, where the log lock does nothing, the leak and crash reports too.
     ct_write_stderr(data, size, ct_log_when_stderr_full);
 }
 

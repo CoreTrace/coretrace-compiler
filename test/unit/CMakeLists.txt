@@ -69,6 +69,18 @@ if(TARGET ct_instrument_runtime)
   if(NOT WIN32)
     # The module comparison of the POSIX vtable diagnostics.
     target_sources(runtime_unit_tests PRIVATE runtime_vtable_modules_test.cpp)
+    # The order of the runtime's locks and the logger's, which both take around fork().
+    target_sources(runtime_unit_tests PRIVATE runtime_log_locks_test.cpp)
+    # The allocation table filled up, in a process apart from the other runtime tests.
+    add_executable(runtime_table_full_tests runtime_table_full_test.cpp)
+    target_include_directories(runtime_table_full_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+    target_link_libraries(runtime_table_full_tests PRIVATE ct_instrument_runtime coretrace_logger
+      GTest::gtest_main)
+    # The fallback of the runtime's sink, in a process whose operator new it replaces.
+    add_executable(runtime_log_fallback_tests runtime_log_fallback_test.cpp)
+    target_include_directories(runtime_log_fallback_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+    target_link_libraries(runtime_log_fallback_tests PRIVATE ct_instrument_runtime coretrace_logger
+      GTest::gtest_main)
   endif()
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
@@ -82,4 +94,12 @@ include(GoogleTest)
 gtest_discover_tests(compilerlib_unit_tests)
 if(TARGET runtime_unit_tests)
   gtest_discover_tests(runtime_unit_tests)
+endif()
+if(TARGET runtime_table_full_tests)
+  gtest_discover_tests(runtime_table_full_tests)
+endif()
+if(TARGET runtime_log_fallback_tests)
+  # A limit outside the test: a writer that blocks also blocks the test's future in its
+  # destructor, past the test's own wait.
+  gtest_discover_tests(runtime_log_fallback_tests PROPERTIES TIMEOUT 120)
 endif()
