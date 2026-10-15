@@ -38,6 +38,8 @@ extern "C"
 
         if (ct_early_trace_should_log())
         {
+            // One write, under the log lock, as any other line.
+            CtLogBlock line;
             ct_write_prefix(CTLevel::Info);
             ct_write_str(ct_color(CTColor::Dim));
             ct_write_cstr("ct: enter ");

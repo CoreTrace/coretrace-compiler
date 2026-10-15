@@ -111,7 +111,9 @@ CT_NOINSTR void ct_log_sink(const char* data, size_t size)
             return;
         }
     }
-    // Outside any block: the crash handler's report, among others, which takes no lock.
+    // Outside any block. On POSIX, only the crash handler's report comes here: it must not wait
+    // for the log lock, which the thread it interrupted may hold; every other writer opens a
+    // CtLogBlock. On Windows, where the log lock does nothing, the leak and crash reports too.
     ct_write_stderr(data, size, ct_log_when_stderr_full);
 }
 

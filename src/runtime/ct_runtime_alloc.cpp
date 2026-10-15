@@ -1663,8 +1663,9 @@ extern "C"
 CT_NOINSTR static void ct_report_leaks(void)
 {
     // The detached GC thread may still mutate the table; hold the spinlock for the whole
-    // report. The ct_write_* primitives write raw bytes and never re-enter the allocator,
-    // so they are safe to call under ct_alloc_lock.
+    // report. The report goes to a CtLogBlock, written in one piece, under the log lock, once
+    // this function returns, after the spinlock is released; filling it allocates from the
+    // C library, which never re-enters the tracking allocator.
     ct_lock_acquire();
     if (ct_alloc_count == 0)
     {
@@ -1673,6 +1674,7 @@ CT_NOINSTR static void ct_report_leaks(void)
     }
 
     ct_disable_logging();
+    CtLogBlock report;
 
     ct_write_prefix_nolock(CTLevel::Error);
     ct_write_str(ct_color(CTColor::Red));

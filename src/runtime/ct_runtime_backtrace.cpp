@@ -60,6 +60,8 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
     sigaction(SIGBUS, &sa, nullptr);
     sigaction(SIGILL, &sa, nullptr);
 
+    // One write, under the log lock, as any other line.
+    CtLogBlock line;
     ct_write_prefix(CTLevel::Info);
     ct_write_str(ct_color(CTColor::Green));
     ct_write_cstr("ct: backtrace handler installed");

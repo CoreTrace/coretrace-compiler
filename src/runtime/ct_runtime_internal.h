@@ -404,6 +404,7 @@ CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... arg
     catch (...)
     {
         static constexpr char fallback[] = "ct: log format error\n";
+        CtLogBlock line;
         coretrace::write_raw(fallback, sizeof(fallback) - 1);
     }
 }
