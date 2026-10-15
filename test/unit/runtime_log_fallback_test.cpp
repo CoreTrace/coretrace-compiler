@@ -66,6 +66,25 @@ void* operator new[](std::size_t size)
     return ::operator new(size);
 }
 
+// The nothrow forms call the forms above, as the standard's do. They must be replaced too:
+// AddressSanitizer brings its own, whose blocks this file's operator delete could not free.
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept
+{
+    try
+    {
+        return ::operator new(size);
+    }
+    catch (const std::bad_alloc&)
+    {
+        return nullptr;
+    }
+}
+
+void* operator new[](std::size_t size, const std::nothrow_t& tag) noexcept
+{
+    return ::operator new(size, tag);
+}
+
 void operator delete(void* block) noexcept
 {
     std::free(block);
@@ -82,6 +101,16 @@ void operator delete(void* block, std::size_t) noexcept
 }
 
 void operator delete[](void* block, std::size_t) noexcept
+{
+    std::free(block);
+}
+
+void operator delete(void* block, const std::nothrow_t&) noexcept
+{
+    std::free(block);
+}
+
+void operator delete[](void* block, const std::nothrow_t&) noexcept
 {
     std::free(block);
 }
