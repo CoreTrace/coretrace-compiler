@@ -87,12 +87,12 @@ namespace
         return true;
     }
 
-    // Takes the oldest blocks past the limit out of the queue, their freed records dropped.
+    // Takes up to `max` of the oldest blocks out of the queue, their freed records dropped.
     // ct_alloc_lock held.
-    CT_NODISCARD CT_NOINSTR size_t ct_take_over_limit(ct_quarantine_item* out, size_t max)
+    CT_NODISCARD CT_NOINSTR size_t ct_take_oldest(ct_quarantine_item* out, size_t max)
     {
         size_t taken = 0;
-        while (taken < max && ct_queue_count > 0 && ct_queue_bytes > ct_queue_limit)
+        while (taken < max && ct_queue_count > 0)
         {
             const ct_quarantine_item item = ct_queue[ct_queue_head];
             ct_queue_head = (ct_queue_head + 1) % ct_queue_capacity;
@@ -100,6 +100,18 @@ namespace
             ct_queue_bytes -= ct_cost(item);
             ct_table_forget_freed(item.ptr);
             out[taken++] = item;
+        }
+        return taken;
+    }
+
+    // Takes the oldest blocks past the limit out of the queue, their freed records dropped.
+    // ct_alloc_lock held.
+    CT_NODISCARD CT_NOINSTR size_t ct_take_over_limit(ct_quarantine_item* out, size_t max)
+    {
+        size_t taken = 0;
+        while (taken < max && ct_queue_bytes > ct_queue_limit && ct_take_oldest(out + taken, 1))
+        {
+            ++taken;
         }
         return taken;
     }
@@ -141,6 +153,11 @@ CT_NOINSTR void ct_quarantine_push(const ct_quarantine_item& item)
     ct_lock_release();
 
     ct_release_over_limit();
+}
+
+CT_NODISCARD CT_NOINSTR bool ct_quarantine_take_oldest(ct_quarantine_item* out)
+{
+    return ct_take_oldest(out, 1) == 1;
 }
 
 CT_NOINSTR void ct_quarantine_set_limit(size_t bytes)

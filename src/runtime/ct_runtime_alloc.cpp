@@ -260,8 +260,8 @@ CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
 // insertion, and every lookup of a block it does not hold, scan it whole (#214). The table
 // therefore keeps an eighth of its slots empty, a sixteenth at the least:
 // - it grows before it takes more of them;
-// - at its largest, a freed record on the probe sequence gives way to a new block, as when the
-//   table was full;
+// - at its largest, it makes room by taking the oldest block out of the quarantine, whose freed
+//   record becomes a tombstone (ct_make_room);
 // - tombstones, which hold slots without ending probe sequences, are dropped by rebuilding the
 //   table at its size once they hold a sixteenth of it.
 // ct_alloc_crowded tells whether `occupied` slots taken would leave less than an eighth empty.
@@ -298,6 +298,41 @@ CT_NOINSTR static void ct_bury_entry(struct ct_alloc_entry* entry)
     ct_alloc_drop_tombstones_if_crowded();
 }
 
+namespace
+{
+    // The block this thread took out of the quarantine while it held ct_alloc_lock, which it
+    // releases once it no longer holds it, in ct_finish_insertion.
+    thread_local ct_quarantine_item ct_evicted_block;
+    thread_local bool ct_evicted_pending = false;
+} // namespace
+
+// Makes room in a crowded table that cannot grow: the oldest block leaves the quarantine, and its
+// freed record becomes a tombstone, which a rebuild drops in its turn. The quarantine holds only
+// blocks whose records the table keeps: a block whose record gave way while it stayed there was
+// no longer reported if the program freed it again, and that release, passed to the allocator,
+// was followed by the quarantine's own. ct_alloc_lock held; it may move the table.
+CT_NOINSTR static void ct_make_room(void)
+{
+    if (!ct_evicted_pending && ct_quarantine_take_oldest(&ct_evicted_block))
+    {
+        ct_evicted_pending = true;
+    }
+}
+
+// The work an insertion leaves for after ct_alloc_lock: the warning of a full table, and the
+// release of the block it took out of the quarantine, as the quarantine releases its own. That
+// block has no record and is in no queue, so only this thread releases it. ct_alloc_lock not
+// held.
+CT_NOINSTR static void ct_finish_insertion(void)
+{
+    ct_report_alloc_table_full();
+    if (ct_evicted_pending)
+    {
+        ct_evicted_pending = false;
+        ct_quarantine_release(ct_evicted_block);
+    }
+}
+
 // Takes `entry` for a live block. ct_alloc_lock held.
 CT_NOINSTR static void ct_claim_entry(struct ct_alloc_entry* entry, void* ptr, size_t req_size,
                                       size_t size, const char* site, unsigned char kind)
@@ -330,16 +365,13 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t s
     // Past the limit, a new live block is refused; a live record is still updated.
     const bool at_limit = ct_alloc_count >= ct_alloc_tracked_max;
     ct_alloc_drop_tombstones_if_crowded();
-    if (!at_limit && ct_alloc_crowded(ct_alloc_occupied + 1))
+    if (!at_limit && ct_alloc_crowded(ct_alloc_occupied + 1) && !ct_alloc_grow_locked())
     {
-        // On failure, at the largest size for one, the insertion below keeps the last empty
-        // slots.
-        (void)ct_alloc_grow_locked();
+        ct_make_room();
     }
 
     size_t idx = ct_hash_ptr(ptr, ct_alloc_table_mask);
     size_t tombstone = kNone;
-    size_t freed = kNone;
     for (size_t i = 0; i < ct_alloc_table_size; ++i)
     {
         size_t pos = (idx + i) & ct_alloc_table_mask;
@@ -374,10 +406,6 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t s
                 ct_claim_entry(entry, ptr, req_size, size, site, kind);
                 return 1;
             }
-            if (freed == kNone)
-            {
-                freed = pos;
-            }
             continue;
         }
 
@@ -400,30 +428,18 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t s
             ct_claim_entry(&ct_alloc_table[tombstone], ptr, req_size, size, site, kind);
             return 1;
         }
-        if (!ct_alloc_full(ct_alloc_occupied + 1))
+        if (ct_alloc_full(ct_alloc_occupied + 1))
         {
-            ct_claim_entry(entry, ptr, req_size, size, site, kind);
-            return 1;
+            return 0;
         }
-        // The table keeps its last empty slots: a freed record gives way to the live block,
-        // whose tracking matters more, or the block goes untracked.
-        if (freed != kNone)
-        {
-            ct_claim_entry(&ct_alloc_table[freed], ptr, req_size, size, site, kind);
-            return 1;
-        }
-        return 0;
+        ct_claim_entry(entry, ptr, req_size, size, site, kind);
+        return 1;
     }
 
     // No empty slot left, which only a table that could not be rebuilt leaves.
     if (!at_limit && tombstone != kNone)
     {
         ct_claim_entry(&ct_alloc_table[tombstone], ptr, req_size, size, site, kind);
-        return 1;
-    }
-    if (!at_limit && freed != kNone)
-    {
-        ct_claim_entry(&ct_alloc_table[freed], ptr, req_size, size, site, kind);
         return 1;
     }
     return 0;
@@ -773,7 +789,7 @@ CT_NOINSTR void ct_track_allocation(void* ptr, size_t size, const char* site, un
         ct_note_alloc_table_full();
     }
     ct_lock_release();
-    ct_report_alloc_table_full();
+    ct_finish_insertion();
 
     ct_shadow_track_alloc(ptr, size, size);
 }
@@ -814,7 +830,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_malloc_impl(size_t size, const char* sit
         ct_note_alloc_table_full();
     }
     ct_lock_release();
-    ct_report_alloc_table_full();
+    ct_finish_insertion();
 
     ct_shadow_track_alloc(ptr, size, real_size);
 
@@ -864,7 +880,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_calloc_impl(size_t count, size_t size, c
         ct_note_alloc_table_full();
     }
     ct_lock_release();
-    ct_report_alloc_table_full();
+    ct_finish_insertion();
 
     ct_shadow_track_alloc(ptr, shadow_size, real_size);
 
@@ -909,7 +925,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_new_impl(size_t size, const char* site, 
         ct_note_alloc_table_full();
     }
     ct_lock_release();
-    ct_report_alloc_table_full();
+    ct_finish_insertion();
 
     ct_shadow_track_alloc(ptr, size, real_size);
 
@@ -961,7 +977,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_new_nothrow_impl(size_t size, const char
         ct_note_alloc_table_full();
     }
     ct_lock_release();
-    ct_report_alloc_table_full();
+    ct_finish_insertion();
 
     ct_shadow_track_alloc(ptr, size, real_size);
 
@@ -1058,7 +1074,7 @@ CT_NODISCARD CT_NOINSTR static void* ct_realloc_impl(void* ptr, size_t size, con
         ct_note_alloc_table_full();
     }
     ct_lock_release();
-    ct_report_alloc_table_full();
+    ct_finish_insertion();
 
     if (ct_is_enabled(CT_FEATURE_SHADOW))
     {
@@ -1318,7 +1334,7 @@ extern "C"
             ct_note_alloc_table_full();
         }
         ct_lock_release();
-        ct_report_alloc_table_full();
+        ct_finish_insertion();
 
         ct_shadow_track_alloc(ptr, size, real_size);
 
@@ -1347,7 +1363,7 @@ extern "C"
             ct_note_alloc_table_full();
         }
         ct_lock_release();
-        ct_report_alloc_table_full();
+        ct_finish_insertion();
 
         ct_shadow_track_alloc(ptr, size, real_size);
 
@@ -1376,7 +1392,7 @@ extern "C"
             ct_note_alloc_table_full();
         }
         ct_lock_release();
-        ct_report_alloc_table_full();
+        ct_finish_insertion();
 
         ct_shadow_track_alloc(ptr, len, len);
 
@@ -1448,7 +1464,7 @@ extern "C"
                 ct_note_alloc_table_full();
             }
             ct_lock_release();
-            ct_report_alloc_table_full();
+            ct_finish_insertion();
 
             if (ct_is_enabled(CT_FEATURE_SHADOW))
             {
