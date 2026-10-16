@@ -266,34 +266,44 @@ namespace
         EXPECT_EQ(second_release, -1);
     }
 
-    // A block taken out of the quarantine goes back to the allocator, which may hand its address
-    // out again: the new block there is tracked like any other.
-    TEST_F(QuarantineAtItsLimit, ABlockTakenOutOfTheQuarantineIsTrackedWhenItsAddressComesBack)
+    // An address taken out of the quarantine may be handed out again, whatever the allocator: the
+    // block there gets a record of its own, as any new block, and its release is recorded.
+    TEST_F(QuarantineAtItsLimit, AnAddressTakenOutOfTheQuarantineIsTrackedWhenHandedOutAgain)
     {
-        const size_t taken_out = takenOut();
-        ASSERT_GT(taken_out, 0u);
-        const std::set<void*> released(freed_.begin(), freed_.begin() + taken_out);
-
-        std::vector<void*> again;
-        size_t reused = 0;
-        size_t reused_and_tracked = 0;
-        for (int i = 0; i < 100'000 && reused < 100; ++i)
+        // An address that left the quarantine, and that no live block was given since.
+        void* address = nullptr;
+        for (void* block : freed_)
         {
-            void* block = __ct_malloc(kBlockSize, "tombstones:again");
-            again.push_back(block);
-            if (released.count(block))
+            if (recordedState(block) == 0)
             {
-                ++reused;
-                reused_and_tracked += recordedState(block) == CT_ENTRY_USED;
+                address = block;
+                break;
             }
         }
-        for (void* block : again)
-        {
-            __ct_free(block, "tombstones:free");
-        }
+        ASSERT_NE(address, nullptr) << "the table made no room";
 
-        EXPECT_GT(reused, 0u) << "the allocator handed out none of the released addresses";
-        EXPECT_EQ(reused_and_tracked, reused);
+        // What an allocation does when the allocator hands that address out again, for a block
+        // of the same size: the blocks next to it may be live.
+        ct_track_allocation(address, kBlockSize, "tombstones:again", CT_ALLOC_KIND_MALLOC);
+        size_t size = 0;
+        unsigned char state = 0;
+        void* base = nullptr;
+        ct_lock_acquire();
+        const int found = ct_table_lookup(address, &size, nullptr, nullptr, &state);
+        const int contained = ct_table_lookup_containing(static_cast<char*>(address) + 8, &base,
+                                                         nullptr, nullptr, nullptr, nullptr);
+        // Its release, recorded as any other; the test does not own that memory, so the freed
+        // record is dropped without releasing it.
+        const int released = ct_table_remove(address, nullptr, nullptr, nullptr);
+        ct_table_forget_freed(address);
+        ct_lock_release();
+
+        ASSERT_EQ(found, 1);
+        EXPECT_EQ(state, CT_ENTRY_USED);
+        EXPECT_EQ(size, kBlockSize);
+        ASSERT_EQ(contained, 1);
+        EXPECT_EQ(base, address);
+        EXPECT_EQ(released, 1);
     }
 
     // Threads allocate and free while the table makes room: each one releases the blocks it took
