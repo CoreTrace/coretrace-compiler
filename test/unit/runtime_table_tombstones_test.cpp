@@ -6,8 +6,9 @@
 // keep empty slots while it tracks as many live blocks as before, and the quarantine must give
 // way to new blocks without leaving any of its blocks unrecorded.
 //
-// An executable of its own: the tests fill the table up. Each one drops the records it made
-// and empties the quarantine it filled.
+// An executable of its own: the tests fill the table up, and this file replaces operator new
+// and operator delete, to see which blocks the runtime gives back to the allocator. Each test
+// drops the records it made and empties the quarantine it filled.
 #include "ct_runtime_alloc_internal.h"
 #include "ct_runtime_internal.h"
 #include "ct_runtime_quarantine.h"
@@ -15,7 +16,12 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <future>
+#include <map>
+#include <new>
 #include <set>
 #include <thread>
 #include <vector>
@@ -31,6 +37,118 @@ extern "C"
     int __ct_config_disable_autofree = 1;
     int __ct_config_disable_alloc_trace = 1;
     int __ct_config_vtable_diag = 0;
+}
+
+namespace
+{
+    using namespace std::chrono_literals;
+
+    // While a test watches, the releases through operator delete of the blocks it names, in
+    // order, in a buffer sized beforehand: the runtime gives a new-expression's block that leaves
+    // the quarantine back there.
+    std::atomic<bool> g_watching{false};
+    const std::set<void*>* g_watched = nullptr;
+    void** g_released = nullptr;
+    size_t g_released_capacity = 0;
+    std::atomic<size_t> g_released_count{0};
+    // Whether another thread could take the allocation lock while the first watched block was
+    // released, and that thread.
+    std::atomic<bool> g_lock_free_at_release{false};
+    std::thread g_lock_taker;
+
+    void checkTheLockIsFree()
+    {
+        std::promise<void> taken;
+        std::future<void> done = taken.get_future();
+        g_lock_taker = std::thread(
+            [taken = std::move(taken)]() mutable
+            {
+                ct_lock_acquire();
+                ct_lock_release();
+                taken.set_value();
+            });
+        g_lock_free_at_release.store(done.wait_for(1s) == std::future_status::ready);
+    }
+
+    void noteRelease(void* block)
+    {
+        if (!g_watching.load(std::memory_order_acquire) || !g_watched->count(block))
+        {
+            return;
+        }
+        const size_t i = g_released_count.fetch_add(1);
+        if (i < g_released_capacity)
+        {
+            g_released[i] = block;
+        }
+        if (i == 0)
+        {
+            checkTheLockIsFree();
+        }
+    }
+} // namespace
+
+// The replacements, over malloc and free, in every form the tests or the runtime may use: under
+// AddressSanitizer, a form left out would come from the sanitizer, whose blocks free could not
+// release.
+void* operator new(std::size_t size)
+{
+    if (void* block = std::malloc(size != 0 ? size : 1))
+    {
+        return block;
+    }
+    throw std::bad_alloc();
+}
+
+void* operator new[](std::size_t size)
+{
+    return ::operator new(size);
+}
+
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept
+{
+    return std::malloc(size != 0 ? size : 1);
+}
+
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept
+{
+    return std::malloc(size != 0 ? size : 1);
+}
+
+void operator delete(void* block) noexcept
+{
+    noteRelease(block);
+    std::free(block);
+}
+
+void operator delete[](void* block) noexcept
+{
+    noteRelease(block);
+    std::free(block);
+}
+
+void operator delete(void* block, std::size_t) noexcept
+{
+    noteRelease(block);
+    std::free(block);
+}
+
+void operator delete[](void* block, std::size_t) noexcept
+{
+    noteRelease(block);
+    std::free(block);
+}
+
+void operator delete(void* block, const std::nothrow_t&) noexcept
+{
+    noteRelease(block);
+    std::free(block);
+}
+
+void operator delete[](void* block, const std::nothrow_t&) noexcept
+{
+    noteRelease(block);
+    std::free(block);
 }
 
 namespace
@@ -176,36 +294,53 @@ namespace
         EXPECT_EQ(updated, 1);
     }
 
-    // Blocks the program frees, which the quarantine keeps, and new blocks allocated after them,
-    // more of both than the largest table keeps room for.
+    // Blocks of new-expressions the program deletes, which the quarantine keeps, and new blocks
+    // allocated after them, more of both than the largest table keeps room for. Making room for
+    // the new blocks takes the oldest ones out of the quarantine, which the fixture watches.
     class QuarantineAtItsLimit : public ::testing::Test
     {
       protected:
         void SetUp() override
         {
+            freed_.reserve(kFreed);
+            live_.reserve(kLive);
             for (size_t i = 0; i < kFreed; ++i)
             {
-                freed_.push_back(__ct_malloc(kBlockSize, "tombstones:freed"));
+                freed_.push_back(__ct_new(kBlockSize, "tombstones:freed"));
             }
             for (void* block : freed_)
             {
-                __ct_free(block, "tombstones:free");
+                __ct_delete(block, "tombstones:delete");
             }
             for (void* block : freed_)
             {
                 recorded_before_ += recordedState(block) == CT_ENTRY_FREED;
             }
+
+            watched_ = std::set<void*>(freed_.begin(), freed_.end());
+            released_.assign(2 * kFreed, nullptr);
+            g_watched = &watched_;
+            g_released = released_.data();
+            g_released_capacity = released_.size();
+            g_released_count.store(0);
+            g_lock_free_at_release.store(false);
+            g_watching.store(true, std::memory_order_release);
             for (size_t i = 0; i < kLive; ++i)
             {
-                live_.push_back(__ct_malloc(kBlockSize, "tombstones:live"));
+                live_.push_back(__ct_new(kBlockSize, "tombstones:live"));
             }
+            g_watching.store(false, std::memory_order_release);
         }
 
         void TearDown() override
         {
+            if (g_lock_taker.joinable())
+            {
+                g_lock_taker.join();
+            }
             for (void* block : live_)
             {
-                __ct_free(block, "tombstones:free");
+                __ct_delete(block, "tombstones:delete");
             }
             ct_quarantine_set_limit(0);
             ct_quarantine_set_limit(kDefaultLimit);
@@ -229,6 +364,8 @@ namespace
         std::vector<void*> freed_;
         std::vector<void*> live_;
         size_t recorded_before_ = 0;
+        std::set<void*> watched_;
+        std::vector<void*> released_;
     };
 
     // The quarantine gives its oldest blocks, released for real, to make room for new ones, and
@@ -264,6 +401,39 @@ namespace
         EXPECT_EQ(freed_record_bytes, quarantined_bytes) << "a quarantined block lost its record";
         EXPECT_GE(empty, size / 16);
         EXPECT_EQ(second_release, -1);
+    }
+
+    // A block taken out of the quarantine goes back to the allocator once, through the function
+    // the program released it with, once the allocation lock is released; a block the
+    // quarantine keeps does not.
+    TEST_F(QuarantineAtItsLimit, ABlockTakenOutOfTheQuarantineIsReleasedOnceOutsideTheLock)
+    {
+        std::map<void*, size_t> releases;
+        const size_t watched = std::min(g_released_count.load(), g_released_capacity);
+        for (size_t i = 0; i < watched; ++i)
+        {
+            ++releases[g_released[i]];
+        }
+        size_t taken_out = 0;
+        size_t released_once = 0;
+        size_t kept_but_released = 0;
+        for (void* block : freed_)
+        {
+            const auto release = releases.find(block);
+            const size_t count = release == releases.end() ? 0 : release->second;
+            if (recordedState(block) == CT_ENTRY_FREED)
+            {
+                kept_but_released += count != 0;
+                continue;
+            }
+            ++taken_out;
+            released_once += count == 1;
+        }
+
+        EXPECT_GT(taken_out, 0u) << "the table made no room";
+        EXPECT_EQ(released_once, taken_out) << "a block taken out was not released once";
+        EXPECT_EQ(kept_but_released, 0u) << "a block still in the quarantine was released";
+        EXPECT_TRUE(g_lock_free_at_release.load()) << "released with the allocation lock held";
     }
 
     // An address taken out of the quarantine may be handed out again, whatever the allocator: the
@@ -321,12 +491,12 @@ namespace
                 {
                     for (int i = 0; i < kRounds; ++i)
                     {
-                        void* block = __ct_malloc(kBlockSize, "tombstones:thread");
+                        void* block = __ct_new(kBlockSize, "tombstones:thread");
                         if (recordedState(block) != CT_ENTRY_USED)
                         {
                             untracked.fetch_add(1);
                         }
-                        __ct_free(block, "tombstones:free");
+                        __ct_delete(block, "tombstones:delete");
                     }
                 });
         }
