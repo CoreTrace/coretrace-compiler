@@ -162,6 +162,11 @@ CT_NOINSTR void ct_shadow_lock_release(void);
 // an order relative to the runtime's handlers that neither controls.
 CT_NOINSTR void ct_log_lock_acquire(void);
 CT_NOINSTR void ct_log_lock_release(void);
+// Held while the auto-free scan installs its thread hook, and by fork(), so that a child never
+// inherits the hook installed but not yet linked to the previous one (#209). It nests in no
+// other lock. No-ops where the scan does not exist.
+CT_NOINSTR void ct_autofree_scan_hook_lock_acquire(void);
+CT_NOINSTR void ct_autofree_scan_hook_lock_release(void);
 CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t size,
                                             const char* site, unsigned char kind);
 CT_NODISCARD CT_NOINSTR int ct_table_remove(void* ptr, size_t* size_out, size_t* req_size_out,

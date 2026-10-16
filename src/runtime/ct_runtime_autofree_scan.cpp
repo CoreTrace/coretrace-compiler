@@ -29,6 +29,7 @@
 #include <malloc/malloc.h>
 #include <pthread.h>
 #include <pthread/introspection.h>
+#include <sched.h>
 #endif
 
 static std::atomic<int> ct_autofree_scan_initialized{0};
@@ -608,7 +609,35 @@ CT_NOINSTR static void ct_scan_regs_for_marks(thread_t thread, uint64_t start_ns
 // introspection hook. A thread created after a scan listed the threads, or one that came
 // and went during it, runs no code before its start is counted (#209).
 static std::atomic<uint64_t> ct_thread_starts{0};
-static std::atomic<pthread_introspection_hook_t> ct_previous_thread_hook{nullptr};
+static struct ct_thread_hook_chain ct_thread_hook;
+// Held while the hook is installed. The runtime's fork() handlers take it, so that a child
+// never inherits a hook installed whose previous hook is not linked yet: its events would wait
+// for a link that no thread of the child makes.
+static pthread_mutex_t ct_thread_hook_lock = PTHREAD_MUTEX_INITIALIZER;
+
+CT_NOINSTR void ct_thread_hook_chain_link(struct ct_thread_hook_chain& chain,
+                                          pthread_introspection_hook_t previous)
+{
+    chain.previous.store(previous, std::memory_order_relaxed);
+    chain.linked.store(true, std::memory_order_release);
+}
+
+CT_NOINSTR void ct_thread_hook_chain_forward(const struct ct_thread_hook_chain& chain,
+                                             unsigned int event, pthread_t thread, void* addr,
+                                             size_t size)
+{
+    // Only in the moment between the exchange and the link: the installing thread holds no
+    // other lock then, and waits for nothing.
+    while (!chain.linked.load(std::memory_order_acquire))
+    {
+        sched_yield();
+    }
+    if (const pthread_introspection_hook_t previous =
+            chain.previous.load(std::memory_order_relaxed))
+    {
+        previous(event, thread, addr, size);
+    }
+}
 
 CT_NOINSTR static void ct_on_thread_event(unsigned int event, pthread_t thread, void* addr,
                                           size_t size)
@@ -617,19 +646,27 @@ CT_NOINSTR static void ct_on_thread_event(unsigned int event, pthread_t thread, 
     {
         ct_thread_starts.fetch_add(1, std::memory_order_acq_rel);
     }
-    if (const pthread_introspection_hook_t previous =
-            ct_previous_thread_hook.load(std::memory_order_acquire))
-    {
-        previous(event, thread, addr, size);
-    }
+    ct_thread_hook_chain_forward(ct_thread_hook, event, thread, addr, size);
 }
 
-// Called once, when the scan is enabled, by the runtime's constructor in most programs: before
-// they start threads. A hook installed earlier, a sanitizer's for example, keeps its events.
+// Called once, when the scan is enabled. A hook installed earlier, a sanitizer's for example,
+// keeps all its events, those of threads that start while this one is installed included.
 CT_NOINSTR static void ct_count_thread_starts(void)
 {
-    ct_previous_thread_hook.store(pthread_introspection_hook_install(ct_on_thread_event),
-                                  std::memory_order_release);
+    pthread_mutex_lock(&ct_thread_hook_lock);
+    ct_thread_hook_chain_link(ct_thread_hook,
+                              pthread_introspection_hook_install(ct_on_thread_event));
+    pthread_mutex_unlock(&ct_thread_hook_lock);
+}
+
+CT_NOINSTR void ct_autofree_scan_hook_lock_acquire(void)
+{
+    pthread_mutex_lock(&ct_thread_hook_lock);
+}
+
+CT_NOINSTR void ct_autofree_scan_hook_lock_release(void)
+{
+    pthread_mutex_unlock(&ct_thread_hook_lock);
 }
 
 CT_NODISCARD CT_NOINSTR bool ct_list_threads(struct ct_scan_threads* threads)
@@ -1456,6 +1493,10 @@ CT_NODISCARD CT_NOINSTR int ct_autofree_scan_for_ptr(void*, size_t)
 CT_NOINSTR static void ct_autofree_gc_scan(int, const char*) {}
 
 CT_NOINSTR static void ct_autofree_scan_start_thread(void) {}
+
+CT_NOINSTR void ct_autofree_scan_hook_lock_acquire(void) {}
+
+CT_NOINSTR void ct_autofree_scan_hook_lock_release(void) {}
 #endif
 
 CT_NOINSTR __attribute__((constructor)) static void ct_autofree_scan_ctor(void)

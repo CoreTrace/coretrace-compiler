@@ -15,7 +15,10 @@
 #include <cstddef>
 #include <cstdint>
 #if defined(__APPLE__)
+#include <atomic>
+
 #include <mach/mach.h>
+#include <pthread/introspection.h>
 #endif
 
 struct ct_alloc_entry
@@ -144,6 +147,25 @@ CT_NODISCARD CT_NOINSTR bool ct_threads_complete(const struct ct_scan_threads& t
 
 // Resumes the threads ct_suspend_threads suspended, and releases the list.
 CT_NOINSTR void ct_resume_threads(struct ct_scan_threads* threads);
+
+// The libpthread hook installed before the scan's, which the scan's hook calls on. Installing
+// a hook exchanges it for the previous one: the scan's is live a moment before the exchange
+// returns the previous one, and an event in that moment waits until it is linked, so that the
+// previous hook misses no event.
+struct ct_thread_hook_chain
+{
+    std::atomic<pthread_introspection_hook_t> previous{nullptr};
+    std::atomic<bool> linked{false};
+};
+
+// Links the hook the exchange returned, null when there was none.
+CT_NOINSTR void ct_thread_hook_chain_link(struct ct_thread_hook_chain& chain,
+                                          pthread_introspection_hook_t previous);
+
+// Calls the previous hook, once it is linked, if there is one.
+CT_NOINSTR void ct_thread_hook_chain_forward(const struct ct_thread_hook_chain& chain,
+                                             unsigned int event, pthread_t thread, void* addr,
+                                             size_t size);
 #endif
 
 #endif // CT_RUNTIME_ALLOC_INTERNAL_H
