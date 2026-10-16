@@ -38,6 +38,10 @@ static size_t ct_alloc_table_bits = CT_ALLOC_TABLE_BITS;
 size_t ct_alloc_table_size = CT_ALLOC_TABLE_SIZE;
 size_t ct_alloc_table_mask = CT_ALLOC_TABLE_SIZE - 1u;
 size_t ct_alloc_count = 0;
+// The slots that are not empty, and those of them that are tombstones: records removed that
+// the probe sequences passing them still step over. Only an empty slot ends a probe sequence.
+static size_t ct_alloc_occupied = 0;
+static size_t ct_alloc_tombstones = 0;
 static int ct_alloc_lock = 0;
 static int ct_alloc_table_full_logged = 0;
 
@@ -186,13 +190,11 @@ CT_NODISCARD CT_NOINSTR static int ct_alloc_rehash_entry(struct ct_alloc_entry* 
     return 0;
 }
 
-CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
+// Moves the table's records, live or freed, to a new table of 2^new_bits slots, without its
+// tombstones. False when the new table cannot be allocated, with the table unchanged.
+CT_NODISCARD CT_NOINSTR static int ct_alloc_rebuild_locked(size_t new_bits)
 {
-    if (ct_alloc_table_bits >= CT_ALLOC_TABLE_MAX_BITS)
-        return 0;
-
-    size_t new_bits = ct_alloc_table_bits + 1u;
-    size_t new_size = 1u << new_bits;
+    size_t new_size = static_cast<size_t>(1u) << new_bits;
     auto* new_table =
         static_cast<struct ct_alloc_entry*>(std::malloc(sizeof(struct ct_alloc_entry) * new_size));
     if (!new_table)
@@ -202,6 +204,7 @@ CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
 
     size_t new_mask = new_size - 1u;
     size_t new_count = 0;
+    size_t new_occupied = 0;
     for (size_t i = 0; i < ct_alloc_table_size; ++i)
     {
         struct ct_alloc_entry* entry = &ct_alloc_table[i];
@@ -212,6 +215,7 @@ CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
 
         if (ct_alloc_rehash_entry(new_table, new_mask, new_size, entry))
         {
+            ++new_occupied;
             if (entry->state == CT_ENTRY_USED)
                 ++new_count;
         }
@@ -225,9 +229,26 @@ CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
     ct_alloc_table_size = new_size;
     ct_alloc_table_mask = new_mask;
     ct_alloc_count = new_count;
-    ct_alloc_table_full_logged = 0;
+    ct_alloc_occupied = new_occupied;
+    ct_alloc_tombstones = 0;
 
     return 1;
+}
+
+CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
+{
+    if (ct_alloc_table_bits >= CT_ALLOC_TABLE_MAX_BITS ||
+        !ct_alloc_rebuild_locked(ct_alloc_table_bits + 1u))
+        return 0;
+    ct_alloc_table_full_logged = 0;
+    return 1;
+}
+
+// Turns `entry`, unindexed already, into a tombstone. ct_alloc_lock held.
+CT_NOINSTR static void ct_bury_entry(struct ct_alloc_entry* entry)
+{
+    entry->state = CT_ENTRY_TOMB;
+    ++ct_alloc_tombstones;
 }
 
 // Takes `entry` for a live block. ct_alloc_lock held.
@@ -236,6 +257,14 @@ CT_NOINSTR static void ct_claim_entry(struct ct_alloc_entry* entry, void* ptr, s
 {
     // The record may hold a freed block, of this address or another one.
     ct_unindex_entry(entry);
+    if (entry->state == CT_ENTRY_EMPTY)
+    {
+        ++ct_alloc_occupied;
+    }
+    else if (entry->state == CT_ENTRY_TOMB)
+    {
+        --ct_alloc_tombstones;
+    }
     entry->ptr = ptr;
     entry->size = size;
     entry->req_size = req_size;
@@ -689,8 +718,8 @@ CT_NODISCARD CT_NOINSTR size_t ct_forget_allocation(void* ptr, unsigned char kin
     {
         size = entry->size;
         ct_unindex_entry(entry);
-        entry->state = CT_ENTRY_TOMB;
         --ct_alloc_count;
+        ct_bury_entry(entry);
     }
     ct_lock_release();
 
@@ -1046,7 +1075,7 @@ CT_NOINSTR void ct_table_forget_freed(void* ptr)
     if (entry && (entry->state == CT_ENTRY_FREED || entry->state == CT_ENTRY_AUTOFREED))
     {
         ct_unindex_entry(entry);
-        entry->state = CT_ENTRY_TOMB;
+        ct_bury_entry(entry);
     }
 }
 
