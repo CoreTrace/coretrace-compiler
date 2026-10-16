@@ -143,11 +143,19 @@ CT_NOINSTR static void ct_index_entry(const struct ct_alloc_entry* entry)
     }
 }
 
+// The finalizer of MurmurHash3 (fmix64): every bit of the address moves every bit of the slot.
+// Shifts of the address alone left the blocks of an allocator, at regular strides, in long
+// runs of taken slots: in a model of the table seven eighths full of addresses from macOS's
+// malloc, a lookup of a block the table did not hold read 200 to 1,300 slots on average, against
+// about 33 with this hash (#214).
 CT_NODISCARD CT_NOINSTR size_t ct_hash_ptr(const void* ptr, size_t mask)
 {
-    uintptr_t value = reinterpret_cast<uintptr_t>(ptr);
-    value ^= value >> 4;
-    value ^= value >> 9;
+    uint64_t value = reinterpret_cast<uintptr_t>(ptr);
+    value ^= value >> 33;
+    value *= 0xff51afd7ed558ccdull;
+    value ^= value >> 33;
+    value *= 0xc4ceb9fe1a85ec53ull;
+    value ^= value >> 33;
     return static_cast<size_t>(value) & mask;
 }
 
