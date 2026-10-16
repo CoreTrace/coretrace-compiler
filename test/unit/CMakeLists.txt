@@ -86,6 +86,11 @@ if(TARGET ct_instrument_runtime)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
     target_sources(runtime_unit_tests PRIVATE runtime_objc_test.cpp)
     target_link_libraries(runtime_unit_tests PRIVATE objc)
+    # How the auto-free scans stop the threads, in a process where the scan is enabled.
+    add_executable(runtime_scan_threads_tests runtime_scan_threads_test.cpp)
+    target_include_directories(runtime_scan_threads_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+    target_link_libraries(runtime_scan_threads_tests PRIVATE ct_instrument_runtime coretrace_logger
+      GTest::gtest_main)
   endif()
   coretrace_force_msvc_runtime(runtime_unit_tests)
 endif()
@@ -97,6 +102,9 @@ if(TARGET runtime_unit_tests)
 endif()
 if(TARGET runtime_table_full_tests)
   gtest_discover_tests(runtime_table_full_tests)
+endif()
+if(TARGET runtime_scan_threads_tests)
+  gtest_discover_tests(runtime_scan_threads_tests PROPERTIES ENVIRONMENT CT_AUTOFREE_SCAN=1)
 endif()
 if(TARGET runtime_log_fallback_tests)
   # A limit outside the test: a writer that blocks also blocks the test's future in its

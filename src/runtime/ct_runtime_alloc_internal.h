@@ -14,6 +14,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#if defined(__APPLE__)
+#include <atomic>
+
+#include <mach/mach.h>
+#include <pthread/introspection.h>
+#endif
 
 struct ct_alloc_entry
 {
@@ -100,5 +106,66 @@ CT_NODISCARD CT_NOINSTR int ct_autofree_scan_checks_pointers(void);
 
 // Non-zero when the scan found `ptr` still reachable and it must not be released.
 CT_NODISCARD CT_NOINSTR int ct_autofree_scan_for_ptr(void* ptr, size_t size);
+
+#if defined(__APPLE__)
+// A thread of the process, as a scan sees it. Its stack bounds are read before any thread
+// is suspended: pthread_from_mach_thread_np takes a lock a suspended thread may hold. Only a
+// thread the scan could suspend, or the scanning thread, is read: one that could not be
+// suspended has exited, and its stack may already be gone.
+struct ct_scan_thread
+{
+    thread_t port;
+    uintptr_t stack_low; // above the guard page
+    uintptr_t stack_high;
+    bool readable;
+};
+
+struct ct_scan_threads
+{
+    struct ct_scan_thread* items;
+    mach_msg_type_number_t count;
+    thread_t self;
+    uint64_t starts; // the threads started before the list was made
+};
+
+// How every scan stops the other threads: it lists them, suspends them, reads their roots,
+// checks that the roots it read were all of them, and resumes them.
+
+// Lists the process's threads and their stacks, before any is suspended. False when they
+// cannot be listed, with nothing to release.
+CT_NODISCARD CT_NOINSTR bool ct_list_threads(struct ct_scan_threads* threads);
+
+// Suspends every listed thread but the calling one.
+CT_NOINSTR void ct_suspend_threads(struct ct_scan_threads* threads);
+
+// True when every thread of the process is a listed one, and no thread started since the
+// list was made: the roots the scan read are then all the threads' roots, those of a listed
+// thread it could not suspend, one that is ending, aside. A scan releases nothing otherwise
+// (#209). Calls only the kernel, so it can run while the threads are suspended; a scan calls
+// it last, once it has read every root.
+CT_NODISCARD CT_NOINSTR bool ct_threads_complete(const struct ct_scan_threads& threads);
+
+// Resumes the threads ct_suspend_threads suspended, and releases the list.
+CT_NOINSTR void ct_resume_threads(struct ct_scan_threads* threads);
+
+// The libpthread hook installed before the scan's, which the scan's hook calls on. Installing
+// a hook exchanges it for the previous one: the scan's is live a moment before the exchange
+// returns the previous one, and an event in that moment waits until it is linked, so that the
+// previous hook misses no event.
+struct ct_thread_hook_chain
+{
+    std::atomic<pthread_introspection_hook_t> previous{nullptr};
+    std::atomic<bool> linked{false};
+};
+
+// Links the hook the exchange returned, null when there was none.
+CT_NOINSTR void ct_thread_hook_chain_link(struct ct_thread_hook_chain& chain,
+                                          pthread_introspection_hook_t previous);
+
+// Calls the previous hook, once it is linked, if there is one.
+CT_NOINSTR void ct_thread_hook_chain_forward(const struct ct_thread_hook_chain& chain,
+                                             unsigned int event, pthread_t thread, void* addr,
+                                             size_t size);
+#endif
 
 #endif // CT_RUNTIME_ALLOC_INTERNAL_H

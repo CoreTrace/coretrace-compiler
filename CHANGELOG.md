@@ -79,6 +79,13 @@ pull request.
   its lines carried the pid of its parent. The runtime builds against coretrace-log v1.1.1,
   which fixes both, and whose `fork()` handlers it no longer crosses with its own: it never
   holds a lock of one while it takes a lock of the other (#215, #213).
+- **Threads created during an auto-free scan, on macOS.** The periodic scan of
+  `CT_AUTOFREE_SCAN_START` could release a block that a thread created while the scan was
+  starting still held; the thread then used it, and its release was reported as a double
+  free. Both scans, the periodic one and the one that checks a block before `--ct-autofree`
+  releases it, now release nothing when a thread exists that they did not list, or a thread
+  started after they listed them: the periodic scan releases those blocks at a later pass, and
+  a block the check keeps stays allocated, as one found reachable does (#216, #209).
 
 ### Performance
 
