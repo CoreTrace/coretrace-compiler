@@ -126,6 +126,11 @@ pull request.
   vtable and of a call target are computed only when comparing the modules needs them, rather
   than at every virtual call; the trace is the same. On macOS, `bench/virtual_calls.cpp` with
   the vtable diagnostics runs in 8.0 s instead of 24.4 s (#211, #185).
+- **Allocations with the quarantine.** The records of the blocks the quarantine holds filled
+  the allocation table before it grew, so that allocations probed longer and longer runs of
+  slots. On macOS, `bench/alloc_churn.c` built with `--ct-modules=alloc --ct-no-alloc-trace`
+  runs in 0.08 to 0.34 s instead of 0.67 to 1.27 s with the default quarantine; without the
+  quarantine, it runs in 0.03 s before and after (#214).
 
 ### Tests and CI
 
