@@ -86,6 +86,26 @@ pull request.
   releases it, now release nothing when a thread exists that they did not list, or a thread
   started after they listed them: the periodic scan releases those blocks at a later pass, and
   a block the check keeps stays allocated, as one found reachable does (#216, #209).
+- **Allocations once the allocation table has been full.** After the table had been filled to
+  its maximum size and emptied, every allocation, and every release of a block it did not hold,
+  scanned the whole table: about 0.7 ms each instead of about 0.1 µs, for the rest of the
+  process. The records of the blocks the quarantine holds filled it the same way. The table now
+  keeps an eighth of its slots empty, and still tracks up to 1,048,576 live blocks:
+  - it grows once seven eighths of its slots are taken, up to 2^21 slots instead of 2^20;
+  - it drops the tombstones of removed records by rebuilding itself at its size;
+  - at its largest, it makes room by taking the oldest block out of the quarantine;
+  - it hashes addresses with fmix64: the former hash left the blocks of an allocator in long
+    runs of taken slots.
+
+  At its largest, the table takes 80 MiB instead of 40 MiB, and a rebuild holds two tables for
+  a moment: 120 MiB when the table grows to 2^21 slots, 160 MiB when it is rebuilt at that size
+  (#214).
+- **A block freed twice while in the quarantine, once the allocation table was full.** A freed
+  record gave way to a new block while its block stayed in the quarantine. A second release of
+  that block by the program was then not reported but passed to the allocator, and the
+  quarantine released the block again later, which made the allocator abort on macOS. Every
+  block in the quarantine now keeps its freed record; one taken out to make room is released at
+  once (#214).
 
 ### Performance
 
@@ -106,6 +126,11 @@ pull request.
   vtable and of a call target are computed only when comparing the modules needs them, rather
   than at every virtual call; the trace is the same. On macOS, `bench/virtual_calls.cpp` with
   the vtable diagnostics runs in 8.0 s instead of 24.4 s (#211, #185).
+- **Allocations with the quarantine.** The records of the blocks the quarantine holds filled
+  the allocation table before it grew, so that allocations probed longer and longer runs of
+  slots. On macOS, `bench/alloc_churn.c` built with `--ct-modules=alloc --ct-no-alloc-trace`
+  runs in 0.08 to 0.34 s instead of 0.67 to 1.27 s with the default quarantine; without the
+  quarantine, it runs in 0.03 s before and after (#214).
 
 ### Tests and CI
 

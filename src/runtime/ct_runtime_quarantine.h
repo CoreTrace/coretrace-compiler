@@ -36,6 +36,12 @@ CT_NOINSTR void ct_quarantine_push(const ct_quarantine_item& item);
 CT_NOINSTR void ct_quarantine_set_limit(size_t bytes);
 CT_NODISCARD CT_NOINSTR size_t ct_quarantine_bytes(void);
 
+// Takes the oldest block out of the quarantine, its freed record dropped, when the allocation
+// table needs the room. False when the quarantine is empty. The caller releases the block, with
+// ct_quarantine_release, once it no longer holds the lock: the block is in no queue and has no
+// record by then, so no other thread releases it. ct_alloc_lock held.
+CT_NODISCARD CT_NOINSTR bool ct_quarantine_take_oldest(ct_quarantine_item* out);
+
 // Allocator hooks.
 // Drops the freed record of `ptr`, whose block the allocator may now hand out again.
 // ct_alloc_lock held.
