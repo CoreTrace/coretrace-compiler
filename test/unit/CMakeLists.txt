@@ -76,6 +76,11 @@ if(TARGET ct_instrument_runtime)
     target_include_directories(runtime_table_full_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
     target_link_libraries(runtime_table_full_tests PRIVATE ct_instrument_runtime coretrace_logger
       GTest::gtest_main)
+    # Tombstones left by a table filled up and emptied, in a process apart.
+    add_executable(runtime_table_tombstones_tests runtime_table_tombstones_test.cpp)
+    target_include_directories(runtime_table_tombstones_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+    target_link_libraries(runtime_table_tombstones_tests PRIVATE ct_instrument_runtime
+      coretrace_logger GTest::gtest_main)
     # The fallback of the runtime's sink, in a process whose operator new it replaces.
     add_executable(runtime_log_fallback_tests runtime_log_fallback_test.cpp)
     target_include_directories(runtime_log_fallback_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
@@ -102,6 +107,9 @@ if(TARGET runtime_unit_tests)
 endif()
 if(TARGET runtime_table_full_tests)
   gtest_discover_tests(runtime_table_full_tests)
+endif()
+if(TARGET runtime_table_tombstones_tests)
+  gtest_discover_tests(runtime_table_tombstones_tests)
 endif()
 if(TARGET runtime_scan_threads_tests)
   gtest_discover_tests(runtime_scan_threads_tests PROPERTIES ENVIRONMENT CT_AUTOFREE_SCAN=1)

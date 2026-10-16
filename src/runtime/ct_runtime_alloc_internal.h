@@ -65,6 +65,9 @@ struct ct_autofree_free_item
     unsigned char kind;
 };
 
+// The most live blocks the table tracks at once; a block allocated beyond them goes untracked.
+constexpr size_t ct_alloc_tracked_max = size_t{1} << 20;
+
 // The open-addressed table. The storage moves when it grows, so the scan must
 // re-read `ct_alloc_table` under the lock rather than cache it.
 extern struct ct_alloc_entry* ct_alloc_table;

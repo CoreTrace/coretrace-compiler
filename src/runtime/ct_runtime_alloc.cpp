@@ -23,7 +23,11 @@
 #endif
 
 #define CT_ALLOC_TABLE_BITS 16u
-#define CT_ALLOC_TABLE_MAX_BITS 20u
+// The table tracks at most ct_alloc_tracked_max live blocks, in at most 2^21 slots, so that it
+// keeps an eighth of them empty (see ct_alloc_crowded) besides its freed records. A slot takes
+// 40 bytes: the table takes 80 MiB at its largest, and a rebuild holds the old table and the new
+// one at once, 120 MiB when it grows to 2^21 slots and 160 MiB when it is rebuilt at that size.
+#define CT_ALLOC_TABLE_MAX_BITS 21u
 #define CT_ALLOC_TABLE_SIZE (1u << CT_ALLOC_TABLE_BITS)
 
 // The initial storage of the table and of its index (ct_alloc_index), side by side: both hold
@@ -78,7 +82,7 @@ CT_NOINSTR static void ct_note_alloc_table_full(void)
         return;
     }
     ct_alloc_table_full_logged = 1;
-    __atomic_store_n(&ct_alloc_table_full_pending, ct_alloc_table_size, __ATOMIC_RELEASE);
+    __atomic_store_n(&ct_alloc_table_full_pending, ct_alloc_tracked_max, __ATOMIC_RELEASE);
 }
 
 // Logs the warning ct_note_alloc_table_full noted, if any. ct_alloc_lock not held.
@@ -252,6 +256,25 @@ CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
     return 1;
 }
 
+// Only an empty slot ends a probe sequence: a table whose empty slots are all taken makes every
+// insertion, and every lookup of a block it does not hold, scan it whole (#214). The table
+// therefore keeps an eighth of its slots empty, a sixteenth at the least:
+// - it grows before it takes more of them;
+// - at its largest, a freed record on the probe sequence gives way to a new block, as when the
+//   table was full.
+// ct_alloc_crowded tells whether `occupied` slots taken would leave less than an eighth empty.
+CT_NODISCARD CT_NOINSTR static bool ct_alloc_crowded(size_t occupied)
+{
+    return occupied > ct_alloc_table_size - ct_alloc_table_size / 8;
+}
+
+// Whether `occupied` slots taken would leave less than a sixteenth of the table empty, which no
+// insertion does.
+CT_NODISCARD CT_NOINSTR static bool ct_alloc_full(size_t occupied)
+{
+    return occupied > ct_alloc_table_size - ct_alloc_table_size / 16;
+}
+
 // Turns `entry`, unindexed already, into a tombstone. ct_alloc_lock held.
 CT_NOINSTR static void ct_bury_entry(struct ct_alloc_entry* entry)
 {
@@ -288,83 +311,104 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t s
                                             const char* site, unsigned char kind)
 {
     constexpr size_t kNone = static_cast<size_t>(-1);
-    for (int attempt = 0; attempt < 2; ++attempt)
+    // Past the limit, a new live block is refused; a live record is still updated.
+    const bool at_limit = ct_alloc_count >= ct_alloc_tracked_max;
+    if (!at_limit && ct_alloc_crowded(ct_alloc_occupied + 1))
     {
-        size_t idx = ct_hash_ptr(ptr, ct_alloc_table_mask);
-        size_t tombstone = kNone;
-        size_t freed = kNone;
+        // On failure, at the largest size for one, the insertion below keeps the last empty
+        // slots.
+        (void)ct_alloc_grow_locked();
+    }
 
-        for (size_t i = 0; i < ct_alloc_table_size; ++i)
+    size_t idx = ct_hash_ptr(ptr, ct_alloc_table_mask);
+    size_t tombstone = kNone;
+    size_t freed = kNone;
+    for (size_t i = 0; i < ct_alloc_table_size; ++i)
+    {
+        size_t pos = (idx + i) & ct_alloc_table_mask;
+        struct ct_alloc_entry* entry = &ct_alloc_table[pos];
+
+        if (entry->state == CT_ENTRY_USED)
         {
-            size_t pos = (idx + i) & ct_alloc_table_mask;
-            struct ct_alloc_entry* entry = &ct_alloc_table[pos];
-
-            if (entry->state == CT_ENTRY_USED)
+            if (entry->ptr == ptr)
             {
-                if (entry->ptr == ptr)
-                {
-                    ct_unindex_entry(entry);
-                    entry->size = size;
-                    entry->req_size = req_size;
-                    entry->site = site;
-                    entry->kind = kind;
-                    entry->mark = 0;
-                    ct_index_entry(entry);
-                    return 1;
-                }
-                continue;
+                ct_unindex_entry(entry);
+                entry->size = size;
+                entry->req_size = req_size;
+                entry->site = site;
+                entry->kind = kind;
+                entry->mark = 0;
+                ct_index_entry(entry);
+                return 1;
             }
-
-            // A block recorded as freed is in the quarantine, still allocated: its record
-            // must stay, unless this very address is being handed out again.
-            if (entry->state == CT_ENTRY_FREED || entry->state == CT_ENTRY_AUTOFREED)
-            {
-                if (entry->ptr == ptr)
-                {
-                    ct_claim_entry(entry, ptr, req_size, size, site, kind);
-                    return 1;
-                }
-                if (freed == kNone)
-                {
-                    freed = pos;
-                }
-                continue;
-            }
-
-            if (entry->state == CT_ENTRY_TOMB)
-            {
-                if (tombstone == kNone)
-                {
-                    tombstone = pos;
-                }
-                continue;
-            }
-
-            // CT_ENTRY_EMPTY: the end of the probe sequence.
-            ct_claim_entry(tombstone != kNone ? &ct_alloc_table[tombstone] : entry, ptr, req_size,
-                           size, site, kind);
-            return 1;
+            continue;
         }
 
+        // A block recorded as freed is in the quarantine, still allocated: its record must
+        // stay, unless this very address is being handed out again.
+        if (entry->state == CT_ENTRY_FREED || entry->state == CT_ENTRY_AUTOFREED)
+        {
+            if (entry->ptr == ptr)
+            {
+                if (at_limit)
+                {
+                    return 0;
+                }
+                ct_claim_entry(entry, ptr, req_size, size, site, kind);
+                return 1;
+            }
+            if (freed == kNone)
+            {
+                freed = pos;
+            }
+            continue;
+        }
+
+        if (entry->state == CT_ENTRY_TOMB)
+        {
+            if (tombstone == kNone)
+            {
+                tombstone = pos;
+            }
+            continue;
+        }
+
+        // CT_ENTRY_EMPTY: the end of the probe sequence.
+        if (at_limit)
+        {
+            return 0;
+        }
         if (tombstone != kNone)
         {
             ct_claim_entry(&ct_alloc_table[tombstone], ptr, req_size, size, site, kind);
             return 1;
         }
-
-        if (!ct_alloc_grow_locked())
+        if (!ct_alloc_full(ct_alloc_occupied + 1))
         {
-            // The table cannot grow: a freed record gives way to the live block, whose
-            // tracking matters more.
-            if (freed != kNone)
-            {
-                ct_claim_entry(&ct_alloc_table[freed], ptr, req_size, size, site, kind);
-                return 1;
-            }
-            return 0;
+            ct_claim_entry(entry, ptr, req_size, size, site, kind);
+            return 1;
         }
+        // The table keeps its last empty slots: a freed record gives way to the live block,
+        // whose tracking matters more, or the block goes untracked.
+        if (freed != kNone)
+        {
+            ct_claim_entry(&ct_alloc_table[freed], ptr, req_size, size, site, kind);
+            return 1;
+        }
+        return 0;
     }
 
+    // No empty slot left, which only a table that could not be rebuilt leaves.
+    if (!at_limit && tombstone != kNone)
+    {
+        ct_claim_entry(&ct_alloc_table[tombstone], ptr, req_size, size, site, kind);
+        return 1;
+    }
+    if (!at_limit && freed != kNone)
+    {
+        ct_claim_entry(&ct_alloc_table[freed], ptr, req_size, size, site, kind);
+        return 1;
+    }
     return 0;
 }
 
