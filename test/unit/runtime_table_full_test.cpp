@@ -6,10 +6,8 @@
 // the allocation lock while it waits for the logger could deadlock with a fork(). POSIX only,
 // where both register fork handlers.
 //
-// An executable of its own: a table filled up keeps its tombstones once emptied, so that every
-// later insert probes the whole table, which would slow the other runtime tests down to a halt
-// in a process they share. The runtime also warns only once per process, so each test fills
-// the table in a process of its own, as ctest runs them; run together, the second one skips.
+// An executable of its own: the runtime warns only once per process, so each test fills the
+// table in a process of its own, as ctest runs them; run together, the second one skips.
 // The probe replaces the runtime's sink while the warning is logged and restores it after.
 #include "ct_runtime_alloc_internal.h"
 #include "ct_runtime_internal.h"
