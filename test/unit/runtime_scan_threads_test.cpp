@@ -2,7 +2,8 @@
 //
 // How the auto-free scans stop the other threads (#209). The roots a scan read are all the
 // threads' roots only when every thread of the process is one it listed and suspended, and no
-// thread started since it listed them; otherwise it must release nothing.
+// thread started since it listed them; otherwise it must release nothing. And how the hook that
+// counts thread starts passes every event on to the hook installed before it.
 //
 // macOS only, where the scans exist. An executable of its own, run with CT_AUTOFREE_SCAN=1:
 // enabling the scan installs the hook that counts thread starts.
@@ -142,5 +143,49 @@ namespace
         ASSERT_TRUE(kernelListsOnly(threads)) << "the ended thread is still listed";
 
         EXPECT_FALSE(suspendedThreadsAreComplete(&threads));
+    }
+
+    std::atomic<int> g_previous_hook_events{0};
+
+    void previousHook(unsigned int, pthread_t, void*, size_t)
+    {
+        g_previous_hook_events.fetch_add(1);
+    }
+
+    // The scan's hook is live from the exchange that installs it, a moment before the exchange
+    // returns the previous hook: an event in that moment must still reach the previous hook.
+    TEST(ThreadHookChain, AnEventBeforeTheLinkReachesThePreviousHook)
+    {
+        g_previous_hook_events.store(0);
+        struct ct_thread_hook_chain chain;
+        std::atomic<bool> returned{false};
+        std::thread event(
+            [&]
+            {
+                ct_thread_hook_chain_forward(chain, PTHREAD_INTROSPECTION_THREAD_START,
+                                             pthread_self(), nullptr, 0);
+                returned.store(true);
+            });
+        // Time enough for an event that does not wait for the link to come back without it.
+        const auto deadline = std::chrono::steady_clock::now() + 500ms;
+        while (!returned.load() && std::chrono::steady_clock::now() < deadline)
+        {
+            std::this_thread::sleep_for(1ms);
+        }
+        EXPECT_FALSE(returned.load()) << "the event did not wait for the previous hook";
+
+        ct_thread_hook_chain_link(chain, previousHook);
+        event.join();
+
+        EXPECT_EQ(g_previous_hook_events.load(), 1);
+    }
+
+    TEST(ThreadHookChain, AnEventWithNoPreviousHookCallsNothing)
+    {
+        struct ct_thread_hook_chain chain;
+        ct_thread_hook_chain_link(chain, nullptr);
+
+        ct_thread_hook_chain_forward(chain, PTHREAD_INTROSPECTION_THREAD_START, pthread_self(),
+                                     nullptr, 0);
     }
 } // namespace
