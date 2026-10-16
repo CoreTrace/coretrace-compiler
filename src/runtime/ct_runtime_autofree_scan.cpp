@@ -28,6 +28,7 @@
 #include <mach/mach_vm.h>
 #include <malloc/malloc.h>
 #include <pthread.h>
+#include <pthread/introspection.h>
 #endif
 
 static std::atomic<int> ct_autofree_scan_initialized{0};
@@ -51,6 +52,8 @@ static std::atomic<int> ct_autofree_scan_thread_started{0};
 // The periodic scan's own thread, which the scan skips: it holds none of the program's
 // references, only stale copies of the words earlier passes read.
 static std::atomic<thread_t> ct_autofree_scan_thread_port{MACH_PORT_NULL};
+
+CT_NOINSTR static void ct_count_thread_starts(void);
 #endif
 static size_t ct_autofree_scan_timeout_check_freq = 100;
 CT_NODISCARD CT_NOINSTR static uint64_t ct_time_ns(void)
@@ -175,6 +178,12 @@ CT_NOINSTR void ct_autofree_scan_init_once(void)
         }
     }
 
+#if defined(__APPLE__)
+    if (final_scan_enabled)
+    {
+        ct_count_thread_starts();
+    }
+#endif
     ct_autofree_scan_enabled.store(final_scan_enabled, std::memory_order_release);
     ct_autofree_scan_start.store(scan_start, std::memory_order_release);
     ct_autofree_scan_stack.store(scan_stack, std::memory_order_release);
@@ -595,29 +604,37 @@ CT_NOINSTR static void ct_scan_regs_for_marks(thread_t thread, uint64_t start_ns
 #endif
 }
 
-// A thread of the process, as a scan sees it. Its stack bounds are read before any thread
-// is suspended: pthread_from_mach_thread_np takes a lock a suspended thread may hold. Only a
-// thread the scan could suspend, or the scanning thread, is read: one that could not be
-// suspended has exited, and its stack may already be gone.
-struct ct_scan_thread
-{
-    thread_t port;
-    uintptr_t stack_low; // above the guard page
-    uintptr_t stack_high;
-    bool readable;
-};
+// Threads that started running since the scan was enabled, counted by a libpthread
+// introspection hook. A thread created after a scan listed the threads, or one that came
+// and went during it, runs no code before its start is counted (#209).
+static std::atomic<uint64_t> ct_thread_starts{0};
+static std::atomic<pthread_introspection_hook_t> ct_previous_thread_hook{nullptr};
 
-struct ct_scan_threads
+CT_NOINSTR static void ct_on_thread_event(unsigned int event, pthread_t thread, void* addr,
+                                          size_t size)
 {
-    struct ct_scan_thread* items;
-    mach_msg_type_number_t count;
-    thread_t self;
-};
+    if (event == PTHREAD_INTROSPECTION_THREAD_START)
+    {
+        ct_thread_starts.fetch_add(1, std::memory_order_acq_rel);
+    }
+    if (const pthread_introspection_hook_t previous =
+            ct_previous_thread_hook.load(std::memory_order_acquire))
+    {
+        previous(event, thread, addr, size);
+    }
+}
 
-// Lists the process's threads and their stacks, before any is suspended. False when they
-// cannot be listed, with nothing to release.
-CT_NODISCARD CT_NOINSTR static bool ct_list_threads(struct ct_scan_threads* threads)
+// Called once, when the scan is enabled, by the runtime's constructor in most programs: before
+// they start threads. A hook installed earlier, a sanitizer's for example, keeps its events.
+CT_NOINSTR static void ct_count_thread_starts(void)
 {
+    ct_previous_thread_hook.store(pthread_introspection_hook_install(ct_on_thread_event),
+                                  std::memory_order_release);
+}
+
+CT_NODISCARD CT_NOINSTR bool ct_list_threads(struct ct_scan_threads* threads)
+{
+    threads->starts = ct_thread_starts.load(std::memory_order_acquire);
     thread_act_array_t ports = nullptr;
     mach_msg_type_number_t count = 0;
     if (task_threads(mach_task_self(), &ports, &count) != KERN_SUCCESS)
@@ -669,8 +686,7 @@ CT_NODISCARD CT_NOINSTR static bool ct_list_threads(struct ct_scan_threads* thre
     return true;
 }
 
-// Suspends every listed thread but the calling one.
-CT_NOINSTR static void ct_suspend_threads(struct ct_scan_threads* threads)
+CT_NOINSTR void ct_suspend_threads(struct ct_scan_threads* threads)
 {
     for (mach_msg_type_number_t i = 0; i < threads->count; ++i)
     {
@@ -680,8 +696,34 @@ CT_NOINSTR static void ct_suspend_threads(struct ct_scan_threads* threads)
     }
 }
 
-// Resumes the threads ct_suspend_threads suspended, and releases the list.
-CT_NOINSTR static void ct_resume_threads(struct ct_scan_threads* threads)
+CT_NODISCARD CT_NOINSTR bool ct_threads_complete(const struct ct_scan_threads& threads)
+{
+    thread_act_array_t ports = nullptr;
+    mach_msg_type_number_t count = 0;
+    if (task_threads(mach_task_self(), &ports, &count) != KERN_SUCCESS)
+    {
+        return false;
+    }
+    bool complete = true;
+    for (mach_msg_type_number_t i = 0; i < count; ++i)
+    {
+        // A thread keeps its port name in the task, so a listed thread has the same here.
+        // ponytail: linear search, n x m port comparisons; sort the list if processes with
+        // thousands of threads make it show.
+        bool listed = false;
+        for (mach_msg_type_number_t j = 0; j < threads.count && !listed; ++j)
+        {
+            listed = threads.items[j].port == ports[i];
+        }
+        complete = complete && listed;
+        mach_port_deallocate(mach_task_self(), ports[i]);
+    }
+    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(ports),
+                  count * sizeof(thread_t));
+    return complete && ct_thread_starts.load(std::memory_order_acquire) == threads.starts;
+}
+
+CT_NOINSTR void ct_resume_threads(struct ct_scan_threads* threads)
 {
     for (mach_msg_type_number_t i = 0; i < threads->count; ++i)
     {
@@ -1025,6 +1067,11 @@ CT_NODISCARD CT_NOINSTR int ct_autofree_scan_for_ptr(void* ptr, size_t size)
             found = 1;
         }
     }
+    // A thread the scan did not read may hold a reference.
+    if (!found && !ct_threads_complete(threads))
+    {
+        found = 1;
+    }
 
     ct_resume_threads(&threads);
 
@@ -1304,6 +1351,15 @@ CT_NOINSTR static void ct_autofree_gc_scan(int force, const char* reason)
         }
     }
     ct_scan_marked_blocks(start_ns, &timed_out);
+    // A thread the pass did not read may hold the only reference to a block: one created
+    // since the threads were listed, or one that came and went. The pass then releases
+    // nothing. Checked once every root is read, with the other threads suspended: a thread
+    // that starts after the check can only be one the kernel creates, and it finds in memory
+    // no reference the pass did not see.
+    if (!timed_out && !ct_threads_complete(threads))
+    {
+        timed_out = 1;
+    }
 
     size_t collected = 0;
     if (!timed_out)
