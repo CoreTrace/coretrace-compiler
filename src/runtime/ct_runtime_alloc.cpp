@@ -261,7 +261,9 @@ CT_NODISCARD CT_NOINSTR static int ct_alloc_grow_locked(void)
 // therefore keeps an eighth of its slots empty, a sixteenth at the least:
 // - it grows before it takes more of them;
 // - at its largest, a freed record on the probe sequence gives way to a new block, as when the
-//   table was full.
+//   table was full;
+// - tombstones, which hold slots without ending probe sequences, are dropped by rebuilding the
+//   table at its size once they hold a sixteenth of it.
 // ct_alloc_crowded tells whether `occupied` slots taken would leave less than an eighth empty.
 CT_NODISCARD CT_NOINSTR static bool ct_alloc_crowded(size_t occupied)
 {
@@ -275,11 +277,25 @@ CT_NODISCARD CT_NOINSTR static bool ct_alloc_full(size_t occupied)
     return occupied > ct_alloc_table_size - ct_alloc_table_size / 16;
 }
 
-// Turns `entry`, unindexed already, into a tombstone. ct_alloc_lock held.
+// Rebuilds the table at its size, without its tombstones, once it can take no more empty slots
+// and they hold a sixteenth of its slots: each rebuild empties that many slots at least, so it
+// costs a few slot moves per tombstone. ct_alloc_lock held; it may move the table.
+CT_NOINSTR static void ct_alloc_drop_tombstones_if_crowded(void)
+{
+    if (ct_alloc_crowded(ct_alloc_occupied + 1) && ct_alloc_tombstones >= ct_alloc_table_size / 16)
+    {
+        // On failure, the tombstones stay, and the table works as before, slowly.
+        (void)ct_alloc_rebuild_locked(ct_alloc_table_bits);
+    }
+}
+
+// Turns `entry`, unindexed already, into a tombstone. ct_alloc_lock held; `entry` may no longer
+// be valid after it.
 CT_NOINSTR static void ct_bury_entry(struct ct_alloc_entry* entry)
 {
     entry->state = CT_ENTRY_TOMB;
     ++ct_alloc_tombstones;
+    ct_alloc_drop_tombstones_if_crowded();
 }
 
 // Takes `entry` for a live block. ct_alloc_lock held.
@@ -313,6 +329,7 @@ CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t s
     constexpr size_t kNone = static_cast<size_t>(-1);
     // Past the limit, a new live block is refused; a live record is still updated.
     const bool at_limit = ct_alloc_count >= ct_alloc_tracked_max;
+    ct_alloc_drop_tombstones_if_crowded();
     if (!at_limit && ct_alloc_crowded(ct_alloc_occupied + 1))
     {
         // On failure, at the largest size for one, the insertion below keeps the last empty

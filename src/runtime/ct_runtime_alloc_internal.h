@@ -68,8 +68,8 @@ struct ct_autofree_free_item
 // The most live blocks the table tracks at once; a block allocated beyond them goes untracked.
 constexpr size_t ct_alloc_tracked_max = size_t{1} << 20;
 
-// The open-addressed table. The storage moves when it grows, so the scan must
-// re-read `ct_alloc_table` under the lock rather than cache it.
+// The open-addressed table. The storage moves when it grows, and when it is rebuilt to drop
+// its tombstones, so the scan must re-read `ct_alloc_table` under the lock rather than cache it.
 extern struct ct_alloc_entry* ct_alloc_table;
 extern size_t ct_alloc_table_size;
 extern size_t ct_alloc_table_mask;

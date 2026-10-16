@@ -53,6 +53,66 @@ namespace
         ct_table_forget_freed(block);
     }
 
+    // Records made and removed one after the other leave tombstones, at addresses never reused:
+    // the table must drop them before they take its empty slots, without growing because of
+    // them, and keep its other records.
+    TEST(AllocTableTombstones, TombstonesAreDroppedBeforeTheyTakeTheEmptySlots)
+    {
+        void* live = reinterpret_cast<void*>(uintptr_t{0x7e0000001000});
+        void* freed = reinterpret_cast<void*>(uintptr_t{0x7e0000002000});
+        ct_lock_acquire();
+        ASSERT_TRUE(ct_table_insert(live, 24, 32, "tombstones:live", CT_ALLOC_KIND_NEW));
+        ASSERT_TRUE(ct_table_insert(freed, 8, 16, "tombstones:freed", CT_ALLOC_KIND_MALLOC));
+        ASSERT_EQ(ct_table_remove(freed, nullptr, nullptr, nullptr), 1);
+        const size_t live_count = ct_alloc_count;
+        const size_t size_before = ct_alloc_table_size;
+
+        // More records than the largest table has slots, each dropped as the next one comes.
+        constexpr uintptr_t kRecords = 4'000'000;
+        uintptr_t refused = 0;
+        for (uintptr_t i = 0; i < kRecords; ++i)
+        {
+            if (!ct_table_insert(fillBlock(i), 16, 16, "tombstones:fill", CT_ALLOC_KIND_MALLOC))
+            {
+                ++refused;
+                continue;
+            }
+            dropRecord(fillBlock(i));
+        }
+
+        const size_t size = ct_alloc_table_size;
+        const size_t empty = slotsIn(CT_ENTRY_EMPTY);
+        const size_t count_after = ct_alloc_count;
+        size_t live_size = 0;
+        size_t live_req_size = 0;
+        const char* live_site = nullptr;
+        unsigned char live_state = CT_ENTRY_EMPTY;
+        const int live_found =
+            ct_table_lookup(live, &live_size, &live_req_size, &live_site, &live_state);
+        unsigned char freed_state = CT_ENTRY_EMPTY;
+        const int freed_found = ct_table_lookup(freed, nullptr, nullptr, nullptr, &freed_state);
+        void* base = nullptr;
+        const int contained = ct_table_lookup_containing(static_cast<char*>(live) + 8, &base,
+                                                         nullptr, nullptr, nullptr, nullptr);
+        dropRecord(freed);
+        dropRecord(live);
+        ct_lock_release();
+
+        EXPECT_EQ(refused, 0u);
+        EXPECT_EQ(size, size_before) << "tombstones made the table grow";
+        EXPECT_GE(empty, size / 16) << "tombstones took the empty slots of a table of " << size;
+        EXPECT_EQ(count_after, live_count);
+        ASSERT_EQ(live_found, 1);
+        EXPECT_EQ(live_state, CT_ENTRY_USED);
+        EXPECT_EQ(live_size, 32u);
+        EXPECT_EQ(live_req_size, 24u);
+        EXPECT_STREQ(live_site, "tombstones:live");
+        ASSERT_EQ(freed_found, 1);
+        EXPECT_EQ(freed_state, CT_ENTRY_FREED);
+        ASSERT_EQ(contained, 1);
+        EXPECT_EQ(base, live);
+    }
+
     // The table tracks as many live blocks as before it kept empty slots, 2^20, and still keeps
     // an eighth of its slots empty then.
     TEST(AllocTableTombstones, ATableTracksAsManyLiveBlocksAsBefore)
