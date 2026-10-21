@@ -9,6 +9,8 @@
 
 #include <gtest/gtest.h>
 
+#include <llvm/Support/CrashRecoveryContext.h>
+
 #include <pthread.h>
 
 #include <algorithm>
@@ -285,5 +287,24 @@ int depth()
                                               std::to_string(i) + " \"\n"));
         }
         EXPECT_EXIT(compileAtOnceAndExit(sources), ::testing::ExitedWithCode(0), "");
+    }
+
+    // Once the host enabled crash recovery, a crash in a job fails the compilation, and the
+    // job's thread still ends with the alternate signal stack it started with. In the death
+    // test's subprocess, this job is the first to write a file, so LLVM installs its own
+    // alternate stack on the job's thread, which AddressSanitizer would abort on.
+    void crashAndExit(const std::string& source, const std::string& object)
+    {
+        llvm::CrashRecoveryContext::Enable();
+        std::vector<Compilation> jobs{
+            {{"-c", source, "-o", object}, compilerlib::OutputMode::ToFile, false, {}}};
+        compileOnSmallStacks(jobs);
+        std::_Exit(jobs.front().result.success ? 1 : 0);
+    }
+
+    TEST_F(CompileStackTest, ARecoveredCrashFailsTheCompilation)
+    {
+        const std::string source = writeSource("crash.c", "#pragma clang __debug crash\n");
+        EXPECT_EXIT(crashAndExit(source, path("crash.o")), ::testing::ExitedWithCode(0), "");
     }
 } // namespace

@@ -517,17 +517,23 @@ namespace compilerlib
         // crash in the job was recovered.
         CT_NODISCARD bool runOnClangStack(llvm::function_ref<void()> job)
         {
-            llvm::CrashRecoveryContext context;
-            return context.RunSafelyOnThread(
+            bool completed = false;
+            llvm::CrashRecoveryContext thread;
+            const bool ran = thread.RunSafelyOnThread(
                 [&]
                 {
                     clang::noteBottomOfStack();
 #ifndef _WIN32
                     AlternateSignalStackScope signalStack;
 #endif
-                    job();
+                    // The job runs in a context of its own, the innermost, which recovers its
+                    // crashes: RunSafely then returns, and the scope above still restores the
+                    // alternate stack, which a crash recovered by RunSafelyOnThread skips.
+                    llvm::CrashRecoveryContext context;
+                    completed = context.RunSafely(job);
                 },
                 static_cast<unsigned>(clang::DesiredStackSize));
+            return ran && completed;
         }
 
         // The compilation whose driver is executing its jobs on this thread, for runCc1:
