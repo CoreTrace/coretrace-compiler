@@ -409,3 +409,9 @@ This example demonstrates how to:
 
 You can use the same pattern in any external project by passing the correct `LLVM_DIR`
 and `Clang_DIR` paths to CMake.
+
+`compilerlib::compile` runs each `-cc1` job on a thread of its own, with the 8 MiB stack Clang
+expects, and waits for it: a host can compile from a thread with a small stack, such as a
+secondary thread on macOS, whose stack is 512 KiB (#204). The time-trace profiler a host runs on
+its own thread, started with `llvm::timeTraceProfilerInitialize`, therefore does not record the
+compilation. With `-ftime-trace`, each job writes its own trace file, as clang does.

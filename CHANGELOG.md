@@ -24,6 +24,10 @@ pull request.
   excerpts and option names, instead of one line each (#172).
 - **An empty `NO_COLOR`** no longer turns off the colors of the trace; a non-empty value still
   does, as no-color.org specifies (coretrace-log v1.1.1, #215).
+- **A host's time-trace profiler no longer records the compilation.** Each `-cc1` job runs on a
+  thread of its own (#204), so the profiler a host runs on its own thread, started with
+  `llvm::timeTraceProfilerInitialize`, does not record it. With `-ftime-trace`, the job writes
+  its own trace file, where it was recorded by that profiler and wrote no file before.
 
 ### Fixes
 
@@ -106,6 +110,12 @@ pull request.
   quarantine released the block again later, which made the allocator abort on macOS. Every
   block in the quarantine now keeps its freed record; one taken out to make room is released at
   once (#214).
+- **Compilations from a thread with a small stack.** `compilerlib::compile` ran Clang on the
+  calling thread, whose stack can be far smaller than the 8 MiB Clang expects: 512 KiB for a
+  secondary thread on macOS. Deep template instantiation overflowed it and killed the host,
+  with `SIGBUS` on macOS. Each `-cc1` job now runs on a thread of its own with that stack, in
+  every output mode, instrumented or not, and Clang moves deeper recursion to a fresh stack
+  when it runs low (#204).
 
 ### Performance
 

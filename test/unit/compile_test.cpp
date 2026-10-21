@@ -1460,6 +1460,29 @@ void moveBytes(char* destination, const char* source, size_t size)
         ASSERT_TRUE(result.success) << result.diagnostics;
         EXPECT_EQ(traceEvents(path("unit.json")).count("CoreTraceInstrumentation"), 1u);
     }
+
+    // Each -cc1 job runs on a thread of its own (#204): the profiler a host runs on its own
+    // thread does not record the compilation, and -ftime-trace writes the job's trace as it
+    // does without that profiler.
+    TEST_F(CompileTest, HostProfilerDoesNotRecordTheCompilation)
+    {
+        llvm::timeTraceProfilerInitialize(/*TimeTraceGranularity=*/0, "host");
+        compilerlib::CompileResult result =
+            compilerlib::compile({kElfTarget, "-O2", "-ftime-trace", "-ftime-trace-granularity=0",
+                                  "-c", writeSource("unit.c", kSectionUnit), "-o", path("unit.o")},
+                                 compilerlib::OutputMode::ToFile, /*instrument=*/false);
+        std::error_code ec;
+        {
+            llvm::raw_fd_ostream out(path("host.json"), ec);
+            if (!ec)
+                llvm::timeTraceProfilerWrite(out);
+        }
+        llvm::timeTraceProfilerCleanup();
+        ASSERT_FALSE(ec) << ec.message();
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_EQ(traceEvents(path("host.json")).count("Frontend"), 0u);
+        EXPECT_EQ(traceEvents(path("unit.json")).count("Frontend"), 1u);
+    }
     // A unit whose compilation at -O2 reports a remark of each -Rpass family, from the
     // optimization (inline, loop-vectorize) and from the code generation (prologepilog), an
     // optimization failure (the loop cannot be vectorized as requested), and a frame larger
