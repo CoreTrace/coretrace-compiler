@@ -141,6 +141,15 @@ int depth()
                     ::testing::ExitedWithCode(0), "");
     }
 
+    // To a file, through the driver, which runs its -cc1 job in this process.
+    TEST_F(CompileStackTest, CompilationToAFileOnASmallStack)
+    {
+        const std::string source = writeSource("deep.cpp", kDeepTemplate);
+        EXPECT_EXIT(compileOnASmallStackAndExit({"-std=c++17", "-c", source, "-o", path("deep.o")},
+                                                compilerlib::OutputMode::ToFile, false),
+                    ::testing::ExitedWithCode(0), "");
+    }
+
     // Instrumented, to a file (Cc1Runner::runInstrumented).
     TEST_F(CompileStackTest, InstrumentedCompilationOnASmallStack)
     {

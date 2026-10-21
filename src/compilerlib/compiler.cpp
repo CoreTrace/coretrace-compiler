@@ -539,10 +539,9 @@ namespace compilerlib
         // clang prints, source excerpts and "N warnings generated" included, written into the
         // compilation's result instead of stderr. argv holds the executable, "-cc1", then the
         // job's arguments.
-        int runCc1(llvm::SmallVectorImpl<const char*>& argv)
+        int runCc1OnThisThread(CompileContext& ctx, llvm::SmallVectorImpl<const char*>& argv)
         {
             initTargetsOnce();
-            CompileContext& ctx = *executingContext;
             auto ci = std::make_unique<clang::CompilerInstance>();
 
             // Argument errors are buffered until the invocation's diagnostic options, such as
@@ -583,6 +582,16 @@ namespace compilerlib
             ctx.dc.os << text;
             ctx.dc.os.flush();
             return succeeded ? 0 : 1;
+        }
+
+        int runCc1(llvm::SmallVectorImpl<const char*>& argv)
+        {
+            // Read on the driver's thread, which the job does not run on.
+            CompileContext& ctx = *executingContext;
+            int status = 1;
+            if (!runOnClangStack([&] { status = runCc1OnThisThread(ctx, argv); }))
+                return 1;
+            return status;
         }
 
         class DriverSession
