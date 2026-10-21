@@ -158,4 +158,86 @@ int depth()
                                                 compilerlib::OutputMode::ToFile, true),
                     ::testing::ExitedWithCode(0), "");
     }
+
+    // Diagnostics and failures come back from the thread Clang runs on as they did before: a
+    // warning with a successful compilation, an error with a failed one that leaves no output,
+    // in each mode. Checked in the subprocess, which exits with the number of mismatches.
+    void checkDiagnosticsAndExit(const std::string& warns, const std::string& fails,
+                                 const std::string& dir)
+    {
+        const std::string warnsObject = dir + "/warns.o";
+        const std::string warnsInstrumented = dir + "/warns-instrumented.o";
+        const std::string failsObject = dir + "/fails.o";
+        const std::string failsInstrumented = dir + "/fails-instrumented.o";
+        std::vector<Compilation> jobs{
+            {{"-std=c++17", "-S", "-emit-llvm", warns},
+             compilerlib::OutputMode::ToMemory,
+             false,
+             {}},
+            {{"-std=c++17", "-c", warns, "-o", warnsObject},
+             compilerlib::OutputMode::ToFile,
+             false,
+             {}},
+            {{"-std=c++17", "-c", warns, "-o", warnsInstrumented},
+             compilerlib::OutputMode::ToFile,
+             true,
+             {}},
+            {{"-std=c++17", "-S", "-emit-llvm", fails},
+             compilerlib::OutputMode::ToMemory,
+             false,
+             {}},
+            {{"-std=c++17", "-c", fails, "-o", failsObject},
+             compilerlib::OutputMode::ToFile,
+             false,
+             {}},
+            {{"-std=c++17", "-c", fails, "-o", failsInstrumented},
+             compilerlib::OutputMode::ToFile,
+             true,
+             {}},
+        };
+        for (Compilation& job : jobs)
+        {
+            std::vector<Compilation> one{job};
+            compileOnSmallStacks(one);
+            job.result = one.front().result;
+        }
+
+        int mismatches = 0;
+        auto expect = [&](bool ok, const char* what, size_t job)
+        {
+            if (!ok)
+            {
+                std::fprintf(stderr, "job %zu: %s\n%s\n", job, what,
+                             job < jobs.size() ? jobs[job].result.diagnostics.c_str() : "");
+                ++mismatches;
+            }
+        };
+        for (size_t i = 0; i < 3; ++i)
+        {
+            expect(jobs[i].result.success, "failed", i);
+            expect(jobs[i].result.diagnostics.find("deep but fine") != std::string::npos,
+                   "no warning", i);
+        }
+        expect(jobs[0].result.llvmIR.find("define") != std::string::npos, "no IR", 0);
+        expect(fs::exists(warnsObject), "no object", 1);
+        expect(fs::exists(warnsInstrumented), "no object", 2);
+        for (size_t i = 3; i < jobs.size(); ++i)
+        {
+            expect(!jobs[i].result.success, "succeeded", i);
+            expect(jobs[i].result.diagnostics.find("missing") != std::string::npos, "no error", i);
+        }
+        expect(!fs::exists(failsObject), "left an object", 4);
+        expect(!fs::exists(failsInstrumented), "left an object", 5);
+        std::_Exit(mismatches);
+    }
+
+    TEST_F(CompileStackTest, DiagnosticsAndFailuresComeBackFromClang)
+    {
+        const std::string warns =
+            writeSource("warns.cpp", std::string(kDeepTemplate) + "#warning \"deep but fine\"\n");
+        const std::string fails =
+            writeSource("fails.cpp", std::string(kDeepTemplate) + "int broken = missing;\n");
+        EXPECT_EXIT(checkDiagnosticsAndExit(warns, fails, path("")), ::testing::ExitedWithCode(0),
+                    "");
+    }
 } // namespace
