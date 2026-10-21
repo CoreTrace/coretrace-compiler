@@ -668,6 +668,26 @@ namespace compilerlib
 
             CT_NODISCARD bool runInstrumented(const clang::driver::Command& job, std::string& error)
             {
+                bool succeeded = false;
+                if (!runOnClangStack([&] { succeeded = runInstrumentedOnThisThread(job, error); }))
+                    error = "compilation crashed";
+                return succeeded;
+            }
+
+            CompileResult runSingle(const clang::driver::Command& job,
+                                    bool includeDriverDiags = true)
+            {
+                CompileResult result;
+                if (!runOnClangStack([&]
+                                     { result = runSingleOnThisThread(job, includeDriverDiags); }))
+                    return {false, "compilation crashed", {}};
+                return result;
+            }
+
+          private:
+            CT_NODISCARD bool runInstrumentedOnThisThread(const clang::driver::Command& job,
+                                                          std::string& error)
+            {
                 const llvm::opt::ArgStringList& ccArgs = job.getArguments();
                 auto ci = makeCompilerInstance(ccArgs);
                 if (!ci)
@@ -725,17 +745,6 @@ namespace compilerlib
                 return runCodegenWithModule<InstrumentedCodegenAction>(*ci, handleModule, error);
             }
 
-            CompileResult runSingle(const clang::driver::Command& job,
-                                    bool includeDriverDiags = true)
-            {
-                CompileResult result;
-                if (!runOnClangStack([&]
-                                     { result = runSingleOnThisThread(job, includeDriverDiags); }))
-                    return {false, "compilation crashed", {}};
-                return result;
-            }
-
-          private:
             CompileResult runSingleOnThisThread(const clang::driver::Command& job,
                                                 bool includeDriverDiags)
             {

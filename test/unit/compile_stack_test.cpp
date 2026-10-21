@@ -140,4 +140,13 @@ int depth()
                                                 compilerlib::OutputMode::ToMemory, false),
                     ::testing::ExitedWithCode(0), "");
     }
+
+    // Instrumented, to a file (Cc1Runner::runInstrumented).
+    TEST_F(CompileStackTest, InstrumentedCompilationOnASmallStack)
+    {
+        const std::string source = writeSource("deep.cpp", kDeepTemplate);
+        EXPECT_EXIT(compileOnASmallStackAndExit({"-std=c++17", "-c", source, "-o", path("deep.o")},
+                                                compilerlib::OutputMode::ToFile, true),
+                    ::testing::ExitedWithCode(0), "");
+    }
 } // namespace
