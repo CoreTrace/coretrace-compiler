@@ -18,6 +18,7 @@
 
 #include <clang/Frontend/FrontendActions.h>
 #include <clang/Basic/DiagnosticFrontend.h>
+#include <clang/Basic/Stack.h>
 #include <clang/Driver/Compilation.h>
 #include <clang/Driver/Driver.h>
 #include <mutex>
@@ -37,6 +38,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/MC/TargetRegistry.h>
+#include <llvm/Support/CrashRecoveryContext.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/FileUtilities.h>
 #include <llvm/Support/MemoryBuffer.h>
@@ -55,6 +57,10 @@
 #include <iostream>
 #include <memory>
 #include <type_traits>
+
+#ifndef _WIN32
+#include <signal.h>
+#endif
 
 namespace compilerlib
 {
@@ -425,7 +431,8 @@ namespace compilerlib
 
         // -ftime-trace for one -cc1 job, as cc1_main runs it: the profiler of this thread
         // records the job, and finish(), or the destructor, writes the trace whether the job
-        // succeeded or not. A host that already profiles this thread keeps its profiler.
+        // succeeded or not. A profiler already running on this thread is kept. Jobs run on a
+        // thread of their own (runOnClangStack), so a host's profiler does not record them.
         class Cc1TimeTrace
         {
           public:
@@ -469,6 +476,59 @@ namespace compilerlib
             clang::CompilerInstance& ci_;
             std::string file_;
         };
+
+#ifndef _WIN32
+        // LLVM installs its signal handlers once per process, and an alternate signal stack of
+        // its own on the thread that installs them: a job's thread, when its job is the first to
+        // write a file. That thread ends with the alternate stack it started with, since the
+        // sanitizers release the one of an ending thread as theirs, and abort on LLVM's.
+        class AlternateSignalStackScope
+        {
+          public:
+            AlternateSignalStackScope()
+            {
+                (void)sigaltstack(nullptr, &saved_);
+            }
+
+            AlternateSignalStackScope(const AlternateSignalStackScope&) = delete;
+            AlternateSignalStackScope& operator=(const AlternateSignalStackScope&) = delete;
+
+            ~AlternateSignalStackScope()
+            {
+                stack_t current{};
+                if (sigaltstack(nullptr, &current) != 0 || current.ss_sp == saved_.ss_sp)
+                    return;
+                // Darwin wants a size of at least MINSIGSTKSZ, even to disable the stack.
+                if (saved_.ss_flags & SS_DISABLE)
+                    saved_.ss_size = MINSIGSTKSZ;
+                (void)sigaltstack(&saved_, nullptr);
+            }
+
+          private:
+            stack_t saved_{};
+        };
+#endif
+
+        // Runs a -cc1 job on a thread with the stack Clang expects, clang::DesiredStackSize
+        // (#204): the host's thread may have far less, 512 KiB for a secondary thread on macOS,
+        // which deep template instantiation overflows. Clang moves deeper recursion to a fresh
+        // stack once this one runs low (clang::runWithSufficientStackSpace), measured from the
+        // bottom noted here. Returns false only when the host enabled crash recovery and a
+        // crash in the job was recovered.
+        CT_NODISCARD bool runOnClangStack(llvm::function_ref<void()> job)
+        {
+            llvm::CrashRecoveryContext context;
+            return context.RunSafelyOnThread(
+                [&]
+                {
+                    clang::noteBottomOfStack();
+#ifndef _WIN32
+                    AlternateSignalStackScope signalStack;
+#endif
+                    job();
+                },
+                static_cast<unsigned>(clang::DesiredStackSize));
+        }
 
         // The compilation whose driver is executing its jobs on this thread, for runCc1:
         // Driver::CC1Main takes a plain function before LLVM 17, so it cannot carry it.
@@ -669,6 +729,17 @@ namespace compilerlib
                                     bool includeDriverDiags = true)
             {
                 CompileResult result;
+                if (!runOnClangStack([&]
+                                     { result = runSingleOnThisThread(job, includeDriverDiags); }))
+                    return {false, "compilation crashed", {}};
+                return result;
+            }
+
+          private:
+            CompileResult runSingleOnThisThread(const clang::driver::Command& job,
+                                                bool includeDriverDiags)
+            {
+                CompileResult result;
                 result.success = false;
                 result.diagnostics = {};
                 result.llvmIR = {};
@@ -823,7 +894,6 @@ namespace compilerlib
                 return result;
             }
 
-          private:
             void resetDiagnostics(void)
             {
                 ctx_.dc.message.clear();
