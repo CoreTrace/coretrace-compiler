@@ -240,4 +240,50 @@ int depth()
         EXPECT_EXIT(checkDiagnosticsAndExit(warns, fails, path("")), ::testing::ExitedWithCode(0),
                     "");
     }
+
+    // Several hosts' threads compile at once, each on a small stack: every compilation succeeds,
+    // with its own diagnostics only.
+    void compileAtOnceAndExit(const std::vector<std::string>& sources)
+    {
+        std::vector<Compilation> jobs;
+        for (size_t i = 0; i < sources.size(); ++i)
+        {
+            jobs.push_back({{"-std=c++17", "-S", "-emit-llvm", sources[i]},
+                            compilerlib::OutputMode::ToMemory,
+                            i % 2 == 1,
+                            {}});
+        }
+        compileOnSmallStacks(jobs);
+        int wrong = 0;
+        for (size_t i = 0; i < jobs.size(); ++i)
+        {
+            const std::string own = "unit " + std::to_string(i) + " ";
+            bool others = false;
+            for (size_t j = 0; j < jobs.size(); ++j)
+            {
+                others = others ||
+                         (j != i && jobs[i].result.diagnostics.find("unit " + std::to_string(j) +
+                                                                    " ") != std::string::npos);
+            }
+            if (!jobs[i].result.success ||
+                jobs[i].result.diagnostics.find(own) == std::string::npos || others)
+            {
+                std::fprintf(stderr, "job %zu:\n%s\n", i, jobs[i].result.diagnostics.c_str());
+                ++wrong;
+            }
+        }
+        std::_Exit(wrong == 0 ? 0 : 1);
+    }
+
+    TEST_F(CompileStackTest, CompilationsAtOnceOnSmallStacks)
+    {
+        std::vector<std::string> sources;
+        for (int i = 0; i < 8; ++i)
+        {
+            sources.push_back(writeSource("unit" + std::to_string(i) + ".cpp",
+                                          std::string(kDeepTemplate) + "#warning \"unit " +
+                                              std::to_string(i) + " \"\n"));
+        }
+        EXPECT_EXIT(compileAtOnceAndExit(sources), ::testing::ExitedWithCode(0), "");
+    }
 } // namespace
