@@ -5,7 +5,6 @@
 #include <atomic>
 #include <cstdlib>
 #include <iterator>
-#include <mutex>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -61,8 +60,8 @@ namespace
         // Never wait for DbgHelp here: the faulting thread may be the one holding its lock,
         // and waiting would hang the process instead of letting it die. Without the lock,
         // frames are printed as bare addresses.
-        std::unique_lock<std::mutex> dbghelp(ct_dbghelp_mutex(), std::try_to_lock);
-        if (dbghelp.owns_lock())
+        CtDbgHelpLock dbghelp(0);
+        if (dbghelp.owns())
         {
             ct_dbghelp_initialize_locked();
         }
@@ -73,7 +72,7 @@ namespace
         HANDLE process = GetCurrentProcess();
         for (USHORT index = 0; index < count; ++index)
         {
-            ct_write_stack_frame(process, frames[index], dbghelp.owns_lock());
+            ct_write_stack_frame(process, frames[index], dbghelp.owns());
         }
 
         return EXCEPTION_EXECUTE_HANDLER;
@@ -95,8 +94,11 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
 
     {
         // Symbols are loaded now rather than in the filter, where the heap may be corrupt.
-        std::lock_guard<std::mutex> dbghelp(ct_dbghelp_mutex());
-        ct_dbghelp_initialize_locked();
+        CtDbgHelpLock dbghelp(CtDbgHelpLock::kLookupWait);
+        if (dbghelp.owns())
+        {
+            ct_dbghelp_initialize_locked();
+        }
     }
     SetUnhandledExceptionFilter(ct_exception_filter);
 

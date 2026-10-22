@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
-#include <mutex>
 #include <new>
 #include <string>
 #include <typeinfo>
@@ -310,9 +309,13 @@ namespace
         symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
         symbol->MaxNameLen = MAX_SYM_NAME;
 
-        // Without current modules, nothing is named rather than a name that may belong to a DLL
-        // unloaded since.
-        std::lock_guard<std::mutex> dbghelp(ct_dbghelp_mutex());
+        // Without DbgHelp or current modules, nothing is named rather than a name that may
+        // belong to a DLL unloaded since.
+        CtDbgHelpLock dbghelp(CtDbgHelpLock::kLookupWait);
+        if (!dbghelp.owns())
+        {
+            return false;
+        }
         ct_dbghelp_initialize_locked();
         HANDLE process = GetCurrentProcess();
         if (!ct_dbghelp_sync_modules_locked(process))
