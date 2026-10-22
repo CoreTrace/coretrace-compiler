@@ -246,4 +246,21 @@ namespace
 #endif
         EXPECT_FALSE(cache.demangle("main", out));
     }
+
+#if defined(_WIN32)
+    // With the demangler of the Windows vtable boxes, while the program holds DbgHelp's lock,
+    // then once it has released it.
+    TEST(DemangleCache, DecodesAgainANameOnceDbgHelpIsFree)
+    {
+        CtDemangleCache cache(ct_demangle_outcome);
+        std::string out;
+        {
+            CtDbgHelpLock held(INFINITE);
+            ASSERT_TRUE(held.owns());
+            EXPECT_FALSE(cache.demangle("?compute@@YAHH@Z", out));
+        }
+        ASSERT_TRUE(cache.demangle("?compute@@YAHH@Z", out));
+        EXPECT_NE(out.find("compute(int)"), std::string::npos) << out;
+    }
+#endif
 } // namespace
