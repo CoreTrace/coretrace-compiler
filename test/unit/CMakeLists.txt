@@ -89,6 +89,15 @@ if(TARGET ct_instrument_runtime)
         CT_RELOAD_LIBRARY_B="$<TARGET_FILE:ct_reload_b>")
       add_dependencies(runtime_fork_modules_tests ct_reload_a ct_reload_b)
     endif()
+    if(TARGET ct_instrument_runtime_asan)
+      # A global object's destructor that names a call, with the runtime that AddressSanitizer
+      # instruments: a read of an object of the runtime destroyed before it fails (#206).
+      add_executable(runtime_exit_trace_check runtime_exit_trace_check.cpp)
+      target_include_directories(runtime_exit_trace_check PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+      target_link_libraries(runtime_exit_trace_check PRIVATE ct_instrument_runtime_asan
+        coretrace_logger ${CMAKE_DL_LIBS})
+      add_test(NAME RuntimeExitTrace COMMAND runtime_exit_trace_check)
+    endif()
     # The allocation table filled up, in a process apart from the other runtime tests.
     add_executable(runtime_table_full_tests runtime_table_full_test.cpp)
     target_include_directories(runtime_table_full_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
