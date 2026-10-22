@@ -12,10 +12,35 @@ From v0.8.0 on, each release also has detailed notes on the
 [releases page](https://github.com/CoreTrace/coretrace-compiler/releases), citing every
 pull request.
 
-## Unreleased
+## v0.12.0 (2026-10-22)
+
+Release traces name the kind and the allocation site of each block, and the Windows runtime
+traces allocation events as the POSIX runtime does. compilerlib runs each `-cc1` job on a
+thread with the 8 MiB stack Clang expects, so that a host can compile from a thread with a
+small stack. Instrumented compilations print Clang's diagnostics, honour `-Rpass`,
+`-ftime-trace` and warning options, and reject `-flto`. The leak report runs after the
+exit-time code of shared libraries and DLLs, the runtime writes each trace line and box in one
+system call, and allocations no longer slow down once the allocation table has been full.
+
+The public interfaces do not change: the compilerlib headers, the C entry point, the `cc`
+options and the runtime ABI are those of 0.11.1. Objects instrumented by 0.11.1 link with the
+0.12.0 runtime, and the other way round; the traces then depend on the runtime only, so the
+0.11.1 runtime names neither the kind nor the site of a release.
+
+### Features
+
+- **Kind and site of a release.** The trace of a release names the kind and the allocation
+  site of its block on every system, as the Windows runtime did:
+  `tracing-free ptr=... size=16 kind=malloc alloc_site=...` (#195, #188).
 
 ### Behaviour changes
 
+- **Allocation traces on Windows.** The Windows runtime traces allocation events in the words
+  of the POSIX runtime: the `tracing-malloc` boxes and the other allocation boxes,
+  `tracing-free`, `tracing-delete` and `tracing-delete-array`, `(double free)`, one
+  `tracing-realloc` box per resize instead of an allocation and a release, and the auto-free
+  lines, instead of `ct: alloc`, `ct: free` and `ct: free skipped ... (already freed)`. Its
+  boxes have ASCII corners, as its other boxes do (#195, #188).
 - **Instrumented LTO is rejected.** `--instrument` with `-flto` or `-flto=<mode>` fails with
   an error instead of writing bitcode without its summary, whose link-time optimization would
   run again on the instrumented code, untested. `-fno-lto` after them is accepted, and plain
@@ -25,7 +50,7 @@ pull request.
 - **An empty `NO_COLOR`** no longer turns off the colors of the trace; a non-empty value still
   does, as no-color.org specifies (coretrace-log v1.1.1, #215).
 - **A host's time-trace profiler no longer records the compilation.** Each `-cc1` job runs on a
-  thread of its own (#204), so the profiler a host runs on its own thread, started with
+  thread of its own (#218, #204), so the profiler a host runs on its own thread, started with
   `llvm::timeTraceProfilerInitialize`, does not record it. With `-ftime-trace`, the job writes
   its own trace file, where it was recorded by that profiler and wrote no file before.
 
@@ -43,7 +68,6 @@ pull request.
   which links with zlib and zstd and does not ship them. Installed for the static C runtime,
   for example by vcpkg with the `x64-windows-static` triplet, they are found through
   `CMAKE_PREFIX_PATH` (#173, #149).
-
 - **Leak report after the exit-time code of shared libraries.** Blocks that a shared library
   releases at exit, from a global object's destructor or a destructor function, are no longer
   reported as leaks, on Linux (#174) and macOS (#176) (#158).
@@ -67,7 +91,7 @@ pull request.
 - **`-gcolumn-info` without `-g`.** An instrumented compilation given only options that change
   debug information, such as `-gcolumn-info` or `-gsplit-dwarf`, or given `-ggdb0`, had no debug
   information: every site was `<unknown>`. These options no longer stop the compiler from adding
-  `-gline-tables-only` (#189).
+  `-gline-tables-only` (#190, #189).
 - **Unreachable allocations on Windows.** An allocation whose result the program never uses
   is reported as unreachable, `tracing-malloc-unreachable` or `tracing-new-unreachable` for
   instance, with its box, as on Linux and macOS; it was logged as any other. With
@@ -103,19 +127,19 @@ pull request.
 
   At its largest, the table takes 80 MiB instead of 40 MiB, and a rebuild holds two tables for
   a moment: 120 MiB when the table grows to 2^21 slots, 160 MiB when it is rebuilt at that size
-  (#214).
+  (#217, #214).
 - **A block freed twice while in the quarantine, once the allocation table was full.** A freed
   record gave way to a new block while its block stayed in the quarantine. A second release of
   that block by the program was then not reported but passed to the allocator, and the
   quarantine released the block again later, which made the allocator abort on macOS. Every
   block in the quarantine now keeps its freed record; one taken out to make room is released at
-  once (#214).
+  once (#217, #214).
 - **Compilations from a thread with a small stack.** `compilerlib::compile` ran Clang on the
   calling thread, whose stack can be far smaller than the 8 MiB Clang expects: 512 KiB for a
   secondary thread on macOS. Deep template instantiation overflowed it and killed the host,
   with `SIGBUS` on macOS. Each `-cc1` job now runs on a thread of its own with that stack, in
   every output mode, instrumented or not, and Clang moves deeper recursion to a fresh stack
-  when it runs low (#204).
+  when it runs low (#218, #204).
 
 ### Performance
 
@@ -140,7 +164,7 @@ pull request.
   the allocation table before it grew, so that allocations probed longer and longer runs of
   slots. On macOS, `bench/alloc_churn.c` built with `--ct-modules=alloc --ct-no-alloc-trace`
   runs in 0.08 to 0.34 s instead of 0.67 to 1.27 s with the default quarantine; without the
-  quarantine, it runs in 0.03 s before and after (#214).
+  quarantine, it runs in 0.03 s before and after (#217, #214).
 
 ### Tests and CI
 
@@ -158,8 +182,45 @@ pull request.
   `bench/`, for several sets of modules, with `scripts/bench/overhead.py` (#184, #103).
 - The Windows jobs run the runtime and autofree fixture suites under Git Bash, at `-O0` and
   `-O2`, with column information in the sites. They skip the fixtures that need POSIX
-  (pthreads, `fork`, `dlfcn.h`, `unistd.h`, `mmap`, `posix_memalign`, `aligned_alloc`) and those
-  of #188, and expect the leak report failure of #187 (#186, #103).
+  (pthreads, `fork`, `dlfcn.h`, `unistd.h`, `mmap`, `posix_memalign`, `aligned_alloc`) (#186,
+  #103). The fixtures of #188 run there since #195, and the leak report fixture of #187 passes
+  since #200. The runtime runner gives the fixtures `-gcolumn-info` alone, which checks #190 on
+  every run, and `ct_autofree_local.c` runs on Windows too (#191).
+- Windows counterparts of two POSIX fixtures: eight threads created with `CreateThread`
+  allocate, resize and release blocks, and a virtual call whose target comes from
+  `kernel32.dll` is reported as a module mismatch by the vtable diagnostics (#194, #103).
+- A smoke test checks the words of the allocation traces on every system, and the double free
+  fixtures run on Windows (#195).
+- `RUN_TIMEOUT_SECONDS` sets the time limit of each fixture run, 60 seconds by default. The
+  coverage job (#180) and the fixture runs of the Docker image (#202) allow 300 seconds, as
+  `ct_threads_stress.c` ran past 60 under coverage counters and under QEMU.
+- The fork test of the demangle cache keeps its lock holder alive until `fork()` returns. Under
+  ThreadSanitizer, it failed about one run in ten, when the child inherited a thread that had
+  ended without being joined (#212).
+- Unit tests compile from threads with a 512 KiB stack, each in the subprocess of a death test:
+  in memory, to a file and instrumented, several at once, with their diagnostics and failures,
+  and a crash that the host recovers (#218).
+
+### Documentation
+
+- The README states that `--instrument` rejects `-flto` (#170), that `-ftime-trace` writes its
+  file, and how instrumented compilations print their diagnostics, which
+  `CompileResult::diagnostics` holds (#172, #175).
+- It says what the LLVM 23 Windows archive needs (#173), which options request debug
+  information (#190), and which exit-time code the leak report runs after on each system
+  (#174, #176, #200).
+- It describes the coverage report, the ThreadSanitizer job, the overhead benchmarks and the
+  fixtures that run on Windows (#177, #181, #184, #186).
+- It notes that each `-cc1` job runs on a thread of its own, and what that means for a host's
+  time-trace profiler and for `-ftime-trace` (#218).
+
+### Known issues
+
+- On Linux x86_64, a child of `fork()` can hang while other threads of its parent make virtual
+  calls with the vtable diagnostics (`--ct-modules=alloc,vtable --ct-vtable-diag`) (#206).
+- On macOS, a child of `fork()` hangs when Objective-C objects are tracked (#207).
+- On Windows, the box of a virtual call can name its target with a function of a DLL that has
+  been unloaded, once another DLL is loaded at the same address (#208).
 
 ## v0.11.1 (2026-10-07)
 
