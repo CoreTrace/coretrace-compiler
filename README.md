@@ -243,8 +243,10 @@ runtime as follows:
   runtime does not initialize, clean up or change the modules of the session on
   `GetCurrentProcess()`: the program's session keeps its modules and search path. The copy in a
   DLL closes its session and its handle of the lock below when the DLL unloads, after the
-  destructors of the DLL's global objects; the executable's copy keeps them until the process
-  ends.
+  destructors of the DLL's global objects. When another thread still holds that lock after the
+  500 ms wait, the session and its handle of the process stay open instead: closing the session
+  needs the lock, and waiting longer could deadlock with a thread that waits for the loader
+  lock, which `FreeLibrary` holds. The executable's copy keeps them until the process ends.
 - **Options.** DbgHelp's options are the process's. The runtime adds `SYMOPT_DEFERRED_LOADS`,
   `SYMOPT_LOAD_LINES` and `SYMOPT_UNDNAME` to those the program set, and removes none.
 - **Lock.** DbgHelp is single-threaded for the whole process, whatever the session. Every copy of
