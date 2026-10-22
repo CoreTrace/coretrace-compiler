@@ -145,6 +145,7 @@ namespace
 
         std::lock_guard<std::mutex> dbghelp(ct_dbghelp_mutex());
         ct_dbghelp_initialize_locked();
+        ct_dbghelp_sync_module_locked(addr);
         DWORD64 displacement = 0;
         if (SymFromAddr(GetCurrentProcess(), reinterpret_cast<DWORD64>(addr), &displacement,
                         symbol) == FALSE)
