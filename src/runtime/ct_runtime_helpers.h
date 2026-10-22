@@ -4,6 +4,15 @@
 #include <cstddef>
 #include <string>
 
+// What a demangler made of a name: decoded, not a name it decodes, or nothing for now, as when it
+// did not get a lock in time; a cache of names keeps the first two only.
+enum class CtDemangleOutcome
+{
+    Decoded,
+    NotDecodable,
+    Unavailable,
+};
+
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -122,7 +131,8 @@ inline HANDLE ct_dbghelp_session_locked()
     return process;
 }
 
-inline bool ct_demangle(const char* name, std::string& out)
+// UnDecorateSymbolName, with the DbgHelp lock: Unavailable when the lock was not free in time.
+inline CtDemangleOutcome ct_demangle_outcome(const char* name, std::string& out)
 {
     // UnDecorateSymbolName returns an undecorated name, such as a C function's, unchanged
     // and reports success, which would present it as decoded. Microsoft C++ names start
@@ -130,19 +140,28 @@ inline bool ct_demangle(const char* name, std::string& out)
     // with ".?".
     if (!name || (name[0] != '?' && !(name[0] == '.' && name[1] == '?')))
     {
-        return false;
+        return CtDemangleOutcome::NotDecodable;
     }
 
     char buffer[1024];
     CtDbgHelpLock dbghelp(CtDbgHelpLock::kLookupWait);
-    if (!dbghelp.owns() || UnDecorateSymbolName(name, buffer, static_cast<DWORD>(sizeof(buffer)),
-                                                UNDNAME_COMPLETE) == 0)
+    if (!dbghelp.owns())
     {
-        return false;
+        return CtDemangleOutcome::Unavailable;
+    }
+    if (UnDecorateSymbolName(name, buffer, static_cast<DWORD>(sizeof(buffer)), UNDNAME_COMPLETE) ==
+        0)
+    {
+        return CtDemangleOutcome::NotDecodable;
     }
 
     out.assign(buffer);
-    return true;
+    return CtDemangleOutcome::Decoded;
+}
+
+inline bool ct_demangle(const char* name, std::string& out)
+{
+    return ct_demangle_outcome(name, out) == CtDemangleOutcome::Decoded;
 }
 #else
 #include <cstdlib>

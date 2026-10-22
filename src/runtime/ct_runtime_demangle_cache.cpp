@@ -49,6 +49,11 @@ CT_NOINSTR void ct_demangle_cache_lock_release(void)
 
 CT_NOINSTR CtDemangleCache::CtDemangleCache(Demangler demangler) : demangler_(demangler) {}
 
+CT_NOINSTR CtDemangleCache::CtDemangleCache(OutcomeDemangler demangler)
+    : outcome_demangler_(demangler)
+{
+}
+
 CT_NODISCARD CT_NOINSTR bool CtDemangleCache::demangle(const char* name, std::string& out)
 {
     if (!name)
@@ -72,7 +77,15 @@ CT_NODISCARD CT_NOINSTR bool CtDemangleCache::demangle(const char* name, std::st
 
     // Decoded without the lock, which the demangler may take long to give back.
     Result result{false, {}};
-    const bool decoded = demangler_(name, result.text);
+    const CtDemangleOutcome outcome = outcome_demangler_ ? outcome_demangler_(name, result.text)
+                                      : demangler_(name, result.text)
+                                          ? CtDemangleOutcome::Decoded
+                                          : CtDemangleOutcome::NotDecodable;
+    if (outcome == CtDemangleOutcome::Unavailable)
+    {
+        return false;
+    }
+    const bool decoded = outcome == CtDemangleOutcome::Decoded;
     result.decoded = decoded;
     if (decoded)
     {

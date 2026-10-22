@@ -480,7 +480,7 @@ namespace
     CT_NODISCARD CT_NOINSTR CtDemangleCache& ct_name_cache()
     {
         alignas(CtDemangleCache) static unsigned char storage[sizeof(CtDemangleCache)];
-        static CtDemangleCache* const cache = new (storage) CtDemangleCache(ct_demangle);
+        static CtDemangleCache* const cache = new (storage) CtDemangleCache(ct_demangle_outcome);
         return *cache;
     }
 

@@ -6,11 +6,13 @@
 //
 // A name is looked up by its text, not by its address: a library unloaded and another loaded
 // in its place may put another name at the same address, which then gets its own result.
-// The cache holds at most kMaxEntries names; past that, a new name is decoded every time.
+// The cache holds at most kMaxEntries names; past that, a new name is decoded every time. A name
+// its demangler could not decode for now is not kept, and is decoded again next time (#208).
 // Safe for concurrent use: every cache shares one lock, which fork() also takes.
 #ifndef CT_RUNTIME_DEMANGLE_CACHE_H
 #define CT_RUNTIME_DEMANGLE_CACHE_H
 
+#include "ct_runtime_helpers.h"
 #include "ct_runtime_internal.h"
 
 #include <cstddef>
@@ -23,9 +25,12 @@ class CtDemangleCache
 {
   public:
     using Demangler = bool (*)(const char* name, std::string& out);
+    // A demangler that can also find itself unable to decode a name for now.
+    using OutcomeDemangler = CtDemangleOutcome (*)(const char* name, std::string& out);
     static constexpr size_t kMaxEntries = 4096;
 
     CT_NOINSTR explicit CtDemangleCache(Demangler demangler);
+    CT_NOINSTR explicit CtDemangleCache(OutcomeDemangler demangler);
 
     // As demangler(name, out): true, with the decoded name in `out`, or false, `out` left as
     // it was.
@@ -48,7 +53,9 @@ class CtDemangleCache
         std::string text;
     };
 
-    Demangler demangler_;
+    // One of the two is set.
+    Demangler demangler_ = nullptr;
+    OutcomeDemangler outcome_demangler_ = nullptr;
     std::unordered_map<std::string, Result, Hash, std::equal_to<>> names_;
 };
 
