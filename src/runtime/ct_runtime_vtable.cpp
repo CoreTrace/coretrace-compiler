@@ -502,6 +502,15 @@ namespace
     }
 #endif
 
+    // A function-local static is initialized under a guard, which a child of fork() inherits in
+    // progress when another thread of the parent was initializing it, and then waits for
+    // forever (#206). Those that the boxes need are initialized when the program starts.
+    CT_NOINSTR __attribute__((constructor)) void ct_vtable_initialize_statics()
+    {
+        (void)ct_executable_path();
+        (void)ct_name_cache();
+    }
+
     CT_NODISCARD CT_NOINSTR bool ct_resolve_module(const void* addr, CtModuleInfo& out)
     {
         if (!addr)
