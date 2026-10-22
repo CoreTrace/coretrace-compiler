@@ -318,6 +318,42 @@ namespace
             << boxes;
     }
 
+    // A DLL that links the runtime releases, when it unloads, what its copy opened for DbgHelp:
+    // its handle of the lock, its session and the session's handles. Loaded, made to name a call
+    // or only to name one from its destructors, and unloaded many times, it leaves the process no
+    // more handles than after the first times.
+    TEST(VtableReplace, ADllThatLinksTheRuntimeReleasesItsDbgHelpStateWhenUnloaded)
+    {
+        const auto cycle = [](bool trace)
+        {
+            HMODULE runtime = LoadLibraryA(CT_RUNTIME_LIBRARY);
+            FARPROC entry = runtime ? GetProcAddress(runtime, "ct_runtime_library_trace") : nullptr;
+            if (entry && trace)
+            {
+                reinterpret_cast<void (*)()>(entry)();
+            }
+            if (runtime)
+            {
+                FreeLibrary(runtime);
+            }
+            return entry != nullptr;
+        };
+        ASSERT_TRUE(cycle(true)) << CT_RUNTIME_LIBRARY;
+        ASSERT_TRUE(cycle(false));
+        DWORD before = 0;
+        ASSERT_TRUE(GetProcessHandleCount(GetCurrentProcess(), &before));
+        constexpr int kCycles = 20;
+        for (int index = 0; index < kCycles; ++index)
+        {
+            ASSERT_TRUE(cycle(index % 2 == 0));
+        }
+        DWORD after = 0;
+        ASSERT_TRUE(GetProcessHandleCount(GetCurrentProcess(), &after));
+        // Kept, they would add two handles a cycle at least: the lock's and the session's.
+        EXPECT_LT(after, before + kCycles)
+            << "handles before the cycles: " << before << ", after: " << after;
+    }
+
     // Loads a DLL that links the runtime, has its copy name a call or not, and unloads it, when
     // its destructors name one; then loads and unloads another DLL. Exits with 0 when the
     // destructors' box named the DLL's function, or nothing, and the loader did not call into the
