@@ -5,7 +5,8 @@
 // reproducible builds give, must not keep the first one's names (#208): two builds of one
 // library, their time stamps set to zero, are copied in turn to one path and loaded from there.
 // The libraries are built from reload/ct_reload_library.cpp. A DLL loaded after DbgHelp listed
-// the modules must be named too, after many unloads as well.
+// the modules must be named too, after many unloads as well. The runtime uses DbgHelp in a session
+// of its own.
 #include <gtest/gtest.h>
 
 #include <cstddef>
@@ -17,6 +18,9 @@
 #include <vector>
 
 #include <windows.h>
+#include <dbghelp.h>
+
+#pragma comment(lib, "Dbghelp.lib")
 
 extern "C"
 {
@@ -155,5 +159,48 @@ namespace
         EXPECT_NE(before.find("reload_a::describe"), std::string::npos) << before;
         EXPECT_NE(after.find("reload_b::describe"), std::string::npos) << after;
         EXPECT_EQ(after.find("reload_a"), std::string::npos) << after;
+    }
+
+    // A program that uses DbgHelp itself, on GetCurrentProcess() as most do, keeps its session,
+    // with a module the loader does not know, while the runtime lists, drops and lists again the
+    // modules of its own.
+    TEST(VtableReplace, AProgramsOwnDbgHelpSessionKeepsItsModules)
+    {
+        HANDLE program = GetCurrentProcess();
+        constexpr DWORD64 kBase = 0x10000000;
+        constexpr DWORD64 kSymbol = kBase + 0x100;
+        ASSERT_TRUE(SymInitialize(program, nullptr, FALSE)) << GetLastError();
+        ASSERT_NE(SymLoadModuleExW(program, nullptr, L"ct_program_module", nullptr, kBase, 0x1000,
+                                   nullptr, SLMFLAG_VIRTUAL),
+                  0u)
+            << GetLastError();
+        ASSERT_TRUE(SymAddSymbolW(program, kBase, L"ct_program_symbol", kSymbol, 0x10, 0))
+            << GetLastError();
+
+        const fs::path path = fs::path(testing::TempDir()) / "ct_program_session.dll";
+        std::string boxes;
+        for (const char* source : {CT_RELOAD_LIBRARY_A, CT_RELOAD_LIBRARY_B})
+        {
+            ASSERT_TRUE(copyWithoutTimeStamp(source, path)) << path;
+            HMODULE library = LoadLibraryW(path.c_str());
+            ASSERT_NE(library, nullptr) << path;
+            boxes += traceACall(library, "replace:6");
+            FreeLibrary(library);
+        }
+
+        char buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
+        auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+        symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        symbol->MaxNameLen = MAX_SYM_NAME;
+        DWORD64 displacement = 0;
+        const bool found = SymFromAddr(program, kSymbol, &displacement, symbol) != FALSE;
+        const std::string name = found ? symbol->Name : "";
+        SymCleanup(program);
+        std::error_code ignored;
+        fs::remove(path, ignored);
+
+        EXPECT_EQ(name, "ct_program_symbol");
+        EXPECT_NE(boxes.find("reload_a::describe"), std::string::npos) << boxes;
+        EXPECT_NE(boxes.find("reload_b::describe"), std::string::npos) << boxes;
     }
 } // namespace
