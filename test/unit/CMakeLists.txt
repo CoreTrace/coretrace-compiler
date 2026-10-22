@@ -91,6 +91,10 @@ if(TARGET ct_instrument_runtime)
     target_link_libraries(runtime_log_fallback_tests PRIVATE ct_instrument_runtime coretrace_logger
       GTest::gtest_main)
   endif()
+  if(WIN32)
+    # A DLL replaced at its path by another build with the same time stamp (#208).
+    target_sources(runtime_unit_tests PRIVATE runtime_vtable_replace_test.cpp)
+  endif()
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
     target_sources(runtime_unit_tests PRIVATE runtime_objc_test.cpp)
