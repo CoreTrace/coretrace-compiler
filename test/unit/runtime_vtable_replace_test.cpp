@@ -69,12 +69,19 @@ namespace
         const Build builds[] = {{CT_RELOAD_LIBRARY_A, "reload_a", "reload_b"},
                                 {CT_RELOAD_LIBRARY_B, "reload_b", "reload_a"},
                                 {CT_RELOAD_LIBRARY_A, "reload_a", "reload_b"}};
+        HMODULE first = nullptr;
         for (const Build& build : builds)
         {
             SCOPED_TRACE(build.name);
             ASSERT_TRUE(copyWithoutTimeStamp(build.source, path)) << path;
             HMODULE library = LoadLibraryW(path.c_str());
             ASSERT_NE(library, nullptr) << path;
+            // Each build at the base of the first, by which DbgHelp lists the modules.
+            if (!first)
+            {
+                first = library;
+            }
+            EXPECT_EQ(library, first);
             void* object = callEntry(library, "ct_reload_object");
             void* target = callEntry(library, "ct_reload_target");
 
