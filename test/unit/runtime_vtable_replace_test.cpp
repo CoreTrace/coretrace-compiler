@@ -8,7 +8,8 @@
 // the modules must be named too, after many unloads as well. The runtime uses DbgHelp in a session
 // of its own and under the DbgHelp lock of the process, which every copy of it takes, the copy in
 // a DLL built from reload/ct_runtime_library.cpp included; that copy watches the loader until it
-// unloads.
+// unloads. A lookup made under the loader lock, from reload/ct_dllmain_library.cpp, waits for no
+// one forever.
 #include <gtest/gtest.h>
 
 #include <cstddef>
@@ -375,5 +376,89 @@ namespace
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         EXPECT_EXIT(unloadARuntimeLibraryThenLoadAnother(false), testing::ExitedWithCode(0), "");
+    }
+
+    // The program's side of reload/ct_dllmain_library.cpp, whose constructor calls the hook
+    // below with the loader lock held.
+    HANDLE constructor_running = nullptr;
+    ULONGLONG constructor_wait = 0;
+    // A lookup that does not get DbgHelp waits 500 ms for it before it names nothing.
+    constexpr ULONGLONG kWaitedInVain = 400;
+} // namespace
+
+// Lets another thread name a call, which finds a module loaded since it last named one, then
+// names a call itself.
+extern "C" __declspec(dllexport) void ct_test_constructor_hook(void* object, void* target)
+{
+    SetEvent(constructor_running);
+    Sleep(300);
+    const ULONGLONG start = GetTickCount64();
+    __ct_vcall_trace(object, target, "dllmain:1", "<unknown>");
+    constructor_wait = GetTickCount64() - start;
+}
+
+namespace
+{
+    // A thread names a call while another one, in a DLL's constructor, holds the loader lock and
+    // then names one too. Exits with 0 when the constructor's box names the DLL's function, 10
+    // when it names nothing after waiting for DbgHelp in vain, 11 when it names nothing without
+    // having waited; 6 when the box names another function or is missing, 5 when the calls have
+    // not ended within 20 seconds.
+    [[noreturn]] void nameCallsWhileAConstructorHoldsTheLoaderLock()
+    {
+        constructor_running = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        HMODULE named = LoadLibraryA(CT_RELOAD_LIBRARY_A);
+        if (!constructor_running || !named)
+        {
+            std::exit(2);
+        }
+        void* object = callEntry(named, "ct_reload_object");
+        void* target = callEntry(named, "ct_reload_target");
+        // The session has started and listed the modules before the constructor runs.
+        __ct_vcall_trace(object, target, "dllmain:0", "<unknown>");
+
+        testing::internal::CaptureStderr();
+        HANDLE ended = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        std::thread other(
+            [&]
+            {
+                WaitForSingleObject(constructor_running, INFINITE);
+                __ct_vcall_trace(object, target, "dllmain:2", "<unknown>");
+            });
+        std::thread loader(
+            [&]
+            {
+                HMODULE library = LoadLibraryA(CT_DLLMAIN_LIBRARY);
+                if (library)
+                {
+                    FreeLibrary(library);
+                }
+                SetEvent(constructor_running);
+                SetEvent(ended);
+            });
+        if (WaitForSingleObject(ended, 20000) != WAIT_OBJECT_0)
+        {
+            TerminateProcess(GetCurrentProcess(), 5);
+        }
+        loader.join();
+        other.join();
+        const std::string symbol = symbolOf(testing::internal::GetCapturedStderr(), "dllmain:1");
+        if (names(symbol, "ct_dllmain_measure"))
+        {
+            std::exit(0);
+        }
+        if (namesNothing(symbol))
+        {
+            std::exit(constructor_wait >= kWaitedInVain ? 10 : 11);
+        }
+        std::exit(6);
+    }
+
+    TEST(VtableReplaceDeathTest, ALookupUnderTheLoaderLockWaitsForNoOneForever)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(
+            nameCallsWhileAConstructorHoldsTheLoaderLock(),
+            [](int status) { return status == 0 || status == 10 || status == 11; }, "");
     }
 } // namespace
