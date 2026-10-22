@@ -63,7 +63,7 @@ namespace
         // which ct_maybe_install_backtrace started. Without the lock or the session, frames are
         // printed as bare addresses.
         CtDbgHelpLock dbghelp(0);
-        HANDLE process = dbghelp.owns() ? ct_dbghelp_process : nullptr;
+        HANDLE process = dbghelp.owns() ? ct_dbghelp_started_session_locked() : nullptr;
 
         void* frames[64] = {};
         const USHORT count =

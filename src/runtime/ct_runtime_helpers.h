@@ -19,8 +19,6 @@ enum class CtDemangleOutcome
 #endif
 #include <windows.h>
 #include <dbghelp.h>
-#include <atomic>
-#include <cwchar>
 
 // DbgHelp is single-threaded for the whole process, whatever the session. Every copy of the
 // runtime in the process, the executable's and that of each DLL that links the runtime, calls it
@@ -30,22 +28,16 @@ enum class CtDemangleOutcome
 // crash handler of a thread that faulted inside DbgHelp does not call it again. The wait is
 // bounded: a lookup that does not get DbgHelp in time names nothing, rather than wait for a
 // thread that may itself wait for the loader lock, held by a thread in DllMain that waits for
-// DbgHelp. A thread that waited in vain then does not wait again until it gets DbgHelp.
+// DbgHelp. A thread that waited in vain then does not wait again until it gets DbgHelp. This
+// copy's handle of the semaphore, and its session, belong to windows/ct_runtime_dbghelp.cpp.
 class CtDbgHelpLock
 {
   public:
     // How long a lookup waits for DbgHelp, in milliseconds.
     static constexpr DWORD kLookupWait = 500;
 
-    explicit CtDbgHelpLock(DWORD wait) : semaphore_(semaphore()), owns_(acquire(wait)) {}
-
-    ~CtDbgHelpLock()
-    {
-        if (owns_)
-        {
-            (void)ReleaseSemaphore(semaphore_, 1, nullptr);
-        }
-    }
+    explicit CtDbgHelpLock(DWORD wait);
+    ~CtDbgHelpLock();
 
     CtDbgHelpLock(const CtDbgHelpLock&) = delete;
     CtDbgHelpLock& operator=(const CtDbgHelpLock&) = delete;
@@ -56,80 +48,20 @@ class CtDbgHelpLock
     }
 
   private:
-    // Opened once per copy and never closed, so that it outlives static destructors; null when
-    // it cannot be opened, and DbgHelp is not called then.
-    static HANDLE semaphore()
-    {
-        static std::atomic<HANDLE> opened{nullptr};
-        HANDLE handle = opened.load(std::memory_order_acquire);
-        if (handle)
-        {
-            return handle;
-        }
-        wchar_t name[64];
-        (void)swprintf(name, sizeof(name) / sizeof(name[0]), L"Local\\coretrace-dbghelp-%lu",
-                       GetCurrentProcessId());
-        HANDLE created = CreateSemaphoreW(nullptr, 1, 1, name);
-        if (!created)
-        {
-            return nullptr;
-        }
-        if (!opened.compare_exchange_strong(handle, created, std::memory_order_acq_rel))
-        {
-            (void)CloseHandle(created);
-            return handle;
-        }
-        return created;
-    }
-
-    bool acquire(DWORD wait)
-    {
-        thread_local bool waited_in_vain = false;
-        if (!semaphore_)
-        {
-            return false;
-        }
-        const bool acquired =
-            WaitForSingleObject(semaphore_, waited_in_vain ? 0 : wait) == WAIT_OBJECT_0;
-        waited_in_vain = !acquired;
-        return acquired;
-    }
-
     HANDLE semaphore_;
-    bool owns_;
+    bool owns_ = false;
 };
 
 // The DbgHelp session of this copy of the runtime, on a handle of the process of its own, as
 // SymInitialize's documentation asks of each component that inspects the current process: the
-// program's session, on GetCurrentProcess(), and the other copies' keep their modules. Null until
-// it has started, then never closed. Used with the DbgHelp lock held.
-inline HANDLE ct_dbghelp_process = nullptr;
+// program's session, on GetCurrentProcess(), and the other copies' keep their modules. Started if
+// it was not, by the first lookup or before the crash handler is installed; null when it cannot
+// start, and the next call tries again. Call with the DbgHelp lock held, never from the crash
+// handler, which uses ct_dbghelp_started_session_locked().
+HANDLE ct_dbghelp_session_locked();
 
-// The session, started if it was not, by the first lookup or before the crash handler is
-// installed; null when it cannot start, and the next call tries again. Never from the crash
-// handler, which uses ct_dbghelp_process as it is.
-inline HANDLE ct_dbghelp_session_locked()
-{
-    if (ct_dbghelp_process)
-    {
-        return ct_dbghelp_process;
-    }
-    HANDLE process = nullptr;
-    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &process, 0,
-                         FALSE, DUPLICATE_SAME_ACCESS))
-    {
-        return nullptr;
-    }
-    // DbgHelp's options are the process's: the runtime adds its own to the program's.
-    SymSetOptions(SymGetOptions() | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
-    if (!SymInitialize(process, nullptr, TRUE))
-    {
-        (void)CloseHandle(process);
-        return nullptr;
-    }
-    ct_dbghelp_process = process;
-    return process;
-}
+// The session if it has started, null otherwise. Call with the DbgHelp lock held.
+HANDLE ct_dbghelp_started_session_locked();
 
 // UnDecorateSymbolName, with the DbgHelp lock: Unavailable when the lock was not free in time.
 inline CtDemangleOutcome ct_demangle_outcome(const char* name, std::string& out)
