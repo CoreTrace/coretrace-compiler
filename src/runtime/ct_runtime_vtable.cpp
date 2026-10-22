@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <stdlib.h>
 #include <limits.h>
 #include <new>
@@ -359,49 +360,57 @@ namespace
     }
 
 #if defined(__linux__)
-    struct CtLinuxFindContext
-    {
-        const void* addr = nullptr;
-        CtModuleInfo* out = nullptr;
-        bool found = false;
-    };
+    // The smallest page size of Linux: the page a module's mapping starts with is mapped whole.
+    constexpr size_t kCtMinPageSize = 4096;
 
-    CT_NODISCARD CT_NOINSTR static int ct_linux_phdr_cb(struct dl_phdr_info* info, size_t,
-                                                        void* data)
+    // The module of `addr`, and whether the segment it is in is executable. dladdr1 takes the
+    // loader's dl_load_lock, which fork() resets in the child, whereas dl_iterate_phdr takes a
+    // lock fork() does not reset: a child forked while another thread was in dl_iterate_phdr
+    // waited for it forever (#206). The program headers are read in the first page of the
+    // module's mapping, where the ELF header and, as linkers lay them out, its program headers
+    // are; a module laid out otherwise is left to the dladdr fallback.
+    CT_NODISCARD CT_NOINSTR bool ct_find_module_linux(const void* addr, CtModuleInfo& out)
     {
-        auto* ctx = static_cast<CtLinuxFindContext*>(data);
-        if (!ctx || !ctx->addr || !ctx->out)
+        Dl_info info;
+        struct link_map* map = nullptr;
+        if (dladdr1(addr, &info, reinterpret_cast<void**>(&map), RTLD_DL_LINKMAP) == 0 || !map ||
+            !info.dli_fbase)
         {
-            return 0;
+            return false;
+        }
+        const auto* base = static_cast<const unsigned char*>(info.dli_fbase);
+        const auto* header = reinterpret_cast<const ElfW(Ehdr)*>(base);
+        if (std::memcmp(header->e_ident, ELFMAG, SELFMAG) != 0 ||
+            header->e_phentsize != sizeof(ElfW(Phdr)) ||
+            header->e_phoff + header->e_phnum * sizeof(ElfW(Phdr)) > kCtMinPageSize)
+        {
+            return false;
         }
 
-        uintptr_t addr = reinterpret_cast<uintptr_t>(ctx->addr);
-        for (int i = 0; i < info->dlpi_phnum; ++i)
+        const auto* phdrs = reinterpret_cast<const ElfW(Phdr)*>(base + header->e_phoff);
+        const uintptr_t value = reinterpret_cast<uintptr_t>(addr);
+        for (int i = 0; i < header->e_phnum; ++i)
         {
-            const auto& phdr = info->dlpi_phdr[i];
+            const ElfW(Phdr)& phdr = phdrs[i];
             if (phdr.p_type != PT_LOAD)
             {
                 continue;
             }
-            uintptr_t seg_start = static_cast<uintptr_t>(info->dlpi_addr) + phdr.p_vaddr;
-            uintptr_t seg_end = seg_start + phdr.p_memsz;
-            if (addr < seg_start || addr >= seg_end)
+            const uintptr_t seg_start = static_cast<uintptr_t>(map->l_addr) + phdr.p_vaddr;
+            if (value < seg_start || value >= seg_start + phdr.p_memsz)
             {
                 continue;
             }
 
-            std::string path = (info->dlpi_name && info->dlpi_name[0] != '\0')
-                                   ? std::string(info->dlpi_name)
-                                   : ct_executable_path();
-            ctx->out->resolved = true;
-            ctx->out->is_main = (info->dlpi_name == nullptr || info->dlpi_name[0] == '\0');
-            ctx->out->exec_known = true;
-            ctx->out->is_exec = (phdr.p_flags & PF_X) != 0;
-            ct_fill_module_paths(*ctx->out, path);
-            ctx->found = true;
-            return 1;
+            const bool is_main = !map->l_name || map->l_name[0] == '\0';
+            out.resolved = true;
+            out.is_main = is_main;
+            out.exec_known = true;
+            out.is_exec = (phdr.p_flags & PF_X) != 0;
+            ct_fill_module_paths(out, is_main ? ct_executable_path() : std::string(map->l_name));
+            return true;
         }
-        return 0;
+        return false;
     }
 #endif
 
@@ -501,11 +510,7 @@ namespace
         }
 
 #if defined(__linux__)
-        CtLinuxFindContext ctx;
-        ctx.addr = addr;
-        ctx.out = &out;
-        dl_iterate_phdr(ct_linux_phdr_cb, &ctx);
-        if (ctx.found)
+        if (ct_find_module_linux(addr, out))
         {
             return true;
         }

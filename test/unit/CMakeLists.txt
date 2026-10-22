@@ -75,6 +75,10 @@ if(TARGET ct_instrument_runtime)
     target_sources(runtime_unit_tests PRIVATE runtime_vtable_modules_test.cpp)
     # The order of the runtime's locks and the logger's, which both take around fork().
     target_sources(runtime_unit_tests PRIVATE runtime_log_locks_test.cpp)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      # A child of fork() that looks modules up while the parent was listing them (#206).
+      target_sources(runtime_unit_tests PRIVATE runtime_vtable_fork_test.cpp)
+    endif()
     # The allocation table filled up, in a process apart from the other runtime tests.
     add_executable(runtime_table_full_tests runtime_table_full_test.cpp)
     target_include_directories(runtime_table_full_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
