@@ -19,14 +19,15 @@ namespace
     std::atomic<int> ct_backtrace_installed{0};
 
     // Runs inside the unhandled-exception filter, like the POSIX signal handler: only the
-    // lock-free writers, and a symbol name only when the caller holds the DbgHelp lock.
-    CT_NOINSTR void ct_write_stack_frame(HANDLE process, void* frame, bool symbolize)
+    // lock-free writers, and a symbol name only from a session, which the caller passes with the
+    // DbgHelp lock held.
+    CT_NOINSTR void ct_write_stack_frame(HANDLE process, void* frame)
     {
         ct_write_prefix_nolock(CTLevel::Error);
         ct_write_cstr("  at ");
         ct_write_hex(reinterpret_cast<uintptr_t>(frame));
 
-        if (symbolize)
+        if (process)
         {
             char symbol_buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
             auto* symbol = reinterpret_cast<SYMBOL_INFO*>(symbol_buffer);
@@ -58,21 +59,18 @@ namespace
         ct_write_cstr("\n");
 
         // Never wait for DbgHelp here: the faulting thread may be the one holding its lock,
-        // and waiting would hang the process instead of letting it die. Without the lock,
-        // frames are printed as bare addresses.
+        // and waiting would hang the process instead of letting it die. Nor start the session,
+        // which ct_maybe_install_backtrace started. Without the lock or the session, frames are
+        // printed as bare addresses.
         CtDbgHelpLock dbghelp(0);
-        if (dbghelp.owns())
-        {
-            ct_dbghelp_initialize_locked();
-        }
+        HANDLE process = dbghelp.owns() ? ct_dbghelp_process : nullptr;
 
         void* frames[64] = {};
         const USHORT count =
             CaptureStackBackTrace(0, static_cast<DWORD>(std::size(frames)), frames, nullptr);
-        HANDLE process = GetCurrentProcess();
         for (USHORT index = 0; index < count; ++index)
         {
-            ct_write_stack_frame(process, frames[index], dbghelp.owns());
+            ct_write_stack_frame(process, frames[index]);
         }
 
         return EXCEPTION_EXECUTE_HANDLER;
@@ -93,11 +91,11 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
     }
 
     {
-        // Symbols are loaded now rather than in the filter, where the heap may be corrupt.
+        // The session starts now rather than in the filter, where the heap may be corrupt.
         CtDbgHelpLock dbghelp(CtDbgHelpLock::kLookupWait);
         if (dbghelp.owns())
         {
-            ct_dbghelp_initialize_locked();
+            (void)ct_dbghelp_session_locked();
         }
     }
     SetUnhandledExceptionFilter(ct_exception_filter);

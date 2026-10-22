@@ -90,18 +90,36 @@ class CtDbgHelpLock
     bool owns_;
 };
 
-// Loads the process symbols the first time any DbgHelp user needs them. Call with the DbgHelp
-// lock held.
-inline void ct_dbghelp_initialize_locked()
+// The DbgHelp session of this copy of the runtime, on a handle of the process of its own, as
+// SymInitialize's documentation asks of each component that inspects the current process: the
+// program's session, on GetCurrentProcess(), and the other copies' keep their modules. Null until
+// it has started, then never closed. Used with the DbgHelp lock held.
+inline HANDLE ct_dbghelp_process = nullptr;
+
+// The session, started if it was not, by the first lookup or before the crash handler is
+// installed; null when it cannot start, and the next call tries again. Never from the crash
+// handler, which uses ct_dbghelp_process as it is.
+inline HANDLE ct_dbghelp_session_locked()
 {
-    static bool initialized = false;
-    if (initialized)
+    if (ct_dbghelp_process)
     {
-        return;
+        return ct_dbghelp_process;
     }
-    initialized = true;
-    SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
-    (void)SymInitialize(GetCurrentProcess(), nullptr, TRUE);
+    HANDLE process = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &process, 0,
+                         FALSE, DUPLICATE_SAME_ACCESS))
+    {
+        return nullptr;
+    }
+    // DbgHelp's options are the process's: the runtime adds its own to the program's.
+    SymSetOptions(SymGetOptions() | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
+    if (!SymInitialize(process, nullptr, TRUE))
+    {
+        (void)CloseHandle(process);
+        return nullptr;
+    }
+    ct_dbghelp_process = process;
+    return process;
 }
 
 inline bool ct_demangle(const char* name, std::string& out)
