@@ -4,7 +4,8 @@
 // has listed. A DLL replaced by another one at the same path, with the same time stamp, as
 // reproducible builds give, must not keep the first one's names (#208): two builds of one
 // library, their time stamps set to zero, are copied in turn to one path and loaded from there.
-// The libraries are built from reload/ct_reload_library.cpp.
+// The libraries are built from reload/ct_reload_library.cpp. A DLL loaded after DbgHelp listed
+// the modules must be named too.
 #include <gtest/gtest.h>
 
 #include <cstddef>
@@ -57,6 +58,16 @@ namespace
         return entry ? entry() : nullptr;
     }
 
+    // The box of a virtual call to the function of the library.
+    std::string traceACall(HMODULE library, const char* site)
+    {
+        void* object = callEntry(library, "ct_reload_object");
+        void* target = callEntry(library, "ct_reload_target");
+        testing::internal::CaptureStderr();
+        __ct_vcall_trace(object, target, site, "<unknown>");
+        return testing::internal::GetCapturedStderr();
+    }
+
     TEST(VtableReplace, ADllReplacedAtItsPathWithItsTimeStampIsNamedAgain)
     {
         const fs::path path = fs::path(testing::TempDir()) / "ct_replaced_library.dll";
@@ -96,5 +107,20 @@ namespace
         }
         std::error_code ignored;
         fs::remove(path, ignored);
+    }
+
+    TEST(VtableReplace, ADllLoadedAfterALookupIsNamed)
+    {
+        HMODULE first = LoadLibraryA(CT_RELOAD_LIBRARY_A);
+        ASSERT_NE(first, nullptr) << CT_RELOAD_LIBRARY_A;
+        const std::string before = traceACall(first, "replace:2");
+        HMODULE late = LoadLibraryA(CT_RELOAD_LIBRARY_B);
+        ASSERT_NE(late, nullptr) << CT_RELOAD_LIBRARY_B;
+        const std::string after = traceACall(late, "replace:3");
+        FreeLibrary(late);
+        FreeLibrary(first);
+
+        EXPECT_NE(before.find("reload_a::describe"), std::string::npos) << before;
+        EXPECT_NE(after.find("reload_b::describe"), std::string::npos) << after;
     }
 } // namespace
