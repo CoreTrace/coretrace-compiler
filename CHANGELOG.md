@@ -25,10 +25,10 @@ pull request.
 - **DbgHelp shared with the program, on Windows.** The runtime initialized DbgHelp on the
   program's own session, `GetCurrentProcess()`, and each copy of the runtime, in the executable
   and in each DLL that links it, called DbgHelp under a lock of its own. Each copy now has a
-  session of its own, which the copy in a DLL closes when the DLL unloads, and all of them take
-  one lock per process, a semaphore that a program using DbgHelp can take too. A box waits 500 ms
-  at most for it, and a name it could not decode meanwhile is decoded at the next box (README,
-  "DbgHelp on Windows") (#208).
+  session of its own, which the copy in a DLL closes when the DLL unloads, unless DbgHelp is
+  still busy then, and all of them take one lock per process, a semaphore that a program using
+  DbgHelp can take too. A box waits 500 ms at most for it, and a name it could not decode
+  meanwhile is decoded at the next box (README, "DbgHelp on Windows") (#208).
 
 ## v0.12.0 (2026-10-22)
 
