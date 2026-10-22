@@ -7,16 +7,19 @@
 // The libraries are built from reload/ct_reload_library.cpp. A DLL loaded after DbgHelp listed
 // the modules must be named too, after many unloads as well. The runtime uses DbgHelp in a session
 // of its own and under the DbgHelp lock of the process, which every copy of it takes, the copy in
-// a DLL built from reload/ct_runtime_library.cpp included.
+// a DLL built from reload/ct_runtime_library.cpp included; that copy watches the loader until it
+// unloads.
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -312,5 +315,65 @@ namespace
         EXPECT_TRUE(
             names(symbolOf(boxes, "runtime_library:1", first + 1), "ct_runtime_library_measure"))
             << boxes;
+    }
+
+    // Loads a DLL that links the runtime, has its copy name a call or not, and unloads it, when
+    // its destructors name one; then loads and unloads another DLL. Exits with 0 when the
+    // destructors' box named the DLL's function, or nothing, and the loader did not call into the
+    // DLL unloaded; with 7 when the process has not ended within 20 seconds, as when the loader,
+    // having called into the DLL unloaded, cannot let it exit.
+    [[noreturn]] void unloadARuntimeLibraryThenLoadAnother(bool trace_before)
+    {
+        std::thread(
+            []
+            {
+                Sleep(20000);
+                TerminateProcess(GetCurrentProcess(), 7);
+            })
+            .detach();
+        DllStandardError output(fs::path(testing::TempDir()) / "ct_runtime_library_unload.txt");
+        HMODULE runtime = LoadLibraryA(CT_RUNTIME_LIBRARY);
+        FARPROC entry = runtime ? GetProcAddress(runtime, "ct_runtime_library_trace") : nullptr;
+        if (!entry)
+        {
+            std::exit(2);
+        }
+        if (trace_before)
+        {
+            reinterpret_cast<void (*)()>(entry)();
+        }
+        FreeLibrary(runtime);
+        HMODULE loaded = nullptr;
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCWSTR>(entry), &loaded))
+        {
+            std::exit(3); // Still loaded: the test would prove nothing.
+        }
+        const std::string unloading = symbolOf(output.contents(), "runtime_library:2");
+        if (!names(unloading, "ct_runtime_library_measure") && !namesNothing(unloading))
+        {
+            std::exit(6);
+        }
+        HMODULE other = LoadLibraryA(CT_RELOAD_LIBRARY_A);
+        if (!other)
+        {
+            std::exit(4);
+        }
+        FreeLibrary(other);
+        std::exit(0);
+    }
+
+    TEST(VtableReplaceDeathTest, ADllThatLinksTheRuntimeStopsWatchingTheLoaderWhenUnloaded)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(unloadARuntimeLibraryThenLoadAnother(true), testing::ExitedWithCode(0), "");
+    }
+
+    // Its first virtual call comes from its destructors, which run once its watch has stopped.
+    TEST(VtableReplaceDeathTest, ADllWhoseFirstVirtualCallComesAtUnloadStopsWatchingToo)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(unloadARuntimeLibraryThenLoadAnother(false), testing::ExitedWithCode(0), "");
     }
 } // namespace
