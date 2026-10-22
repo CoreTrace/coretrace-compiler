@@ -17,10 +17,13 @@ pull request.
 ### Fixes
 
 - **A child of `fork()` and the vtable diagnostics, on Linux.** With `--ct-vtable-diag`, a
-  child of `fork()` that made a virtual call could hang: the runtime looked the modules up
-  through `dl_iterate_phdr`, whose lock glibc does not reset in the child, and another thread
-  of the parent could hold that lock at the fork. The runtime now looks them up through
-  `dladdr1`, whose lock the child gets back reset (#206).
+  child of `fork()` could hang. The runtime looked the modules up through `dl_iterate_phdr`,
+  whose lock glibc does not reset in the child (2.39 checked): a child forked while another
+  thread of its parent held it waited forever, in its first virtual call, or in its own
+  `dlopen` when a thread of the runtime held it. The child could also wait for a cache of the
+  runtime that another thread of the parent was initializing. The runtime now looks the
+  modules up through `_dl_find_object`, which takes no lock (glibc 2.35 and later), and
+  initializes its caches when the program starts (#206).
 
 ## v0.12.0 (2026-10-22)
 
