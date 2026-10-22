@@ -12,6 +12,16 @@ From v0.8.0 on, each release also has detailed notes on the
 [releases page](https://github.com/CoreTrace/coretrace-compiler/releases), citing every
 pull request.
 
+## Unreleased
+
+### Fixes
+
+- **A child of `fork()` and the vtable diagnostics, on Linux.** With `--ct-vtable-diag`, a
+  child of `fork()` that made a virtual call could hang: the runtime looked the modules up
+  through `dl_iterate_phdr`, whose lock glibc does not reset in the child, and another thread
+  of the parent could hold that lock at the fork. The runtime now looks them up through
+  `dladdr1`, whose lock the child gets back reset (#206).
+
 ## v0.12.0 (2026-10-22)
 
 Release traces name the kind and the allocation site of each block, and the Windows runtime
