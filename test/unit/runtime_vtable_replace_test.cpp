@@ -6,15 +6,18 @@
 // library, their time stamps set to zero, are copied in turn to one path and loaded from there.
 // The libraries are built from reload/ct_reload_library.cpp. A DLL loaded after DbgHelp listed
 // the modules must be named too, after many unloads as well. The runtime uses DbgHelp in a session
-// of its own.
+// of its own and under the DbgHelp lock of the process, which every copy of it takes, the copy in
+// a DLL built from reload/ct_runtime_library.cpp included.
 #include <gtest/gtest.h>
 
 #include <cstddef>
 #include <cstring>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <windows.h>
@@ -71,6 +74,84 @@ namespace
         __ct_vcall_trace(object, target, site, "<unknown>");
         return testing::internal::GetCapturedStderr();
     }
+
+    // The `symbol` line of the first box of `site` from `from` on, empty without one.
+    std::string symbolOf(const std::string& boxes, const char* site, size_t from = 0)
+    {
+        const size_t box = boxes.find(site, from);
+        const size_t line = box == std::string::npos ? box : boxes.find("symbol", box);
+        if (line == std::string::npos)
+        {
+            return std::string();
+        }
+        return boxes.substr(line, boxes.find('\n', line) - line);
+    }
+
+    bool names(const std::string& symbol, const char* function)
+    {
+        return symbol.find(function) != std::string::npos;
+    }
+
+    bool namesNothing(const std::string& symbol)
+    {
+        return symbol.find("<unknown>") != std::string::npos;
+    }
+
+    // The name of the DbgHelp lock of the process.
+    std::wstring dbgHelpLockName()
+    {
+        wchar_t name[64];
+        (void)swprintf(name, sizeof(name) / sizeof(name[0]), L"Local\\coretrace-dbghelp-%lu",
+                       GetCurrentProcessId());
+        return name;
+    }
+
+    // Sends the standard error of the DLLs loaded from now on to a file: the copy of the runtime
+    // in a DLL writes through the DLL's own C runtime, which takes the handle when it loads.
+    class DllStandardError
+    {
+      public:
+        explicit DllStandardError(fs::path path)
+            : path_(std::move(path)), saved_(GetStdHandle(STD_ERROR_HANDLE))
+        {
+            file_ = CreateFileW(path_.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (file_ != INVALID_HANDLE_VALUE)
+            {
+                SetStdHandle(STD_ERROR_HANDLE, file_);
+            }
+        }
+        ~DllStandardError()
+        {
+            restore();
+        }
+        DllStandardError(const DllStandardError&) = delete;
+        DllStandardError& operator=(const DllStandardError&) = delete;
+
+        // What the DLLs wrote, once they are unloaded.
+        std::string contents()
+        {
+            restore();
+            std::ifstream in(path_, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        }
+
+      private:
+        void restore()
+        {
+            if (file_ != INVALID_HANDLE_VALUE)
+            {
+                SetStdHandle(STD_ERROR_HANDLE, saved_);
+                CloseHandle(file_);
+                file_ = INVALID_HANDLE_VALUE;
+            }
+        }
+
+        fs::path path_;
+        HANDLE saved_;
+        HANDLE file_ = INVALID_HANDLE_VALUE;
+    };
 
     TEST(VtableReplace, ADllReplacedAtItsPathWithItsTimeStampIsNamedAgain)
     {
@@ -202,5 +283,34 @@ namespace
         EXPECT_EQ(name, "ct_program_symbol");
         EXPECT_NE(boxes.find("reload_a::describe"), std::string::npos) << boxes;
         EXPECT_NE(boxes.find("reload_b::describe"), std::string::npos) << boxes;
+    }
+
+    // Every copy of the runtime calls DbgHelp under the lock of the process, which a program that
+    // uses DbgHelp itself takes too: a DLL's copy names nothing while the program holds the lock,
+    // rather than call DbgHelp at the same time, and names its call once the lock is free.
+    TEST(VtableReplace, EveryCopyOfTheRuntimeTakesTheDbgHelpLockOfTheProcess)
+    {
+        HANDLE lock = CreateSemaphoreW(nullptr, 1, 1, dbgHelpLockName().c_str());
+        ASSERT_NE(lock, nullptr) << GetLastError();
+        DllStandardError output(fs::path(testing::TempDir()) / "ct_runtime_library_lock.txt");
+        HMODULE runtime = LoadLibraryA(CT_RUNTIME_LIBRARY);
+        FARPROC entry = runtime ? GetProcAddress(runtime, "ct_runtime_library_trace") : nullptr;
+        ASSERT_NE(entry, nullptr) << CT_RUNTIME_LIBRARY;
+        auto* trace = reinterpret_cast<void (*)()>(entry);
+
+        ASSERT_EQ(WaitForSingleObject(lock, INFINITE), WAIT_OBJECT_0);
+        trace();
+        (void)ReleaseSemaphore(lock, 1, nullptr);
+        trace();
+        FreeLibrary(runtime);
+        CloseHandle(lock);
+        const std::string boxes = output.contents();
+
+        const size_t first = boxes.find("runtime_library:1");
+        ASSERT_NE(first, std::string::npos) << boxes;
+        EXPECT_TRUE(namesNothing(symbolOf(boxes, "runtime_library:1"))) << boxes;
+        EXPECT_TRUE(
+            names(symbolOf(boxes, "runtime_library:1", first + 1), "ct_runtime_library_measure"))
+            << boxes;
     }
 } // namespace

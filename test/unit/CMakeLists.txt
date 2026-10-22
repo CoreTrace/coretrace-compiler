@@ -94,6 +94,13 @@ if(TARGET ct_instrument_runtime)
   if(WIN32)
     # A DLL replaced at its path by another build with the same time stamp (#208).
     target_sources(runtime_unit_tests PRIVATE runtime_vtable_replace_test.cpp)
+    # A DLL that links its own copy of the runtime (#208).
+    add_library(ct_runtime_library MODULE reload/ct_runtime_library.cpp)
+    target_link_libraries(ct_runtime_library PRIVATE ct_instrument_runtime coretrace_logger)
+    coretrace_force_msvc_runtime(ct_runtime_library)
+    add_dependencies(runtime_unit_tests ct_runtime_library)
+    target_compile_definitions(runtime_unit_tests PRIVATE
+      CT_RUNTIME_LIBRARY="$<TARGET_FILE:ct_runtime_library>")
   endif()
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
