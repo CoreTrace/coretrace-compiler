@@ -251,10 +251,15 @@ namespace
         return path;
     }
 
+    // Never destroyed, as ct_name_cache: code that runs at exit still prints boxes. The
+    // constructor below builds it after the program's global objects, whose destructors would
+    // run after its own.
     CT_NODISCARD CT_NOINSTR const std::string& ct_executable_path(void)
     {
-        static const std::string cached = ct_read_executable_path();
-        return cached;
+        alignas(std::string) static unsigned char storage[sizeof(std::string)];
+        static const std::string* const cached =
+            new (storage) std::string(ct_read_executable_path());
+        return *cached;
     }
 
     CT_NOINSTR void ct_fill_module_paths(CtModuleInfo& info, const std::string& path)
