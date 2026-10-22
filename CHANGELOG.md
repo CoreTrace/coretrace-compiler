@@ -12,6 +12,16 @@ From v0.8.0 on, each release also has detailed notes on the
 [releases page](https://github.com/CoreTrace/coretrace-compiler/releases), citing every
 pull request.
 
+## Unreleased
+
+### Fixes
+
+- **Symbols of a DLL loaded in place of another, on Windows.** The `symbol` and `demangled`
+  lines of a virtual call box could name a function of a DLL unloaded since, once another DLL
+  was loaded at its address: DbgHelp kept the modules it had listed. Before it names a call
+  target, the runtime now replaces the module DbgHelp has there when it is not the one loaded
+  (#208).
+
 ## v0.12.0 (2026-10-22)
 
 Release traces name the kind and the allocation site of each block, and the Windows runtime
