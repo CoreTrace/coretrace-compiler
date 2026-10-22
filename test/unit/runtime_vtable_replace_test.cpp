@@ -5,7 +5,7 @@
 // reproducible builds give, must not keep the first one's names (#208): two builds of one
 // library, their time stamps set to zero, are copied in turn to one path and loaded from there.
 // The libraries are built from reload/ct_reload_library.cpp. A DLL loaded after DbgHelp listed
-// the modules must be named too.
+// the modules must be named too, after many unloads as well.
 #include <gtest/gtest.h>
 
 #include <cstddef>
@@ -122,5 +122,38 @@ namespace
 
         EXPECT_NE(before.find("reload_a::describe"), std::string::npos) << before;
         EXPECT_NE(after.find("reload_b::describe"), std::string::npos) << after;
+    }
+
+    // The runtime keeps the bases of the last 64 DLLs unloaded: the replaced DLL's base is
+    // among the older ones, once twice as many DLLs were unloaded at other bases since.
+    TEST(VtableReplace, ADllReplacedAfterManyUnloadsIsNamedAgain)
+    {
+        constexpr int kUnloads = 2 * 64;
+        const fs::path path = fs::path(testing::TempDir()) / "ct_replaced_after_unloads.dll";
+        ASSERT_TRUE(copyWithoutTimeStamp(CT_RELOAD_LIBRARY_A, path)) << path;
+        HMODULE first = LoadLibraryW(path.c_str());
+        ASSERT_NE(first, nullptr) << path;
+        const std::string before = traceACall(first, "replace:4");
+        FreeLibrary(first);
+
+        ASSERT_TRUE(copyWithoutTimeStamp(CT_RELOAD_LIBRARY_B, path)) << path;
+        HMODULE replaced = LoadLibraryW(path.c_str());
+        ASSERT_NE(replaced, nullptr) << path;
+        EXPECT_EQ(replaced, first);
+        // Loaded and unloaded while the replaced DLL holds the first one's base.
+        for (int unload = 0; unload < kUnloads; ++unload)
+        {
+            HMODULE other = LoadLibraryA(CT_RELOAD_LIBRARY_A);
+            ASSERT_NE(other, nullptr) << CT_RELOAD_LIBRARY_A;
+            FreeLibrary(other);
+        }
+        const std::string after = traceACall(replaced, "replace:5");
+        FreeLibrary(replaced);
+        std::error_code ignored;
+        fs::remove(path, ignored);
+
+        EXPECT_NE(before.find("reload_a::describe"), std::string::npos) << before;
+        EXPECT_NE(after.find("reload_b::describe"), std::string::npos) << after;
+        EXPECT_EQ(after.find("reload_a"), std::string::npos) << after;
     }
 } // namespace
