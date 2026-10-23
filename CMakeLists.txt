@@ -197,6 +197,7 @@ if(CORETRACE_COMPILER_BUILD_RUNTIME)
     set(CT_RUNTIME_PLATFORM_SOURCES
       src/runtime/windows/ct_runtime_alloc.cpp
       src/runtime/windows/ct_runtime_backtrace.cpp
+      src/runtime/windows/ct_runtime_dbghelp.cpp
       src/runtime/windows/ct_runtime_env.cpp
       src/runtime/windows/ct_runtime_vtable.cpp
     )

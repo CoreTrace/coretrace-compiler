@@ -114,14 +114,15 @@ namespace
                 }
             }
             EXPECT_EQ(types, 2u) << boxes;
-#if !defined(_WIN32)
             // No line names the other library, and the target's symbol is the function of the
-            // library loaded now. Not on Windows, where DbgHelp still names the function of a
-            // DLL unloaded since (#208).
-            EXPECT_EQ(boxes.find(build.other), std::string::npos) << boxes;
-            EXPECT_NE(boxes.find(std::string(build.name) + "::describe(int)"), std::string::npos)
-                << boxes;
+            // library loaded now, which DbgHelp names without its parameters (#208).
+#if defined(_WIN32)
+            const std::string symbol = std::string(build.name) + "::describe";
+#else
+            const std::string symbol = std::string(build.name) + "::describe(int)";
 #endif
+            EXPECT_EQ(boxes.find(build.other), std::string::npos) << boxes;
+            EXPECT_NE(boxes.find(symbol), std::string::npos) << boxes;
         }
     }
 } // namespace

@@ -114,6 +114,22 @@ if(TARGET ct_instrument_runtime)
     target_link_libraries(runtime_log_fallback_tests PRIVATE ct_instrument_runtime coretrace_logger
       GTest::gtest_main)
   endif()
+  if(WIN32)
+    # A DLL replaced at its path by another build with the same time stamp (#208).
+    target_sources(runtime_unit_tests PRIVATE runtime_vtable_replace_test.cpp)
+    # A DLL that links its own copy of the runtime, which watches the loader too, and a DLL
+    # whose constructor names a call with the loader lock held (#208).
+    add_library(ct_runtime_library MODULE reload/ct_runtime_library.cpp)
+    target_link_libraries(ct_runtime_library PRIVATE ct_instrument_runtime coretrace_logger)
+    add_library(ct_dllmain_library MODULE reload/ct_dllmain_library.cpp)
+    foreach(library ct_runtime_library ct_dllmain_library)
+      coretrace_force_msvc_runtime(${library})
+      add_dependencies(runtime_unit_tests ${library})
+    endforeach()
+    target_compile_definitions(runtime_unit_tests PRIVATE
+      CT_RUNTIME_LIBRARY="$<TARGET_FILE:ct_runtime_library>"
+      CT_DLLMAIN_LIBRARY="$<TARGET_FILE:ct_dllmain_library>")
+  endif()
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
     target_sources(runtime_unit_tests PRIVATE runtime_objc_test.cpp)

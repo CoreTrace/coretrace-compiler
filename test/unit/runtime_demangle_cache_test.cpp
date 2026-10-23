@@ -3,7 +3,8 @@
 // The cache of demangled names behind the vtable boxes: it answers as its demangler does,
 // decodes a name once, holds a bounded number of names, and looks a name up by its text, so
 // that a name at the address of another, as when a library is unloaded and another loaded
-// in its place, gets its own result.
+// in its place, gets its own result. A name its demangler could not decode for now, as when
+// DbgHelp was busy, is decoded again next time.
 #include "ct_runtime_demangle_cache.h"
 #include "ct_runtime_helpers.h"
 
@@ -36,6 +37,39 @@ namespace
         }
         out.assign(name + 2);
         return true;
+    }
+
+    std::atomic<int> attempts{0};
+    std::atomic<bool> available{false};
+
+    // Decodes a name to itself once `available`, and nothing until then; counts its calls.
+    CtDemangleOutcome waitingDemangler(const char* name, std::string& out)
+    {
+        attempts.fetch_add(1);
+        if (!available.load())
+        {
+            return CtDemangleOutcome::Unavailable;
+        }
+        out.assign(name);
+        return CtDemangleOutcome::Decoded;
+    }
+
+    // Contention, release, then another try: the name is decoded once its demangler can.
+    TEST(DemangleCache, DecodesAgainANameItsDemanglerCouldNotDecodeForNow)
+    {
+        attempts.store(0);
+        available.store(false);
+        CtDemangleCache cache(waitingDemangler);
+        std::string out;
+        EXPECT_FALSE(cache.demangle("m:later", out));
+        EXPECT_EQ(cache.size(), 0u);
+
+        available.store(true);
+        ASSERT_TRUE(cache.demangle("m:later", out));
+        EXPECT_EQ(out, "m:later");
+        ASSERT_TRUE(cache.demangle("m:later", out));
+        EXPECT_EQ(attempts.load(), 2);
+        EXPECT_EQ(cache.size(), 1u);
     }
 
     TEST(DemangleCache, AnswersAsItsDemangler)
@@ -212,4 +246,21 @@ namespace
 #endif
         EXPECT_FALSE(cache.demangle("main", out));
     }
+
+#if defined(_WIN32)
+    // With the demangler of the Windows vtable boxes, while the program holds DbgHelp's lock,
+    // then once it has released it.
+    TEST(DemangleCache, DecodesAgainANameOnceDbgHelpIsFree)
+    {
+        CtDemangleCache cache(ct_demangle_outcome);
+        std::string out;
+        {
+            CtDbgHelpLock held(INFINITE);
+            ASSERT_TRUE(held.owns());
+            EXPECT_FALSE(cache.demangle("?compute@@YAHH@Z", out));
+        }
+        ASSERT_TRUE(cache.demangle("?compute@@YAHH@Z", out));
+        EXPECT_NE(out.find("compute(int)"), std::string::npos) << out;
+    }
+#endif
 } // namespace

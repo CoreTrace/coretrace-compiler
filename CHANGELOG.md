@@ -29,6 +29,19 @@ pull request.
   handler gives its locks back, and the runtime's hook of `-[NSObject dealloc]` waited for the
   allocation table's lock. While the forking thread holds the runtime's locks, the hook now
   forgets the object's record under the lock it holds, without its trace line (#207).
+- **Symbols of a DLL loaded in place of another, on Windows.** The `symbol` and `demangled`
+  lines of a virtual call box could name a function of a DLL unloaded since, once another DLL
+  was loaded at its address, even at the same path with the same time stamp: DbgHelp kept the
+  modules it had listed. The runtime now follows the loader's notifications, and before it
+  names a call target, has its session drop the modules unloaded since and list the modules
+  loaded; when that fails, the box names nothing (#208).
+- **DbgHelp shared with the program, on Windows.** The runtime initialized DbgHelp on the
+  program's own session, `GetCurrentProcess()`, and each copy of the runtime, in the executable
+  and in each DLL that links it, called DbgHelp under a lock of its own. Each copy now has a
+  session of its own, which the copy in a DLL closes when the DLL unloads, unless DbgHelp is
+  still busy then, and all of them take one lock per process, a semaphore that a program using
+  DbgHelp can take too. A box waits 500 ms at most for it, and a name it could not decode
+  meanwhile is decoded at the next box (README, "DbgHelp on Windows") (#208).
 
 ## v0.12.0 (2026-10-22)
 

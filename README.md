@@ -231,6 +231,40 @@ exit: after the program's exit-time code and that of every DLL, whether the prog
 lock is held then, and every other thread has been terminated: if one of them held the runtime's
 allocation table, the report says `ct: leak report skipped` instead of waiting for it (#187).
 
+## DbgHelp on Windows
+
+On Windows, the runtime names the targets of virtual calls in vtable boxes, and the frames of crash
+backtraces (`CT_BACKTRACE`), through DbgHelp. A program that uses DbgHelp itself shares it with the
+runtime as follows:
+
+- **Sessions.** Each copy of the runtime, the executable's and that of each DLL that links the
+  runtime, opens a session of its own, on a handle of the process that it duplicates, as
+  `SymInitialize`'s documentation asks of each component that inspects the current process. The
+  runtime does not initialize, clean up or change the modules of the session on
+  `GetCurrentProcess()`: the program's session keeps its modules and search path. The copy in a
+  DLL closes its session and its handle of the lock below when the DLL unloads, after the
+  destructors of the DLL's global objects. When another thread still holds that lock after the
+  500 ms wait, the session and its handle of the process stay open instead: closing the session
+  needs the lock, and waiting longer could deadlock with a thread that waits for the loader
+  lock, which `FreeLibrary` holds. The executable's copy keeps them until the process ends.
+- **Options.** DbgHelp's options are the process's. The runtime adds `SYMOPT_DEFERRED_LOADS`,
+  `SYMOPT_LOAD_LINES` and `SYMOPT_UNDNAME` to those the program set, and removes none.
+- **Lock.** DbgHelp is single-threaded for the whole process, whatever the session. Every copy of
+  the runtime calls it with one lock held: the semaphore `Local\coretrace-dbghelp-<pid>`, the
+  process ID in decimal. A program that calls DbgHelp from a thread while instrumented code runs
+  takes that semaphore around its calls (`CreateSemaphoreW(nullptr, 1, 1, name)`, then
+  `WaitForSingleObject` and `ReleaseSemaphore`); otherwise its calls may run at the same time as
+  the runtime's.
+- **When DbgHelp is busy.** A vtable box waits 500 ms at most for the lock, then names nothing
+  (`<unknown>`); a thread that waited in vain does not wait again until it gets the lock. The crash
+  handler does not wait, and prints bare addresses then. A box printed with the loader lock held,
+  from `DllMain` or a DLL's constructors, thus never waits forever for a thread that waits for the
+  loader lock.
+- **Modules.** The runtime follows the loader's notifications (`LdrRegisterDllNotification`), so
+  that a vtable box names the functions of the DLLs loaded when it is printed, a DLL replaced by
+  another one at the same address included. When its session cannot be brought up to date, the box
+  names nothing rather than a function of a DLL unloaded since.
+
 ## LLVM versions
 
 CoreTrace Compiler builds and instruments with LLVM 16 to 23. Most behaviour is the same on
