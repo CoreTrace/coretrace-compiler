@@ -73,6 +73,29 @@ if(TARGET ct_instrument_runtime)
   if(NOT WIN32)
     # The module comparison of the POSIX vtable diagnostics.
     target_sources(runtime_unit_tests PRIVATE runtime_vtable_modules_test.cpp)
+    # The symbol of a call target, in a program whose code and symbols are in segments apart on
+    # Linux, as with 64 KiB pages (#223).
+    add_executable(runtime_vtable_symbol_tests runtime_vtable_symbol_test.cpp)
+    target_include_directories(runtime_vtable_symbol_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+    target_link_libraries(runtime_vtable_symbol_tests PRIVATE ct_instrument_runtime coretrace_logger
+      GTest::gtest_main ${CMAKE_DL_LIBS})
+    target_compile_definitions(runtime_vtable_symbol_tests PRIVATE
+      CT_RELOAD_LIBRARY_A="$<TARGET_FILE:ct_reload_a>")
+    add_dependencies(runtime_vtable_symbol_tests ct_reload_a)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      # Exported on Linux, where the runtime reads the program's dynamic symbols: macOS's dladdr
+      # names the program's functions without.
+      set_target_properties(runtime_vtable_symbol_tests PROPERTIES ENABLE_EXPORTS ON)
+      target_link_options(runtime_vtable_symbol_tests PRIVATE -Wl,-z,separate-code
+        -Wl,-z,max-page-size=0x10000)
+      # A build of the library with a DT_HASH table and no GNU hash table.
+      add_library(ct_reload_sysv MODULE reload/ct_reload_library.cpp)
+      target_compile_definitions(ct_reload_sysv PRIVATE CT_RELOAD_NAMESPACE=reload_sysv)
+      target_link_options(ct_reload_sysv PRIVATE -Wl,--hash-style=sysv)
+      target_compile_definitions(runtime_vtable_symbol_tests PRIVATE
+        CT_RELOAD_LIBRARY_SYSV="$<TARGET_FILE:ct_reload_sysv>")
+      add_dependencies(runtime_vtable_symbol_tests ct_reload_sysv)
+    endif()
     # The order of the runtime's locks and the logger's, which both take around fork().
     target_sources(runtime_unit_tests PRIVATE runtime_log_locks_test.cpp)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -88,6 +111,17 @@ if(TARGET ct_instrument_runtime)
         CT_RELOAD_LIBRARY_A="$<TARGET_FILE:ct_reload_a>"
         CT_RELOAD_LIBRARY_B="$<TARGET_FILE:ct_reload_b>")
       add_dependencies(runtime_fork_modules_tests ct_reload_a ct_reload_b)
+      # A library whose constructor waits for traced virtual calls, loaded by a program that
+      # exports the runtime's entry points to it (#223).
+      add_library(ct_trace_constructor_library MODULE reload/ct_trace_constructor_library.cpp)
+      add_executable(runtime_loader_lock_tests runtime_loader_lock_test.cpp)
+      set_target_properties(runtime_loader_lock_tests PROPERTIES ENABLE_EXPORTS ON)
+      target_include_directories(runtime_loader_lock_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+      target_link_libraries(runtime_loader_lock_tests PRIVATE ct_instrument_runtime coretrace_logger
+        GTest::gtest_main ${CMAKE_DL_LIBS})
+      target_compile_definitions(runtime_loader_lock_tests PRIVATE
+        CT_TRACE_CONSTRUCTOR_LIBRARY="$<TARGET_FILE:ct_trace_constructor_library>")
+      add_dependencies(runtime_loader_lock_tests ct_trace_constructor_library)
     endif()
     if(TARGET ct_instrument_runtime_asan)
       # A global object's destructor that names a call, with the runtime that AddressSanitizer
@@ -156,6 +190,12 @@ if(TARGET runtime_table_tombstones_tests)
 endif()
 if(TARGET runtime_fork_modules_tests)
   gtest_discover_tests(runtime_fork_modules_tests)
+endif()
+if(TARGET runtime_loader_lock_tests)
+  gtest_discover_tests(runtime_loader_lock_tests)
+endif()
+if(TARGET runtime_vtable_symbol_tests)
+  gtest_discover_tests(runtime_vtable_symbol_tests)
 endif()
 if(TARGET runtime_scan_threads_tests)
   gtest_discover_tests(runtime_scan_threads_tests PROPERTIES ENVIRONMENT CT_AUTOFREE_SCAN=1)

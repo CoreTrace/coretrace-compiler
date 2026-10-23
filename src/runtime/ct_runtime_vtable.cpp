@@ -96,29 +96,185 @@ namespace
         return *cache;
     }
 
-    CT_NODISCARD CT_NOINSTR bool ct_lookup_symbol(const void* addr, const char** name_out,
-                                                  const char** object_out)
+#if defined(__linux__) && defined(DLFO_STRUCT_HAS_EH_DBASE)
+    // One of a module's tables, up to the end of the mapping that _dl_find_object gives for it:
+    // the module's, or the segment's for a main program whose segments are not adjacent in
+    // memory. Empty when the module does not hold it.
+    struct CtModuleTable
     {
-#if defined(__APPLE__) || defined(__linux__)
+        uintptr_t address = 0;
+        uintptr_t end = 0;
+    };
+
+    // The table at `value`, as the module's dynamic section gives it: the dynamic linker
+    // relocated the value in place unless that section is read-only, as the vDSO's is. A value
+    // left as it is would be taken for a relocated one only in a module loaded below its size.
+    CT_NODISCARD CT_NOINSTR CtModuleTable ct_module_table(const link_map* module, ElfW(Addr) value)
+    {
+        for (const uintptr_t address : {static_cast<uintptr_t>(value), module->l_addr + value})
+        {
+            dl_find_object mapping;
+            if (_dl_find_object(reinterpret_cast<void*>(address), &mapping) == 0 &&
+                mapping.dlfo_link_map == module)
+            {
+                return {address, reinterpret_cast<uintptr_t>(mapping.dlfo_map_end)};
+            }
+        }
+        return {};
+    }
+
+    // Entry `index` of the table, null when its mapping does not hold it.
+    template <typename T>
+    CT_NODISCARD CT_NOINSTR const T* ct_table_entry(const CtModuleTable& table, uint64_t index)
+    {
+        return index < (table.end - table.address) / sizeof(T)
+                   ? reinterpret_cast<const T*>(table.address) + index
+                   : nullptr;
+    }
+
+    // The name of the dynamic symbol that holds `addr`, as dladdr finds it (glibc 2.39,
+    // elf/dl-addr.c), from the module that _dl_find_object finds, without dladdr's
+    // dl_load_lock: dlopen holds that lock while it runs the constructors of the library it
+    // loads, and a constructor that waited for a thread naming a call never returned (#223).
+    // The tables read are those the dynamic linker reads to bind symbols.
+    CT_NODISCARD CT_NOINSTR const char* ct_find_symbol_linux(const void* addr)
+    {
+        dl_find_object object;
+        if (_dl_find_object(const_cast<void*>(addr), &object) != 0 || !object.dlfo_link_map ||
+            !object.dlfo_link_map->l_ld)
+        {
+            return nullptr;
+        }
+        const link_map* module = object.dlfo_link_map;
+
+        CtModuleTable symbols;
+        CtModuleTable strings;
+        uint64_t strings_size = 0;
+        CtModuleTable gnu_hash;
+        CtModuleTable hash;
+        for (const ElfW(Dyn)* entry = module->l_ld; entry->d_tag != DT_NULL; ++entry)
+        {
+            switch (entry->d_tag)
+            {
+            case DT_SYMTAB:
+                symbols = ct_module_table(module, entry->d_un.d_ptr);
+                break;
+            case DT_STRTAB:
+                strings = ct_module_table(module, entry->d_un.d_ptr);
+                break;
+            case DT_STRSZ:
+                strings_size = entry->d_un.d_val;
+                break;
+            case DT_GNU_HASH:
+                gnu_hash = ct_module_table(module, entry->d_un.d_ptr);
+                break;
+            case DT_HASH:
+                hash = ct_module_table(module, entry->d_un.d_ptr);
+                break;
+            default:
+                break;
+            }
+        }
+        if (strings_size == 0 || !ct_table_entry<char>(strings, strings_size - 1))
+        {
+            return nullptr;
+        }
+
+        const uintptr_t target = reinterpret_cast<uintptr_t>(addr);
+        const ElfW(Sym)* match = nullptr;
+        // The ELF64 macros, which ELF32's are the same as.
+        auto consider = [&](const ElfW(Sym) & symbol)
+        {
+            if ((symbol.st_shndx == SHN_UNDEF && symbol.st_value == 0) ||
+                symbol.st_shndx == SHN_ABS || ELF64_ST_TYPE(symbol.st_info) == STT_TLS ||
+                symbol.st_name >= strings_size)
+            {
+                return;
+            }
+            const uintptr_t start = module->l_addr + symbol.st_value;
+            const bool holds =
+                target >= start &&
+                (((symbol.st_shndx == SHN_UNDEF || symbol.st_size == 0) && target == start) ||
+                 target < start + symbol.st_size);
+            if (holds && (!match || match->st_value < symbol.st_value))
+            {
+                match = &symbol;
+            }
+        };
+
+        if (gnu_hash.address != 0)
+        {
+            // Four words of header, the Bloom filter, the buckets, then the chains: every
+            // symbol the table refers to, bucket by bucket, each chain ending with a value
+            // whose lowest bit is set.
+            const auto word = [&](uint64_t index)
+            { return ct_table_entry<Elf32_Word>(gnu_hash, index); };
+            if (!word(3))
+            {
+                return nullptr;
+            }
+            const Elf32_Word buckets_count = *word(0);
+            const Elf32_Word bias_index = *word(1);
+            const uint64_t buckets =
+                4 + uint64_t{*word(2)} * (sizeof(ElfW(Addr)) / sizeof(Elf32_Word));
+            const uint64_t chains = buckets + buckets_count;
+            for (Elf32_Word bucket = 0; bucket < buckets_count; ++bucket)
+            {
+                const Elf32_Word* first = word(buckets + bucket);
+                if (!first)
+                {
+                    return nullptr;
+                }
+                for (Elf32_Word index = *first; index >= bias_index && index != 0; ++index)
+                {
+                    const ElfW(Sym)* symbol = ct_table_entry<ElfW(Sym)>(symbols, index);
+                    const Elf32_Word* chain = word(chains + (index - bias_index));
+                    if (!symbol || !chain)
+                    {
+                        return nullptr;
+                    }
+                    consider(*symbol);
+                    if ((*chain & 1u) != 0)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        else if (const Elf_Symndx* count = ct_table_entry<Elf_Symndx>(hash, 1))
+        {
+            // Only the global and weak symbols that do not bind locally.
+            for (uint64_t index = 0; index < *count; ++index)
+            {
+                const ElfW(Sym)* symbol = ct_table_entry<ElfW(Sym)>(symbols, index);
+                if (!symbol)
+                {
+                    return nullptr;
+                }
+                const unsigned char binding = ELF64_ST_BIND(symbol->st_info);
+                const unsigned char visibility = ELF64_ST_VISIBILITY(symbol->st_other);
+                if ((binding == STB_GLOBAL || binding == STB_WEAK) && visibility != STV_HIDDEN &&
+                    visibility != STV_INTERNAL)
+                {
+                    consider(*symbol);
+                }
+            }
+        }
+        return match ? reinterpret_cast<const char*>(strings.address) + match->st_name : nullptr;
+    }
+#endif
+
+    // The name of the symbol that holds `addr`, null without one.
+    CT_NODISCARD CT_NOINSTR const char* ct_lookup_symbol(const void* addr)
+    {
+#if defined(__linux__) && defined(DLFO_STRUCT_HAS_EH_DBASE)
+        return ct_find_symbol_linux(addr);
+#elif defined(__APPLE__) || defined(__linux__)
         Dl_info info;
-        if (dladdr(addr, &info) == 0)
-        {
-            return false;
-        }
-        if (name_out)
-        {
-            *name_out = info.dli_sname;
-        }
-        if (object_out)
-        {
-            *object_out = info.dli_fname;
-        }
-        return info.dli_sname != nullptr || info.dli_fname != nullptr;
+        return dladdr(addr, &info) != 0 ? info.dli_sname : nullptr;
 #else
         (void)addr;
-        (void)name_out;
-        (void)object_out;
-        return false;
+        return nullptr;
 #endif
     }
 
@@ -563,7 +719,9 @@ namespace
         }
 #endif
 
-#if defined(__APPLE__) || defined(__linux__)
+        // With _dl_find_object, dladdr would find no other module, and would wait for the lock
+        // that dlopen holds while it runs constructors (#223).
+#if defined(__APPLE__) || (defined(__linux__) && !defined(DLFO_STRUCT_HAS_EH_DBASE))
         Dl_info info;
         if (dladdr(addr, &info) != 0 && info.dli_fname)
         {
@@ -869,9 +1027,9 @@ extern "C"
         bool has_vtable = !is_freed && ct_read_vtable_info(this_ptr, info);
         std::string type_name = has_vtable ? ct_format_type_name(info.typeinfo) : "<unknown>";
 
-        const char* sym = nullptr;
+        const char* sym = target ? ct_lookup_symbol(target) : nullptr;
         std::string demangled;
-        if (target && ct_lookup_symbol(target, &sym, nullptr) && sym)
+        if (sym)
         {
             (void)ct_name_cache().demangle(sym, demangled);
         }
