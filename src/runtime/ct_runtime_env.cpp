@@ -45,7 +45,8 @@ CT_NODISCARD CT_NOINSTR CtCompiledConfig ct_read_compiled_config(void)
 // fork() copies only the calling thread: a lock another thread held at that moment would
 // stay held in the child, which would hang on its first allocation or log line. Around
 // fork(), the calling thread takes every lock of the runtime, in the order the runtime
-// nests them, and releases them in both processes.
+// nests them, and releases them in both processes. The handlers registered before these run
+// in between, on this thread, while it holds the locks (#224).
 CT_NOINSTR static void ct_lock_runtime_for_fork(void)
 {
     ct_lock_acquire();

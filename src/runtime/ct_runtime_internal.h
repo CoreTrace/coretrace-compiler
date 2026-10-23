@@ -168,8 +168,10 @@ CT_NOINSTR void ct_log_lock_release(void);
 CT_NOINSTR void ct_autofree_scan_hook_lock_acquire(void);
 CT_NOINSTR void ct_autofree_scan_hook_lock_release(void);
 // Whether this thread is forking and holds every lock of the runtime, from its fork() prepare
-// handler until its parent or child handler. The system's own fork() handlers run in between
-// on this thread; whatever they call into the runtime must not wait on those locks.
+// handler until its parent or child handler. The handlers registered before the runtime's, the
+// system's among them, run in between on this thread: the functions that take and release the
+// runtime's locks then do nothing, so that whatever these handlers call into the runtime does
+// not wait on them (#224).
 #if defined(_WIN32)
 // Windows has no fork().
 CT_NODISCARD CT_NOINSTR inline bool ct_runtime_locked_for_fork(void)
