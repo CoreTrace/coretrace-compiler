@@ -653,20 +653,27 @@ CT_NOINSTR static void ct_on_thread_event(unsigned int event, pthread_t thread, 
 // keeps all its events, those of threads that start while this one is installed included.
 CT_NOINSTR static void ct_count_thread_starts(void)
 {
-    pthread_mutex_lock(&ct_thread_hook_lock);
+    ct_autofree_scan_hook_lock_acquire();
     ct_thread_hook_chain_link(ct_thread_hook,
                               pthread_introspection_hook_install(ct_on_thread_event));
-    pthread_mutex_unlock(&ct_thread_hook_lock);
+    ct_autofree_scan_hook_lock_release();
 }
 
 CT_NOINSTR void ct_autofree_scan_hook_lock_acquire(void)
 {
-    pthread_mutex_lock(&ct_thread_hook_lock);
+    // A thread that forks holds it already: see ct_runtime_locked_for_fork.
+    if (!ct_runtime_locked_for_fork())
+    {
+        pthread_mutex_lock(&ct_thread_hook_lock);
+    }
 }
 
 CT_NOINSTR void ct_autofree_scan_hook_lock_release(void)
 {
-    pthread_mutex_unlock(&ct_thread_hook_lock);
+    if (!ct_runtime_locked_for_fork())
+    {
+        pthread_mutex_unlock(&ct_thread_hook_lock);
+    }
 }
 
 CT_NODISCARD CT_NOINSTR bool ct_list_threads(struct ct_scan_threads* threads)

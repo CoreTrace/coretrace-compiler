@@ -31,6 +31,11 @@ namespace
 
 CT_NOINSTR void ct_demangle_cache_lock_acquire(void)
 {
+    // A thread that forks holds it already: see ct_runtime_locked_for_fork.
+    if (ct_runtime_locked_for_fork())
+    {
+        return;
+    }
 #if defined(_WIN32)
     AcquireSRWLockExclusive(&ct_demangle_cache_lock);
 #else
@@ -40,6 +45,10 @@ CT_NOINSTR void ct_demangle_cache_lock_acquire(void)
 
 CT_NOINSTR void ct_demangle_cache_lock_release(void)
 {
+    if (ct_runtime_locked_for_fork())
+    {
+        return;
+    }
 #if defined(_WIN32)
     ReleaseSRWLockExclusive(&ct_demangle_cache_lock);
 #else

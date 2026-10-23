@@ -21,12 +21,19 @@ namespace
 
 CT_NOINSTR void ct_log_lock_acquire(void)
 {
-    pthread_mutex_lock(&ct_log_mutex);
+    // A thread that forks holds it already: see ct_runtime_locked_for_fork.
+    if (!ct_runtime_locked_for_fork())
+    {
+        pthread_mutex_lock(&ct_log_mutex);
+    }
 }
 
 CT_NOINSTR void ct_log_lock_release(void)
 {
-    pthread_mutex_unlock(&ct_log_mutex);
+    if (!ct_runtime_locked_for_fork())
+    {
+        pthread_mutex_unlock(&ct_log_mutex);
+    }
 }
 #else
 // Windows has no fork(): nothing waits on this lock there.

@@ -28,7 +28,6 @@ extern "C"
 namespace
 {
     int ct_env_initialized = 0;
-    thread_local bool ct_locked_for_fork = false;
 } // namespace
 
 CT_NODISCARD CT_NOINSTR CtCompiledConfig ct_read_compiled_config(void)
@@ -46,7 +45,8 @@ CT_NODISCARD CT_NOINSTR CtCompiledConfig ct_read_compiled_config(void)
 // fork() copies only the calling thread: a lock another thread held at that moment would
 // stay held in the child, which would hang on its first allocation or log line. Around
 // fork(), the calling thread takes every lock of the runtime, in the order the runtime
-// nests them, and releases them in both processes.
+// nests them, and releases them in both processes. The handlers registered before these run
+// in between, on this thread, while it holds the locks (#224).
 CT_NOINSTR static void ct_lock_runtime_for_fork(void)
 {
     ct_lock_acquire();
@@ -54,22 +54,17 @@ CT_NOINSTR static void ct_lock_runtime_for_fork(void)
     ct_log_lock_acquire();
     ct_demangle_cache_lock_acquire();
     ct_autofree_scan_hook_lock_acquire();
-    ct_locked_for_fork = true;
+    ct_runtime_fork_locked = true;
 }
 
 CT_NOINSTR static void ct_unlock_runtime_after_fork(void)
 {
-    ct_locked_for_fork = false;
+    ct_runtime_fork_locked = false;
     ct_autofree_scan_hook_lock_release();
     ct_demangle_cache_lock_release();
     ct_log_lock_release();
     ct_shadow_lock_release();
     ct_lock_release();
-}
-
-CT_NODISCARD CT_NOINSTR bool ct_runtime_locked_for_fork(void)
-{
-    return ct_locked_for_fork;
 }
 
 CT_NOINSTR __attribute__((constructor)) static void ct_runtime_init(void)

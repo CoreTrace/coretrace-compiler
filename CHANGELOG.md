@@ -49,6 +49,12 @@ pull request.
   that waited for a thread making such a call, as a thread pool's start does, never returned.
   The runtime now reads the symbol from the tables of the module that `_dl_find_object` finds
   (glibc 2.35 and later), and does not call `dladdr` for an address that no module holds (#223).
+- **Fork handlers registered before the runtime's.** A handler that `pthread_atfork` registered
+  before the runtime's, by a global object of the program or a library initialized first, runs
+  while the forking thread holds every lock of the runtime: in the parent around `fork()`, and in
+  the child before the runtime gives its locks back. When it called into the runtime, with a
+  traced virtual call or an instrumented allocation, it waited forever for a lock its own thread
+  held. The runtime now takes and releases none of its locks on that thread meanwhile (#224).
 
 ## v0.12.0 (2026-10-22)
 

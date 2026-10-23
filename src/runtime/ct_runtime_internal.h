@@ -168,9 +168,26 @@ CT_NOINSTR void ct_log_lock_release(void);
 CT_NOINSTR void ct_autofree_scan_hook_lock_acquire(void);
 CT_NOINSTR void ct_autofree_scan_hook_lock_release(void);
 // Whether this thread is forking and holds every lock of the runtime, from its fork() prepare
-// handler until its parent or child handler. The system's own fork() handlers run in between
-// on this thread; whatever they call into the runtime must not wait on those locks.
-CT_NODISCARD CT_NOINSTR bool ct_runtime_locked_for_fork(void);
+// handler until its parent or child handler. The handlers registered before the runtime's, the
+// system's among them, run in between on this thread: the functions that take and release the
+// runtime's locks then do nothing, so that whatever these handlers call into the runtime does
+// not wait on them (#224).
+#if defined(_WIN32)
+// Windows has no fork().
+CT_NODISCARD CT_NOINSTR inline bool ct_runtime_locked_for_fork(void)
+{
+    return false;
+}
+#else
+// Set by the runtime's fork() handlers (ct_runtime_env.cpp). Inline, so that the lock functions,
+// which read it at every allocation, read it in place.
+inline thread_local bool ct_runtime_fork_locked = false;
+
+CT_NODISCARD CT_NOINSTR inline bool ct_runtime_locked_for_fork(void)
+{
+    return ct_runtime_fork_locked;
+}
+#endif
 CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t size,
                                             const char* site, unsigned char kind);
 CT_NODISCARD CT_NOINSTR int ct_table_remove(void* ptr, size_t* size_out, size_t* req_size_out,

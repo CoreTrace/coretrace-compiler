@@ -60,12 +60,19 @@ extern "C"
 
 CT_NOINSTR void ct_lock_acquire(void)
 {
-    ct_spin_lock_acquire(&ct_alloc_lock);
+    // A thread that forks holds it already: see ct_runtime_locked_for_fork.
+    if (!ct_runtime_locked_for_fork())
+    {
+        ct_spin_lock_acquire(&ct_alloc_lock);
+    }
 }
 
 CT_NOINSTR void ct_lock_release(void)
 {
-    __atomic_store_n(&ct_alloc_lock, 0, __ATOMIC_RELEASE);
+    if (!ct_runtime_locked_for_fork())
+    {
+        __atomic_store_n(&ct_alloc_lock, 0, __ATOMIC_RELEASE);
+    }
 }
 
 // The size of the allocation table when it was found unable to grow, to be reported once the
