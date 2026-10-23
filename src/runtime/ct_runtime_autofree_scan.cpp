@@ -661,12 +661,19 @@ CT_NOINSTR static void ct_count_thread_starts(void)
 
 CT_NOINSTR void ct_autofree_scan_hook_lock_acquire(void)
 {
-    pthread_mutex_lock(&ct_thread_hook_lock);
+    // A thread that forks holds it already: see ct_runtime_locked_for_fork.
+    if (!ct_runtime_locked_for_fork())
+    {
+        pthread_mutex_lock(&ct_thread_hook_lock);
+    }
 }
 
 CT_NOINSTR void ct_autofree_scan_hook_lock_release(void)
 {
-    pthread_mutex_unlock(&ct_thread_hook_lock);
+    if (!ct_runtime_locked_for_fork())
+    {
+        pthread_mutex_unlock(&ct_thread_hook_lock);
+    }
 }
 
 CT_NODISCARD CT_NOINSTR bool ct_list_threads(struct ct_scan_threads* threads)
