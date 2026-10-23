@@ -10,6 +10,10 @@
 #include <objc/message.h>
 #include <objc/runtime.h>
 
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 namespace
 {
     Class trackedClass()
@@ -103,5 +107,53 @@ namespace
 
         EXPECT_FALSE(isTracked(object));
         send(object, "release");
+    }
+
+    // Within fork(), the dealloc hook forgets a tracked object under the allocation table's
+    // lock, which its thread already holds there (#207).
+    TEST(ObjcTracking, ForgetsAnObjectUnderTheLockItsThreadHolds)
+    {
+        Class cls = trackedClass();
+        id object = makeInstance(cls);
+        __ct_objc_track(object, cls, "test:objc");
+        ASSERT_TRUE(isTracked(object));
+
+        ct_lock_acquire();
+        const size_t size = ct_forget_allocation_locked(object, CT_ALLOC_KIND_OBJC);
+        ct_lock_release();
+        EXPECT_GT(size, 0u);
+        EXPECT_FALSE(isTracked(object));
+        send(object, "release");
+    }
+
+    // fork() runs libSystem's own handlers between the runtime's: xpc_atfork_child releases
+    // objects in the child, through -[NSObject dealloc], while the forking thread still holds
+    // the runtime's locks. The child must come out of fork() and exit (#207).
+    TEST(ObjcTracking, AChildOfForkExits)
+    {
+        const pid_t child = fork();
+        if (child == 0)
+        {
+            _exit(0);
+        }
+        ASSERT_GT(child, 0);
+
+        int status = 0;
+        bool exited = false;
+        for (int waited = 0; waited < 2000 && !exited; ++waited)
+        {
+            exited = waitpid(child, &status, WNOHANG) == child;
+            if (!exited)
+            {
+                usleep(1000);
+            }
+        }
+        if (!exited)
+        {
+            kill(child, SIGKILL);
+            waitpid(child, &status, 0);
+        }
+        EXPECT_TRUE(exited) << "the child had not exited after 2 seconds";
+        EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     }
 } // namespace

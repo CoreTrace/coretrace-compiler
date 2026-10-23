@@ -24,6 +24,11 @@ pull request.
   runtime that another thread of the parent was initializing. The runtime now looks the
   modules up through `_dl_find_object`, which takes no lock (glibc 2.35 and later), and
   initializes its caches when the program starts (#206).
+- **A child of `fork()` on macOS, when Objective-C objects are tracked.** The child hung inside
+  `fork()`: libSystem's own fork handlers release objects in the child before the runtime's
+  handler gives its locks back, and the runtime's hook of `-[NSObject dealloc]` waited for the
+  allocation table's lock. While the forking thread holds the runtime's locks, the hook now
+  forgets the object's record under the lock it holds, without its trace line (#207).
 
 ## v0.12.0 (2026-10-22)
 

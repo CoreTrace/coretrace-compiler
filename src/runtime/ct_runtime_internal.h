@@ -167,6 +167,10 @@ CT_NOINSTR void ct_log_lock_release(void);
 // other lock. No-ops where the scan does not exist.
 CT_NOINSTR void ct_autofree_scan_hook_lock_acquire(void);
 CT_NOINSTR void ct_autofree_scan_hook_lock_release(void);
+// Whether this thread is forking and holds every lock of the runtime, from its fork() prepare
+// handler until its parent or child handler. The system's own fork() handlers run in between
+// on this thread; whatever they call into the runtime must not wait on those locks.
+CT_NODISCARD CT_NOINSTR bool ct_runtime_locked_for_fork(void);
 CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t size,
                                             const char* site, unsigned char kind);
 CT_NODISCARD CT_NOINSTR int ct_table_remove(void* ptr, size_t* size_out, size_t* req_size_out,
