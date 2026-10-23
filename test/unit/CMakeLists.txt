@@ -83,8 +83,8 @@ if(TARGET ct_instrument_runtime)
       CT_RELOAD_LIBRARY_A="$<TARGET_FILE:ct_reload_a>")
     add_dependencies(runtime_vtable_symbol_tests ct_reload_a)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-      # Exported on Linux only: macOS's dladdr names the program's functions without, and the
-      # runtime's weak configuration globals do not link there with -export_dynamic.
+      # Exported on Linux, where the runtime reads the program's dynamic symbols: macOS's dladdr
+      # names the program's functions without.
       set_target_properties(runtime_vtable_symbol_tests PROPERTIES ENABLE_EXPORTS ON)
       target_link_options(runtime_vtable_symbol_tests PRIVATE -Wl,-z,separate-code
         -Wl,-z,max-page-size=0x10000)
