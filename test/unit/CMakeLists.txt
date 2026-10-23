@@ -113,6 +113,12 @@ if(TARGET ct_instrument_runtime)
     target_include_directories(runtime_log_fallback_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
     target_link_libraries(runtime_log_fallback_tests PRIVATE ct_instrument_runtime coretrace_logger
       GTest::gtest_main)
+    # Fork handlers that call into the runtime while the forking thread holds its locks (#224),
+    # in a process whose initialization registers them before the runtime registers its own.
+    add_executable(runtime_fork_handlers_tests runtime_fork_handlers_test.cpp)
+    target_include_directories(runtime_fork_handlers_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+    target_link_libraries(runtime_fork_handlers_tests PRIVATE ct_instrument_runtime coretrace_logger
+      GTest::gtest_main)
   endif()
   if(WIN32)
     # A DLL replaced at its path by another build with the same time stamp (#208).
@@ -156,6 +162,9 @@ if(TARGET runtime_table_tombstones_tests)
 endif()
 if(TARGET runtime_fork_modules_tests)
   gtest_discover_tests(runtime_fork_modules_tests)
+endif()
+if(TARGET runtime_fork_handlers_tests)
+  gtest_discover_tests(runtime_fork_handlers_tests)
 endif()
 if(TARGET runtime_scan_threads_tests)
   gtest_discover_tests(runtime_scan_threads_tests PROPERTIES ENVIRONMENT CT_AUTOFREE_SCAN=1)
