@@ -354,6 +354,99 @@ namespace
             << "handles before the cycles: " << before << ", after: " << after;
     }
 
+    // The slot of `module`'s import table that holds the address of `function`, imported from
+    // `library`; null without one.
+    void** importSlot(HMODULE module, const char* library, const char* function)
+    {
+        auto* base = reinterpret_cast<unsigned char*>(module);
+        auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+        auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+        const IMAGE_DATA_DIRECTORY& directory =
+            nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        if (directory.VirtualAddress == 0)
+        {
+            return nullptr;
+        }
+        for (auto* import =
+                 reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + directory.VirtualAddress);
+             import->Name != 0; ++import)
+        {
+            if (_stricmp(reinterpret_cast<const char*>(base + import->Name), library) != 0)
+            {
+                continue;
+            }
+            auto* names = reinterpret_cast<IMAGE_THUNK_DATA*>(base + import->OriginalFirstThunk);
+            auto* slots = reinterpret_cast<IMAGE_THUNK_DATA*>(base + import->FirstThunk);
+            for (; names->u1.AddressOfData != 0; ++names, ++slots)
+            {
+                if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal))
+                {
+                    continue;
+                }
+                auto* by_name =
+                    reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + names->u1.AddressOfData);
+                if (std::strcmp(reinterpret_cast<const char*>(by_name->Name), function) == 0)
+                {
+                    return reinterpret_cast<void**>(&slots->u1.Function);
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    // Has the DLL that links the runtime call `replacement` in place of SymCleanup.
+    bool replaceSymCleanup(HMODULE runtime, void* replacement, void** original = nullptr)
+    {
+        void** slot = importSlot(runtime, "dbghelp.dll", "SymCleanup");
+        DWORD protection = 0;
+        if (!slot || !VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &protection))
+        {
+            return false;
+        }
+        if (original)
+        {
+            *original = *slot;
+        }
+        *slot = replacement;
+        (void)VirtualProtect(slot, sizeof(*slot), protection, &protection);
+        return true;
+    }
+
+    // In place of SymCleanup at process termination: ends the process with a code of its own.
+    BOOL WINAPI symCleanupAtExit(HANDLE)
+    {
+        TerminateProcess(GetCurrentProcess(), 9);
+        return TRUE;
+    }
+
+    // Loads a DLL that links the runtime, has its copy name a call, which starts its DbgHelp
+    // session, then exits with the DLL still loaded. Exits with 0, or with 9 when the copy calls
+    // SymCleanup as the process terminates.
+    [[noreturn]] void exitWithARuntimeLibraryLoaded()
+    {
+        HMODULE runtime = LoadLibraryA(CT_RUNTIME_LIBRARY);
+        FARPROC entry = runtime ? GetProcAddress(runtime, "ct_runtime_library_trace") : nullptr;
+        if (!entry)
+        {
+            std::exit(2);
+        }
+        reinterpret_cast<void (*)()>(entry)();
+        if (!replaceSymCleanup(runtime, reinterpret_cast<void*>(&symCleanupAtExit)))
+        {
+            std::exit(3);
+        }
+        std::exit(0);
+    }
+
+    // A DLL's copy of the runtime frees nothing while the process terminates: the guidance for
+    // DllMain, which applies to the destructors that run from it, is to free resources only when
+    // the DLL is unloaded dynamically, and not to call FreeLibrary then (#226).
+    TEST(VtableReplaceDeathTest, ADllThatLinksTheRuntimeKeepsItsDbgHelpSessionAtProcessExit)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(exitWithARuntimeLibraryLoaded(), testing::ExitedWithCode(0), "");
+    }
+
     // Loads a DLL that links the runtime, has its copy name a call or not, and unloads it, when
     // its destructors name one; then loads and unloads another DLL. Exits with 0 when the
     // destructors' box named the DLL's function, or nothing, and the loader did not call into the
