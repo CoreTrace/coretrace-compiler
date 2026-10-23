@@ -73,7 +73,8 @@ if(TARGET ct_instrument_runtime)
   if(NOT WIN32)
     # The module comparison of the POSIX vtable diagnostics.
     target_sources(runtime_unit_tests PRIVATE runtime_vtable_modules_test.cpp)
-    # The symbol of a call target, in a program that exports its functions (#223).
+    # The symbol of a call target, in a program that exports its functions and whose code and
+    # symbols are in segments apart on Linux, as with 64 KiB pages (#223).
     add_executable(runtime_vtable_symbol_tests runtime_vtable_symbol_test.cpp)
     set_target_properties(runtime_vtable_symbol_tests PROPERTIES ENABLE_EXPORTS ON)
     target_include_directories(runtime_vtable_symbol_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
@@ -82,6 +83,10 @@ if(TARGET ct_instrument_runtime)
     target_compile_definitions(runtime_vtable_symbol_tests PRIVATE
       CT_RELOAD_LIBRARY_A="$<TARGET_FILE:ct_reload_a>")
     add_dependencies(runtime_vtable_symbol_tests ct_reload_a)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      target_link_options(runtime_vtable_symbol_tests PRIVATE -Wl,-z,separate-code
+        -Wl,-z,max-page-size=0x10000)
+    endif()
     # The order of the runtime's locks and the logger's, which both take around fork().
     target_sources(runtime_unit_tests PRIVATE runtime_log_locks_test.cpp)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
