@@ -26,9 +26,12 @@ namespace
     std::atomic<bool> ct_released{false};
     // Used with the DbgHelp lock held.
     HANDLE ct_session = nullptr;
-    // Set by this file's TLS callback when FreeLibrary unloads the module: its TLS callbacks run
-    // before its destructors then, which #208's tests rely on.
-    std::atomic<bool> ct_unloaded_by_freelibrary{false};
+    // RtlDllShutdownInProgress, which ntdll.dll exports and no SDK header declares (Windows 10 and
+    // later), looked up by this file's TLS callback when the module attaches: a lookup at detach
+    // takes a lock of the loader that process termination can leave held, as one reported for
+    // WIL (https://github.com/microsoft/wil/issues/567).
+    using CtShutdownInProgress = BOOLEAN(NTAPI*)();
+    std::atomic<CtShutdownInProgress> ct_shutdown_in_progress{nullptr};
 
     CT_NOINSTR HANDLE ct_open_semaphore()
     {
@@ -75,8 +78,10 @@ namespace
 
         CT_NOINSTR ~CtDbgHelpRelease()
         {
+            const CtShutdownInProgress shutdown_in_progress =
+                ct_shutdown_in_progress.load(std::memory_order_acquire);
             if (reinterpret_cast<HMODULE>(&__ImageBase) == GetModuleHandleW(nullptr) ||
-                !ct_unloaded_by_freelibrary.load(std::memory_order_acquire))
+                !shutdown_in_progress || shutdown_in_progress())
             {
                 return;
             }
@@ -100,20 +105,21 @@ namespace
 
     CtDbgHelpRelease ct_dbghelp_release;
 
-    // At DLL_PROCESS_DETACH, lpvReserved is null when FreeLibrary unloads the module, and not
-    // when the process terminates (DllMain's documentation). At process termination, the
-    // destructors do not wait for the TLS callbacks: a callback that marked the termination
-    // left the release running (#226). The release therefore waits for the mark of an unload.
-    CT_NOINSTR void NTAPI ct_dbghelp_tls(PVOID, DWORD reason, PVOID reserved)
+    // The TLS callbacks cannot tell an unload from a termination: at DLL_PROCESS_DETACH, they
+    // receive a null lpvReserved when the process terminates too, unlike DllMain (#226).
+    CT_NOINSTR void NTAPI ct_dbghelp_tls(PVOID, DWORD reason, PVOID)
     {
-        if (reason == DLL_PROCESS_DETACH && reserved == nullptr)
+        if (reason == DLL_PROCESS_ATTACH)
         {
-            ct_unloaded_by_freelibrary.store(true, std::memory_order_release);
+            ct_shutdown_in_progress.store(
+                reinterpret_cast<CtShutdownInProgress>(
+                    GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlDllShutdownInProgress")),
+                std::memory_order_release);
         }
     }
 } // namespace
 
-// The TLS callback that tells the release an unload from a termination, in the file of the
+// The TLS callback that looks RtlDllShutdownInProgress up for the release, in the file of the
 // release, so that a module linking one links the other.
 #pragma comment(linker, "/INCLUDE:_tls_used")
 #pragma comment(linker, "/INCLUDE:ct_dbghelp_tls_callback")
