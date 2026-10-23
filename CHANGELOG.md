@@ -42,6 +42,12 @@ pull request.
   still busy then, and all of them take one lock per process, a semaphore that a program using
   DbgHelp can take too. A box waits 500 ms at most for it, and a name it could not decode
   meanwhile is decoded at the next box (README, "DbgHelp on Windows") (#208).
+- **Fork handlers registered before the runtime's.** A handler that `pthread_atfork` registered
+  before the runtime's, by a global object of the program or a library initialized first, runs
+  while the forking thread holds every lock of the runtime: in the parent around `fork()`, and in
+  the child before the runtime gives its locks back. When it called into the runtime, with a
+  traced virtual call or an instrumented allocation, it waited forever for a lock its own thread
+  held. The runtime now takes and releases none of its locks on that thread meanwhile (#224).
 
 ## v0.12.0 (2026-10-22)
 
