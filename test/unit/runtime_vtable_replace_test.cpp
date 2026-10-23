@@ -12,6 +12,7 @@
 // one forever.
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -445,6 +446,31 @@ namespace
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         EXPECT_EXIT(exitWithARuntimeLibraryLoaded(), testing::ExitedWithCode(0), "");
+    }
+
+    std::atomic<int> sym_cleanups{0};
+    BOOL(WINAPI* real_sym_cleanup)(HANDLE) = nullptr;
+
+    BOOL WINAPI countingSymCleanup(HANDLE process)
+    {
+        sym_cleanups.fetch_add(1);
+        return real_sym_cleanup(process);
+    }
+
+    // FreeLibrary still has the DLL's copy close its session.
+    TEST(VtableReplace, ADllThatLinksTheRuntimeClosesItsDbgHelpSessionWhenUnloaded)
+    {
+        HMODULE runtime = LoadLibraryA(CT_RUNTIME_LIBRARY);
+        FARPROC entry = runtime ? GetProcAddress(runtime, "ct_runtime_library_trace") : nullptr;
+        ASSERT_NE(entry, nullptr) << CT_RUNTIME_LIBRARY;
+        reinterpret_cast<void (*)()>(entry)();
+        void* original = nullptr;
+        ASSERT_TRUE(
+            replaceSymCleanup(runtime, reinterpret_cast<void*>(&countingSymCleanup), &original));
+        real_sym_cleanup = reinterpret_cast<BOOL(WINAPI*)(HANDLE)>(original);
+        sym_cleanups.store(0);
+        FreeLibrary(runtime);
+        EXPECT_EQ(sym_cleanups.load(), 1);
     }
 
     // Loads a DLL that links the runtime, has its copy name a call or not, and unloads it, when
