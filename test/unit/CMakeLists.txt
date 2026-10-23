@@ -73,6 +73,15 @@ if(TARGET ct_instrument_runtime)
   if(NOT WIN32)
     # The module comparison of the POSIX vtable diagnostics.
     target_sources(runtime_unit_tests PRIVATE runtime_vtable_modules_test.cpp)
+    # The symbol of a call target, in a program that exports its functions (#223).
+    add_executable(runtime_vtable_symbol_tests runtime_vtable_symbol_test.cpp)
+    set_target_properties(runtime_vtable_symbol_tests PROPERTIES ENABLE_EXPORTS ON)
+    target_include_directories(runtime_vtable_symbol_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+    target_link_libraries(runtime_vtable_symbol_tests PRIVATE ct_instrument_runtime coretrace_logger
+      GTest::gtest_main ${CMAKE_DL_LIBS})
+    target_compile_definitions(runtime_vtable_symbol_tests PRIVATE
+      CT_RELOAD_LIBRARY_A="$<TARGET_FILE:ct_reload_a>")
+    add_dependencies(runtime_vtable_symbol_tests ct_reload_a)
     # The order of the runtime's locks and the logger's, which both take around fork().
     target_sources(runtime_unit_tests PRIVATE runtime_log_locks_test.cpp)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -156,6 +165,9 @@ if(TARGET runtime_table_tombstones_tests)
 endif()
 if(TARGET runtime_fork_modules_tests)
   gtest_discover_tests(runtime_fork_modules_tests)
+endif()
+if(TARGET runtime_vtable_symbol_tests)
+  gtest_discover_tests(runtime_vtable_symbol_tests)
 endif()
 if(TARGET runtime_scan_threads_tests)
   gtest_discover_tests(runtime_scan_threads_tests PROPERTIES ENVIRONMENT CT_AUTOFREE_SCAN=1)
