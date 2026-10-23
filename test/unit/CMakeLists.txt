@@ -112,6 +112,14 @@ if(TARGET ct_instrument_runtime)
       # A library whose constructor waits for traced virtual calls, loaded by a program that
       # exports the runtime's entry points to it (#223).
       add_library(ct_trace_constructor_library MODULE reload/ct_trace_constructor_library.cpp)
+      add_executable(runtime_loader_lock_tests runtime_loader_lock_test.cpp)
+      set_target_properties(runtime_loader_lock_tests PROPERTIES ENABLE_EXPORTS ON)
+      target_include_directories(runtime_loader_lock_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+      target_link_libraries(runtime_loader_lock_tests PRIVATE ct_instrument_runtime coretrace_logger
+        GTest::gtest_main ${CMAKE_DL_LIBS})
+      target_compile_definitions(runtime_loader_lock_tests PRIVATE
+        CT_TRACE_CONSTRUCTOR_LIBRARY="$<TARGET_FILE:ct_trace_constructor_library>")
+      add_dependencies(runtime_loader_lock_tests ct_trace_constructor_library)
     endif()
     if(TARGET ct_instrument_runtime_asan)
       # A global object's destructor that names a call, with the runtime that AddressSanitizer
@@ -180,6 +188,9 @@ if(TARGET runtime_table_tombstones_tests)
 endif()
 if(TARGET runtime_fork_modules_tests)
   gtest_discover_tests(runtime_fork_modules_tests)
+endif()
+if(TARGET runtime_loader_lock_tests)
+  gtest_discover_tests(runtime_loader_lock_tests)
 endif()
 if(TARGET runtime_vtable_symbol_tests)
   gtest_discover_tests(runtime_vtable_symbol_tests)
