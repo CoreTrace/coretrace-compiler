@@ -17,6 +17,19 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+// The configuration globals of an instrumented program with default options, as
+// runtime_table_test.cpp defines them.
+extern "C"
+{
+    int __ct_config_shadow = 0;
+    int __ct_config_shadow_aggressive = 0;
+    int __ct_config_bounds_no_abort = 0;
+    int __ct_config_disable_alloc = 0;
+    int __ct_config_disable_autofree = 1;
+    int __ct_config_disable_alloc_trace = 0;
+    int __ct_config_vtable_diag = 0;
+}
+
 extern "C"
 {
     void __ct_vcall_trace(void* this_ptr, void* target, const char* site, const char* static_type);
