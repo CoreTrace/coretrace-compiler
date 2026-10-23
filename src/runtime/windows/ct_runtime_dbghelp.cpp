@@ -2,7 +2,8 @@
 //
 // The DbgHelp state of this copy of the runtime (ct_runtime_helpers.h): its handle of the DbgHelp
 // lock of the process, and its session. Whoever uses them goes through this file, which releases
-// them when the DLL that holds this copy unloads, after the DLL's last virtual calls (#208).
+// them when FreeLibrary unloads the DLL that holds this copy, after the DLL's last virtual calls
+// (#208), and leaves them to the system when the process terminates (#226).
 #include "ct_runtime_helpers.h"
 #include "ct_runtime_internal.h"
 
@@ -25,6 +26,9 @@ namespace
     std::atomic<bool> ct_released{false};
     // Used with the DbgHelp lock held.
     HANDLE ct_session = nullptr;
+    // Set by this file's TLS callback when the module detaches because the process terminates.
+    // A module's TLS callbacks run before its destructors at detach, which #208's tests rely on.
+    std::atomic<bool> ct_process_terminating{false};
 
     CT_NOINSTR HANDLE ct_open_semaphore()
     {
@@ -53,12 +57,15 @@ namespace
         return created;
     }
 
-    // Releases the session and the semaphore's handle of a DLL's copy when the DLL unloads,
-    // after the destructors of its global objects, which may still name calls. SymCleanup needs
-    // DbgHelp: when another thread holds it past the lookups' wait, as one that waits for the
-    // loader lock FreeLibrary holds, the session is left as it is. The executable keeps its
+    // Releases the session and the semaphore's handle of a DLL's copy when FreeLibrary unloads
+    // the DLL, after the destructors of its global objects, which may still name calls. SymCleanup
+    // needs DbgHelp: when another thread holds it past the lookups' wait, as one that waits for
+    // the loader lock FreeLibrary holds, the session is left as it is. The executable keeps its
     // state until the process ends: code of the DLLs that detach after its destructors may still
-    // call into it.
+    // call into it. Neither does a DLL release anything when the process terminates: the
+    // guidance for DllMain, which applies to the destructors the C runtime runs from it, is to
+    // free resources only when the DLL is unloaded dynamically, and not to call FreeLibrary,
+    // which SymCleanup may do, during process termination.
     struct CtDbgHelpRelease
     {
         // User-provided, so that the object is initialized dynamically, in this file's
@@ -68,7 +75,8 @@ namespace
 
         CT_NOINSTR ~CtDbgHelpRelease()
         {
-            if (reinterpret_cast<HMODULE>(&__ImageBase) == GetModuleHandleW(nullptr))
+            if (reinterpret_cast<HMODULE>(&__ImageBase) == GetModuleHandleW(nullptr) ||
+                ct_process_terminating.load(std::memory_order_acquire))
             {
                 return;
             }
@@ -91,7 +99,25 @@ namespace
     };
 
     CtDbgHelpRelease ct_dbghelp_release;
+
+    // At DLL_PROCESS_DETACH, lpvReserved is null when FreeLibrary unloads the module, and not
+    // when the process terminates (DllMain's documentation).
+    CT_NOINSTR void NTAPI ct_dbghelp_tls(PVOID, DWORD reason, PVOID reserved)
+    {
+        if (reason == DLL_PROCESS_DETACH && reserved != nullptr)
+        {
+            ct_process_terminating.store(true, std::memory_order_release);
+        }
+    }
 } // namespace
+
+// The TLS callback that tells the release a termination from an unload, in the file of the
+// release, so that a module linking one links the other.
+#pragma comment(linker, "/INCLUDE:_tls_used")
+#pragma comment(linker, "/INCLUDE:ct_dbghelp_tls_callback")
+#pragma section(".CRT$XLY", read)
+extern "C" __declspec(allocate(".CRT$XLY")) __attribute__((used))
+const PIMAGE_TLS_CALLBACK ct_dbghelp_tls_callback = ct_dbghelp_tls;
 
 CT_NOINSTR CtDbgHelpLock::CtDbgHelpLock(DWORD wait) : semaphore_(ct_open_semaphore())
 {
