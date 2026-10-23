@@ -26,9 +26,9 @@ namespace
     std::atomic<bool> ct_released{false};
     // Used with the DbgHelp lock held.
     HANDLE ct_session = nullptr;
-    // Set by this file's TLS callback when the module detaches because the process terminates.
-    // A module's TLS callbacks run before its destructors at detach, which #208's tests rely on.
-    std::atomic<bool> ct_process_terminating{false};
+    // Set by this file's TLS callback when FreeLibrary unloads the module: its TLS callbacks run
+    // before its destructors then, which #208's tests rely on.
+    std::atomic<bool> ct_unloaded_by_freelibrary{false};
 
     CT_NOINSTR HANDLE ct_open_semaphore()
     {
@@ -76,7 +76,7 @@ namespace
         CT_NOINSTR ~CtDbgHelpRelease()
         {
             if (reinterpret_cast<HMODULE>(&__ImageBase) == GetModuleHandleW(nullptr) ||
-                ct_process_terminating.load(std::memory_order_acquire))
+                !ct_unloaded_by_freelibrary.load(std::memory_order_acquire))
             {
                 return;
             }
@@ -101,17 +101,19 @@ namespace
     CtDbgHelpRelease ct_dbghelp_release;
 
     // At DLL_PROCESS_DETACH, lpvReserved is null when FreeLibrary unloads the module, and not
-    // when the process terminates (DllMain's documentation).
+    // when the process terminates (DllMain's documentation). At process termination, the
+    // destructors do not wait for the TLS callbacks: a callback that marked the termination
+    // left the release running (#226). The release therefore waits for the mark of an unload.
     CT_NOINSTR void NTAPI ct_dbghelp_tls(PVOID, DWORD reason, PVOID reserved)
     {
-        if (reason == DLL_PROCESS_DETACH && reserved != nullptr)
+        if (reason == DLL_PROCESS_DETACH && reserved == nullptr)
         {
-            ct_process_terminating.store(true, std::memory_order_release);
+            ct_unloaded_by_freelibrary.store(true, std::memory_order_release);
         }
     }
 } // namespace
 
-// The TLS callback that tells the release a termination from an unload, in the file of the
+// The TLS callback that tells the release an unload from a termination, in the file of the
 // release, so that a module linking one links the other.
 #pragma comment(linker, "/INCLUDE:_tls_used")
 #pragma comment(linker, "/INCLUDE:ct_dbghelp_tls_callback")
