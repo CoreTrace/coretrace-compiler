@@ -28,6 +28,17 @@ namespace
     // the object: once the memory is freed, a new object may be tracked at its address.
     CT_NOINSTR void ct_objc_dealloc(id self, SEL cmd)
     {
+        // In fork(), the handlers that run between the runtime's own, libSystem's among them,
+        // run on this thread while it holds every lock of the runtime: xpc_atfork_child, for
+        // one, releases objects in the child (#207). The record is forgotten under the lock
+        // this thread holds. The trace line and the shadow, whose locks it holds too, are left
+        // out.
+        if (ct_runtime_locked_for_fork())
+        {
+            (void)ct_forget_allocation_locked(self, CT_ALLOC_KIND_OBJC);
+            ct_objc_nsobject_dealloc(self, cmd);
+            return;
+        }
         const size_t size = ct_forget_allocation(self, CT_ALLOC_KIND_OBJC);
         if (size && ct_is_enabled(CT_FEATURE_ALLOC_TRACE))
         {

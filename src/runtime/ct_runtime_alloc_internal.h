@@ -93,6 +93,9 @@ CT_NODISCARD CT_NOINSTR struct ct_alloc_entry* ct_table_find_entry(const void* p
 // reuses that memory without telling the runtime.
 CT_NOINSTR void ct_track_allocation(void* ptr, size_t size, const char* site, unsigned char kind);
 CT_NODISCARD CT_NOINSTR size_t ct_forget_allocation(void* ptr, unsigned char kind);
+// The table part of ct_forget_allocation, without restoring the shadow of the memory.
+// ct_alloc_lock held.
+CT_NODISCARD CT_NOINSTR size_t ct_forget_allocation_locked(void* ptr, unsigned char kind);
 
 // For blocks that go back to the system at once instead of to the quarantine (munmap, a
 // shrinking sbrk): drops the freed record of `ptr` and restores its shadow, so that a

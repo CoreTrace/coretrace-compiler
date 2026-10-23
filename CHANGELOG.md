@@ -12,6 +12,16 @@ From v0.8.0 on, each release also has detailed notes on the
 [releases page](https://github.com/CoreTrace/coretrace-compiler/releases), citing every
 pull request.
 
+## Unreleased
+
+### Fixes
+
+- **A child of `fork()` on macOS, when Objective-C objects are tracked.** The child hung inside
+  `fork()`: libSystem's own fork handlers release objects in the child before the runtime's
+  handler gives its locks back, and the runtime's hook of `-[NSObject dealloc]` waited for the
+  allocation table's lock. While the forking thread holds the runtime's locks, the hook now
+  forgets the object's record under the lock it holds, without its trace line (#207).
+
 ## v0.12.0 (2026-10-22)
 
 Release traces name the kind and the allocation site of each block, and the Windows runtime
