@@ -719,7 +719,9 @@ namespace
         }
 #endif
 
-#if defined(__APPLE__) || defined(__linux__)
+        // With _dl_find_object, dladdr would find no other module, and would wait for the lock
+        // that dlopen holds while it runs constructors (#223).
+#if defined(__APPLE__) || (defined(__linux__) && !defined(DLFO_STRUCT_HAS_EH_DBASE))
         Dl_info info;
         if (dladdr(addr, &info) != 0 && info.dli_fname)
         {
