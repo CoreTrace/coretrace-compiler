@@ -2,8 +2,8 @@
 //
 // The symbol line of a virtual call box names the target as dladdr does. On Linux, the runtime
 // reads the symbol from the module's tables itself, without the loader's lock that dladdr takes
-// (#223). This program exports its functions. On Linux, its code and its read-only data are in
-// segments apart, not adjacent in memory, as with 64 KiB pages and as the link options make
+// (#223). On Linux, this program exports its functions, and its code and its read-only data are
+// in segments apart, not adjacent in memory, as with 64 KiB pages and as the link options make
 // them here: _dl_find_object then gives each segment of the main program apart. POSIX only.
 // The libraries are built from reload/ct_reload_library.cpp, one of them on Linux with a
 // DT_HASH table only.
