@@ -109,6 +109,9 @@ if(TARGET ct_instrument_runtime)
         CT_RELOAD_LIBRARY_A="$<TARGET_FILE:ct_reload_a>"
         CT_RELOAD_LIBRARY_B="$<TARGET_FILE:ct_reload_b>")
       add_dependencies(runtime_fork_modules_tests ct_reload_a ct_reload_b)
+      # A library whose constructor waits for traced virtual calls, loaded by a program that
+      # exports the runtime's entry points to it (#223).
+      add_library(ct_trace_constructor_library MODULE reload/ct_trace_constructor_library.cpp)
     endif()
     if(TARGET ct_instrument_runtime_asan)
       # A global object's destructor that names a call, with the runtime that AddressSanitizer
