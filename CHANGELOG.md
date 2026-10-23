@@ -38,10 +38,17 @@ pull request.
 - **DbgHelp shared with the program, on Windows.** The runtime initialized DbgHelp on the
   program's own session, `GetCurrentProcess()`, and each copy of the runtime, in the executable
   and in each DLL that links it, called DbgHelp under a lock of its own. Each copy now has a
-  session of its own, which the copy in a DLL closes when the DLL unloads, unless DbgHelp is
-  still busy then, and all of them take one lock per process, a semaphore that a program using
-  DbgHelp can take too. A box waits 500 ms at most for it, and a name it could not decode
-  meanwhile is decoded at the next box (README, "DbgHelp on Windows") (#208).
+  session of its own, which the copy in a DLL closes when `FreeLibrary` unloads the DLL, unless
+  DbgHelp is still busy then, and leaves to the system when the process terminates, as
+  Microsoft's `DllMain` guidance asks; all of them take one lock per process, a semaphore that a
+  program using DbgHelp can take too. A box waits 500 ms at most for it, and a name it could not
+  decode meanwhile is decoded at the next box (README, "DbgHelp on Windows") (#208, #226).
+- **A virtual call named while a library loads, on Linux.** With `--ct-vtable-diag`, the runtime
+  named the target of a virtual call with `dladdr`, which waits for the lock that `dlopen` holds
+  while it runs the constructors of the library it loads (glibc 2.39 checked). A constructor
+  that waited for a thread making such a call, as a thread pool's start does, never returned.
+  The runtime now reads the symbol from the tables of the module that `_dl_find_object` finds
+  (glibc 2.35 and later), and does not call `dladdr` for an address that no module holds (#223).
 - **Fork handlers registered before the runtime's.** A handler that `pthread_atfork` registered
   before the runtime's, by a global object of the program or a library initialized first, runs
   while the forking thread holds every lock of the runtime: in the parent around `fork()`, and in
