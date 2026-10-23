@@ -177,7 +177,14 @@ CT_NODISCARD CT_NOINSTR inline bool ct_runtime_locked_for_fork(void)
     return false;
 }
 #else
-CT_NODISCARD CT_NOINSTR bool ct_runtime_locked_for_fork(void);
+// Set by the runtime's fork() handlers (ct_runtime_env.cpp). Inline, so that the lock functions,
+// which read it at every allocation, read it in place.
+inline thread_local bool ct_runtime_fork_locked = false;
+
+CT_NODISCARD CT_NOINSTR inline bool ct_runtime_locked_for_fork(void)
+{
+    return ct_runtime_fork_locked;
+}
 #endif
 CT_NODISCARD CT_NOINSTR int ct_table_insert(void* ptr, size_t req_size, size_t size,
                                             const char* site, unsigned char kind);

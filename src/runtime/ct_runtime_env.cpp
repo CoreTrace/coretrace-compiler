@@ -28,7 +28,6 @@ extern "C"
 namespace
 {
     int ct_env_initialized = 0;
-    thread_local bool ct_locked_for_fork = false;
 } // namespace
 
 CT_NODISCARD CT_NOINSTR CtCompiledConfig ct_read_compiled_config(void)
@@ -54,22 +53,17 @@ CT_NOINSTR static void ct_lock_runtime_for_fork(void)
     ct_log_lock_acquire();
     ct_demangle_cache_lock_acquire();
     ct_autofree_scan_hook_lock_acquire();
-    ct_locked_for_fork = true;
+    ct_runtime_fork_locked = true;
 }
 
 CT_NOINSTR static void ct_unlock_runtime_after_fork(void)
 {
-    ct_locked_for_fork = false;
+    ct_runtime_fork_locked = false;
     ct_autofree_scan_hook_lock_release();
     ct_demangle_cache_lock_release();
     ct_log_lock_release();
     ct_shadow_lock_release();
     ct_lock_release();
-}
-
-CT_NODISCARD CT_NOINSTR bool ct_runtime_locked_for_fork(void)
-{
-    return ct_locked_for_fork;
 }
 
 CT_NOINSTR __attribute__((constructor)) static void ct_runtime_init(void)
