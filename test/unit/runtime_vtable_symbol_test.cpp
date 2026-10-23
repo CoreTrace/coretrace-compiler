@@ -5,7 +5,8 @@
 // (#223). This program exports its functions. On Linux, its code and its read-only data are in
 // segments apart, not adjacent in memory, as with 64 KiB pages and as the link options make
 // them here: _dl_find_object then gives each segment of the main program apart. POSIX only.
-// The library is built from reload/ct_reload_library.cpp.
+// The libraries are built from reload/ct_reload_library.cpp, one of them on Linux with a
+// DT_HASH table only.
 #include "ct_runtime_internal.h"
 
 #include <gtest/gtest.h>
@@ -207,6 +208,25 @@ namespace
         const int code = segmentOf(reinterpret_cast<uintptr_t>(&ct_symbol_program_target));
         ASSERT_NE(code, -1);
         EXPECT_NE(segmentOf(symbols), code);
+    }
+
+    // A library without a GNU hash table, whose symbols the runtime finds through DT_HASH.
+    TEST_F(VtableSymbol, NamesATargetOfALibraryWithoutAGnuHashTableAsDladdrDoes)
+    {
+        void* library = dlopen(CT_RELOAD_LIBRARY_SYSV, RTLD_NOW | RTLD_LOCAL);
+        ASSERT_NE(library, nullptr) << dlerror();
+        link_map* map = nullptr;
+        ASSERT_EQ(dlinfo(library, RTLD_DI_LINKMAP, &map), 0) << dlerror();
+        bool hash = false;
+        bool gnu_hash = false;
+        for (const ElfW(Dyn)* entry = map->l_ld; entry->d_tag != DT_NULL; ++entry)
+        {
+            hash = hash || entry->d_tag == DT_HASH;
+            gnu_hash = gnu_hash || entry->d_tag == DT_GNU_HASH;
+        }
+        ASSERT_TRUE(hash && !gnu_hash);
+        dlclose(library);
+        expectLibraryNamedAsDladdrNamesIt(CT_RELOAD_LIBRARY_SYSV);
     }
 #endif
 } // namespace

@@ -86,6 +86,13 @@ if(TARGET ct_instrument_runtime)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
       target_link_options(runtime_vtable_symbol_tests PRIVATE -Wl,-z,separate-code
         -Wl,-z,max-page-size=0x10000)
+      # A build of the library with a DT_HASH table and no GNU hash table.
+      add_library(ct_reload_sysv MODULE reload/ct_reload_library.cpp)
+      target_compile_definitions(ct_reload_sysv PRIVATE CT_RELOAD_NAMESPACE=reload_sysv)
+      target_link_options(ct_reload_sysv PRIVATE -Wl,--hash-style=sysv)
+      target_compile_definitions(runtime_vtable_symbol_tests PRIVATE
+        CT_RELOAD_LIBRARY_SYSV="$<TARGET_FILE:ct_reload_sysv>")
+      add_dependencies(runtime_vtable_symbol_tests ct_reload_sysv)
     endif()
     # The order of the runtime's locks and the logger's, which both take around fork().
     target_sources(runtime_unit_tests PRIVATE runtime_log_locks_test.cpp)
