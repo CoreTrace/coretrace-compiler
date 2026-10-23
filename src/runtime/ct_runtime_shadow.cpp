@@ -40,12 +40,19 @@ static size_t ct_shadow_table_full_pending = 0;
 
 CT_NOINSTR void ct_shadow_lock_acquire(void)
 {
-    ct_spin_lock_acquire(&ct_shadow_lock);
+    // A thread that forks holds it already: see ct_runtime_locked_for_fork.
+    if (!ct_runtime_locked_for_fork())
+    {
+        ct_spin_lock_acquire(&ct_shadow_lock);
+    }
 }
 
 CT_NOINSTR void ct_shadow_lock_release(void)
 {
-    __atomic_store_n(&ct_shadow_lock, 0, __ATOMIC_RELEASE);
+    if (!ct_runtime_locked_for_fork())
+    {
+        __atomic_store_n(&ct_shadow_lock, 0, __ATOMIC_RELEASE);
+    }
 }
 
 CT_NODISCARD CT_NOINSTR static size_t ct_shadow_hash(uintptr_t page, size_t mask)
