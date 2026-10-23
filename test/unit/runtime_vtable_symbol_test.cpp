@@ -19,6 +19,7 @@
 #include <dlfcn.h>
 #if defined(__linux__)
 #include <link.h>
+#include <sys/auxv.h>
 #include <unistd.h>
 #endif
 
@@ -227,6 +228,43 @@ namespace
         ASSERT_TRUE(hash && !gnu_hash);
         dlclose(library);
         expectLibraryNamedAsDladdrNamesIt(CT_RELOAD_LIBRARY_SYSV);
+    }
+
+    // The vDSO's dynamic section is read-only: its tables are where it says once the vDSO's
+    // base is added, unlike those of the other modules, which the loader relocated.
+    TEST_F(VtableSymbol, NamesAddressesOfTheVdsoAsDladdrDoes)
+    {
+        const auto* header = reinterpret_cast<const ElfW(Ehdr)*>(getauxval(AT_SYSINFO_EHDR));
+        if (!header)
+        {
+            GTEST_SKIP() << "no vDSO";
+        }
+        const auto* segments = reinterpret_cast<const ElfW(Phdr)*>(
+            reinterpret_cast<const char*>(header) + header->e_phoff);
+        uintptr_t base = 0;
+        uintptr_t start = 0;
+        uintptr_t end = 0;
+        for (int index = 0; index < header->e_phnum; ++index)
+        {
+            if (segments[index].p_type == PT_LOAD && base == 0)
+            {
+                base = reinterpret_cast<uintptr_t>(header) - segments[index].p_vaddr;
+            }
+            if (segments[index].p_type == PT_LOAD && (segments[index].p_flags & PF_X) != 0)
+            {
+                start = base + segments[index].p_vaddr;
+                end = start + segments[index].p_memsz;
+            }
+        }
+        ASSERT_LT(start, end);
+        int named = 0;
+        for (uintptr_t address = start; address < end; address += 16)
+        {
+            void* target = reinterpret_cast<void*>(address);
+            named += dladdrName(target) != "<unknown>";
+            EXPECT_TRUE(namedAsDladdrNamesIt(target));
+        }
+        EXPECT_GT(named, 0);
     }
 #endif
 } // namespace
