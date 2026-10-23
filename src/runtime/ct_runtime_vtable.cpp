@@ -96,29 +96,15 @@ namespace
         return *cache;
     }
 
-    CT_NODISCARD CT_NOINSTR bool ct_lookup_symbol(const void* addr, const char** name_out,
-                                                  const char** object_out)
+    // The name of the symbol that holds `addr`, null without one.
+    CT_NODISCARD CT_NOINSTR const char* ct_lookup_symbol(const void* addr)
     {
 #if defined(__APPLE__) || defined(__linux__)
         Dl_info info;
-        if (dladdr(addr, &info) == 0)
-        {
-            return false;
-        }
-        if (name_out)
-        {
-            *name_out = info.dli_sname;
-        }
-        if (object_out)
-        {
-            *object_out = info.dli_fname;
-        }
-        return info.dli_sname != nullptr || info.dli_fname != nullptr;
+        return dladdr(addr, &info) != 0 ? info.dli_sname : nullptr;
 #else
         (void)addr;
-        (void)name_out;
-        (void)object_out;
-        return false;
+        return nullptr;
 #endif
     }
 
@@ -869,9 +855,9 @@ extern "C"
         bool has_vtable = !is_freed && ct_read_vtable_info(this_ptr, info);
         std::string type_name = has_vtable ? ct_format_type_name(info.typeinfo) : "<unknown>";
 
-        const char* sym = nullptr;
+        const char* sym = target ? ct_lookup_symbol(target) : nullptr;
         std::string demangled;
-        if (target && ct_lookup_symbol(target, &sym, nullptr) && sym)
+        if (sym)
         {
             (void)ct_name_cache().demangle(sym, demangled);
         }
