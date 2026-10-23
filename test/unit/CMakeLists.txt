@@ -75,6 +75,29 @@ if(TARGET ct_instrument_runtime)
     target_sources(runtime_unit_tests PRIVATE runtime_vtable_modules_test.cpp)
     # The order of the runtime's locks and the logger's, which both take around fork().
     target_sources(runtime_unit_tests PRIVATE runtime_log_locks_test.cpp)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      # A child of fork() that looks modules up while the parent was listing them (#206).
+      target_sources(runtime_unit_tests PRIVATE runtime_vtable_fork_test.cpp)
+      # A runtime that never lists the modules, in a child of fork() or in its parent: a test
+      # program of its own, which replaces dl_iterate_phdr for the runtime it links (#206).
+      add_executable(runtime_fork_modules_tests runtime_fork_modules_test.cpp)
+      target_include_directories(runtime_fork_modules_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+      target_link_libraries(runtime_fork_modules_tests PRIVATE ct_instrument_runtime coretrace_logger
+        GTest::gtest_main ${CMAKE_DL_LIBS})
+      target_compile_definitions(runtime_fork_modules_tests PRIVATE
+        CT_RELOAD_LIBRARY_A="$<TARGET_FILE:ct_reload_a>"
+        CT_RELOAD_LIBRARY_B="$<TARGET_FILE:ct_reload_b>")
+      add_dependencies(runtime_fork_modules_tests ct_reload_a ct_reload_b)
+    endif()
+    if(TARGET ct_instrument_runtime_asan)
+      # A global object's destructor that names a call, with the runtime that AddressSanitizer
+      # instruments: a read of an object of the runtime destroyed before it fails (#206).
+      add_executable(runtime_exit_trace_check runtime_exit_trace_check.cpp)
+      target_include_directories(runtime_exit_trace_check PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
+      target_link_libraries(runtime_exit_trace_check PRIVATE ct_instrument_runtime_asan
+        coretrace_logger ${CMAKE_DL_LIBS})
+      add_test(NAME RuntimeExitTrace COMMAND runtime_exit_trace_check)
+    endif()
     # The allocation table filled up, in a process apart from the other runtime tests.
     add_executable(runtime_table_full_tests runtime_table_full_test.cpp)
     target_include_directories(runtime_table_full_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/runtime)
@@ -130,6 +153,9 @@ if(TARGET runtime_table_full_tests)
 endif()
 if(TARGET runtime_table_tombstones_tests)
   gtest_discover_tests(runtime_table_tombstones_tests)
+endif()
+if(TARGET runtime_fork_modules_tests)
+  gtest_discover_tests(runtime_fork_modules_tests)
 endif()
 if(TARGET runtime_scan_threads_tests)
   gtest_discover_tests(runtime_scan_threads_tests PROPERTIES ENVIRONMENT CT_AUTOFREE_SCAN=1)

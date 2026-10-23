@@ -151,7 +151,7 @@ expect_stdout() {
     ct_threads_stress.c) echo "damaged=0" ;;
     ct_threads_stress_windows.c) echo "threads=8 rounds=20000 damaged=0" ;;
     ct_alloc_unreachable_stl.cpp) echo "size=64" ;;
-    ct_fork_threads.c) echo "hung=0" ;;
+    ct_fork_threads.c|ct_vtable_fork_threads.cpp) echo "hung=0" ;;
     ct_backtrace_full_stderr.c) echo "crash status=139" ;;
     *) echo "" ;;
   esac
@@ -220,7 +220,7 @@ skip_reason() {
         echo "uses pthreads, which Windows does not provide"
         return 0
         ;;
-      ct_fork_threads.c)
+      ct_fork_threads.c|ct_vtable_fork_threads.cpp)
         echo "uses fork and pthreads, which Windows does not provide"
         return 0
         ;;
@@ -287,6 +287,7 @@ TESTS=(
   ct_vtable_diag_mismatch.cpp
   ct_vtable_diag_mismatch_windows.cpp
   ct_vtable_diag_stack_target.cpp
+  ct_vtable_fork_threads.cpp
   ct_vtable_uaf.cpp
 )
 

@@ -271,6 +271,17 @@ if(CORETRACE_COMPILER_BUILD_RUNTIME)
     target_compile_options(ct_instrument_runtime PRIVATE -fsanitize=thread -g)
     target_compile_options(coretrace_logger PRIVATE -fsanitize=thread -g)
   endif()
+  # The same runtime with AddressSanitizer, which checks its own memory accesses, as those of
+  # code that runs at exit; no program that cc builds links it, only a test.
+  if(ENABLE_DEBUG_ASAN AND NOT WIN32)
+    get_target_property(CT_RUNTIME_SOURCES ct_instrument_runtime SOURCES)
+    add_library(ct_instrument_runtime_asan STATIC ${CT_RUNTIME_SOURCES})
+    target_include_directories(ct_instrument_runtime_asan PRIVATE src/runtime)
+    target_link_libraries(ct_instrument_runtime_asan PRIVATE coretrace_logger)
+    if(ENABLE_DEBUG_UBSAN)
+      target_compile_options(ct_instrument_runtime_asan PRIVATE -fno-sanitize=undefined)
+    endif()
+  endif()
 endif()
 
 # What the driver needs to find the runtime archives (see resolveRuntimeArchives): their

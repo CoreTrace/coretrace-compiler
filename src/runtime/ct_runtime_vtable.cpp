@@ -251,10 +251,15 @@ namespace
         return path;
     }
 
+    // Never destroyed, as ct_name_cache: code that runs at exit still prints boxes. The
+    // constructor below builds it after the program's global objects, whose destructors would
+    // run after its own.
     CT_NODISCARD CT_NOINSTR const std::string& ct_executable_path(void)
     {
-        static const std::string cached = ct_read_executable_path();
-        return cached;
+        alignas(std::string) static unsigned char storage[sizeof(std::string)];
+        static const std::string* const cached =
+            new (storage) std::string(ct_read_executable_path());
+        return *cached;
     }
 
     CT_NOINSTR void ct_fill_module_paths(CtModuleInfo& info, const std::string& path)
@@ -359,6 +364,33 @@ namespace
     }
 
 #if defined(__linux__)
+#if defined(DLFO_STRUCT_HAS_EH_DBASE)
+    // _dl_find_object (glibc 2.35) reads the loader's table of mappings without a lock.
+    // dl_iterate_phdr takes dl_load_write_lock, which glibc does not reset in the child of
+    // fork(): a child forked while another thread of its parent held it waited forever, in the
+    // runtime's lookups or in its own dlopen (#206). The flags of the segment are unknown, which
+    // the boxes do not print when they name the module.
+    CT_NODISCARD CT_NOINSTR bool ct_find_module_linux(const void* addr, CtModuleInfo& out)
+    {
+        dl_find_object object;
+        if (_dl_find_object(const_cast<void*>(addr), &object) != 0 || !object.dlfo_link_map)
+        {
+            return false;
+        }
+
+        const char* name = object.dlfo_link_map->l_name;
+        const bool is_main = name == nullptr || name[0] == '\0';
+        out.resolved = true;
+        out.is_main = is_main;
+        out.exec_known = false;
+        out.is_exec = false;
+        ct_fill_module_paths(out, is_main ? ct_executable_path() : std::string(name));
+        return true;
+    }
+#else
+    // Before glibc 2.35, without _dl_find_object: a child of fork() can still wait forever for
+    // the lock that dl_iterate_phdr takes, held by another thread of its parent at the fork
+    // (#206).
     struct CtLinuxFindContext
     {
         const void* addr = nullptr;
@@ -403,6 +435,16 @@ namespace
         }
         return 0;
     }
+
+    CT_NODISCARD CT_NOINSTR bool ct_find_module_linux(const void* addr, CtModuleInfo& out)
+    {
+        CtLinuxFindContext ctx;
+        ctx.addr = addr;
+        ctx.out = &out;
+        dl_iterate_phdr(ct_linux_phdr_cb, &ctx);
+        return ctx.found;
+    }
+#endif
 #endif
 
 #if defined(__APPLE__)
@@ -493,6 +535,15 @@ namespace
     }
 #endif
 
+    // A function-local static is initialized under a guard, which a child of fork() inherits in
+    // progress when another thread of the parent was initializing it, and then waits for
+    // forever (#206). Those that the boxes need are initialized when the program starts.
+    CT_NOINSTR __attribute__((constructor)) void ct_vtable_initialize_statics()
+    {
+        (void)ct_executable_path();
+        (void)ct_name_cache();
+    }
+
     CT_NODISCARD CT_NOINSTR bool ct_resolve_module(const void* addr, CtModuleInfo& out)
     {
         if (!addr)
@@ -501,11 +552,7 @@ namespace
         }
 
 #if defined(__linux__)
-        CtLinuxFindContext ctx;
-        ctx.addr = addr;
-        ctx.out = &out;
-        dl_iterate_phdr(ct_linux_phdr_cb, &ctx);
-        if (ctx.found)
+        if (ct_find_module_linux(addr, out))
         {
             return true;
         }

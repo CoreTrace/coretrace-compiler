@@ -794,18 +794,24 @@ CT_NOINSTR void ct_track_allocation(void* ptr, size_t size, const char* site, un
     ct_shadow_track_alloc(ptr, size, size);
 }
 
+CT_NODISCARD CT_NOINSTR size_t ct_forget_allocation_locked(void* ptr, unsigned char kind)
+{
+    struct ct_alloc_entry* entry = ct_table_find_entry(ptr);
+    if (!entry || entry->state != CT_ENTRY_USED || entry->kind != kind)
+    {
+        return 0;
+    }
+    const size_t size = entry->size;
+    ct_unindex_entry(entry);
+    --ct_alloc_count;
+    ct_bury_entry(entry);
+    return size;
+}
+
 CT_NODISCARD CT_NOINSTR size_t ct_forget_allocation(void* ptr, unsigned char kind)
 {
-    size_t size = 0;
     ct_lock_acquire();
-    struct ct_alloc_entry* entry = ct_table_find_entry(ptr);
-    if (entry && entry->state == CT_ENTRY_USED && entry->kind == kind)
-    {
-        size = entry->size;
-        ct_unindex_entry(entry);
-        --ct_alloc_count;
-        ct_bury_entry(entry);
-    }
+    const size_t size = ct_forget_allocation_locked(ptr, kind);
     ct_lock_release();
 
     if (size && ct_is_enabled(CT_FEATURE_SHADOW))
