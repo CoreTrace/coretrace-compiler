@@ -219,21 +219,23 @@ if(TARGET runtime_fork_handlers_tests)
   gtest_discover_tests(runtime_fork_handlers_tests)
 endif()
 if(TARGET dll_leak_report_main)
-  # The block kept, alone: the three released by the DLL's exit-time code are no leak.
+  # The block kept, alone and reported once: the three released by the DLL's exit-time code are
+  # no leak.
   set(CT_DLL_LEAK_KEPT "ct: leak ptr=[^ ]+ size=32 alloc_site=dll_leak:kept")
   set(CT_DLL_LEAK_WRONG
-    "ct: leaks detected count=([02-9]|[1-9][0-9])|ct: leak ptr=[^ ]+ size=[0-9]+ alloc_site=dll_leak:(object|atexit|function)")
-  add_test(NAME DllLeakReport.ListsTheBlockKeptAtExit COMMAND dll_leak_report_main)
-  add_test(NAME DllLeakReport.ListsTheBlockKeptAtExitProcess COMMAND dll_leak_report_main exitprocess)
-  set_tests_properties(DllLeakReport.ListsTheBlockKeptAtExit
-    DllLeakReport.ListsTheBlockKeptAtExitProcess PROPERTIES
-    PASS_REGULAR_EXPRESSION "${CT_DLL_LEAK_KEPT}"
-    FAIL_REGULAR_EXPRESSION "${CT_DLL_LEAK_WRONG}")
+    "ct: leaks detected count=([02-9]|[1-9][0-9])|ct: leak ptr=[^ ]+ size=[0-9]+ alloc_site=dll_leak:(object|atexit|function)|ct: leaks detected.*ct: leaks detected")
+  foreach(case "ListsTheBlockKeptAtExit;return" "ListsTheBlockKeptAtExitProcess;exitprocess")
+    list(GET case 0 name)
+    list(GET case 1 how)
+    add_test(NAME DllLeakReport.${name}
+      COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:dll_leak_report_main> -DARGS=${how}
+        "-DEXPECT=${CT_DLL_LEAK_KEPT}" "-DFORBID=${CT_DLL_LEAK_WRONG}"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/check_program_output.cmake)
+  endforeach()
   add_test(NAME DllLeakReport.SaysNothingWhenFreeLibraryUnloadsTheDll
-    COMMAND dll_leak_report_main free)
-  set_tests_properties(DllLeakReport.SaysNothingWhenFreeLibraryUnloadsTheDll PROPERTIES
-    PASS_REGULAR_EXPRESSION "dll_leak_report_main: done"
-    FAIL_REGULAR_EXPRESSION "ct: leaks detected")
+    COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:dll_leak_report_main> -DARGS=free
+      "-DEXPECT=dll_leak_report_main: done" "-DFORBID=ct: leaks detected"
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/check_program_output.cmake)
 endif()
 if(TARGET runtime_scan_threads_tests)
   gtest_discover_tests(runtime_scan_threads_tests PROPERTIES ENVIRONMENT CT_AUTOFREE_SCAN=1)
