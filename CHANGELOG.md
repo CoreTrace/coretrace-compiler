@@ -58,10 +58,11 @@ pull request.
 - **The leak report of a DLL that links the runtime, on Windows.** Such a DLL has a copy of the
   runtime and of its allocation table of its own. That copy reported its leaks only when its TLS
   callback received a non-null `lpvReserved` at process exit, which the four Windows jobs never
-  saw: the DLL's leaks went unreported. The copy now reports them when the process exits, from a
-  terminator of the DLL, after the DLL's `atexit` handlers, the destructors of its global objects
-  and its destructor functions; it still reports nothing when `FreeLibrary` unloads the DLL
-  (#232).
+  saw: the DLL's leaks went unreported. With the static C runtime, which `cc` links by default,
+  the copy now reports them when the process exits, after the DLL's `atexit` handlers, the
+  destructors of its global objects and its destructor functions, whether the program returns
+  from `main`, calls `ExitProcess`, or the DLL calls `exit()`; it still reports nothing when
+  `FreeLibrary` unloads the DLL (#232).
 
 ## v0.12.0 (2026-10-22)
 
