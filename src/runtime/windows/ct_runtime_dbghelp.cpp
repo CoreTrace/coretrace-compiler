@@ -26,12 +26,6 @@ namespace
     std::atomic<bool> ct_released{false};
     // Used with the DbgHelp lock held.
     HANDLE ct_session = nullptr;
-    // RtlDllShutdownInProgress, which ntdll.dll exports and no SDK header declares (Windows 10 and
-    // later), looked up by this file's TLS callback when the module attaches: a lookup at detach
-    // takes a lock of the loader that process termination can leave held, as one reported for
-    // WIL (https://github.com/microsoft/wil/issues/567).
-    using CtShutdownInProgress = BOOLEAN(NTAPI*)();
-    std::atomic<CtShutdownInProgress> ct_shutdown_in_progress{nullptr};
 
     CT_NOINSTR HANDLE ct_open_semaphore()
     {
@@ -78,10 +72,8 @@ namespace
 
         CT_NOINSTR ~CtDbgHelpRelease()
         {
-            const CtShutdownInProgress shutdown_in_progress =
-                ct_shutdown_in_progress.load(std::memory_order_acquire);
             if (reinterpret_cast<HMODULE>(&__ImageBase) == GetModuleHandleW(nullptr) ||
-                !shutdown_in_progress || shutdown_in_progress())
+                ct_process_shutdown() != CtProcessShutdown::NotInProgress)
             {
                 return;
             }
@@ -104,28 +96,7 @@ namespace
     };
 
     CtDbgHelpRelease ct_dbghelp_release;
-
-    // The TLS callbacks cannot tell an unload from a termination: at DLL_PROCESS_DETACH, they
-    // receive a null lpvReserved when the process terminates too, unlike DllMain (#226).
-    CT_NOINSTR void NTAPI ct_dbghelp_tls(PVOID, DWORD reason, PVOID)
-    {
-        if (reason == DLL_PROCESS_ATTACH)
-        {
-            ct_shutdown_in_progress.store(
-                reinterpret_cast<CtShutdownInProgress>(
-                    GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlDllShutdownInProgress")),
-                std::memory_order_release);
-        }
-    }
 } // namespace
-
-// The TLS callback that looks RtlDllShutdownInProgress up for the release, in the file of the
-// release, so that a module linking one links the other.
-#pragma comment(linker, "/INCLUDE:_tls_used")
-#pragma comment(linker, "/INCLUDE:ct_dbghelp_tls_callback")
-#pragma section(".CRT$XLY", read)
-extern "C" __declspec(allocate(".CRT$XLY")) __attribute__((used))
-const PIMAGE_TLS_CALLBACK ct_dbghelp_tls_callback = ct_dbghelp_tls;
 
 CT_NOINSTR CtDbgHelpLock::CtDbgHelpLock(DWORD wait) : semaphore_(ct_open_semaphore())
 {

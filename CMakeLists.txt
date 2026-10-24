@@ -199,6 +199,7 @@ if(CORETRACE_COMPILER_BUILD_RUNTIME)
       src/runtime/windows/ct_runtime_backtrace.cpp
       src/runtime/windows/ct_runtime_dbghelp.cpp
       src/runtime/windows/ct_runtime_env.cpp
+      src/runtime/windows/ct_runtime_shutdown.cpp
       src/runtime/windows/ct_runtime_vtable.cpp
     )
   endif()
