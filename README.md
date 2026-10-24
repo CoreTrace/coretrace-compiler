@@ -232,9 +232,12 @@ lock is held then, and every other thread has been terminated: if one of them he
 allocation table, the report says `ct: leak report skipped` instead of waiting for it (#187).
 
 A DLL that links the runtime, as an instrumented DLL does, has a copy of the runtime of its own,
-with its own table. That copy reports the DLL's leaks when the process exits, from a terminator of
-the DLL: after the DLL's `atexit` handlers, the destructors of its global objects and its
-destructor functions. It reports nothing when `FreeLibrary` unloads the DLL (#232).
+with its own table. When the DLL uses the static C runtime, as `cc` links it by default, that copy
+reports the DLL's leaks when the process exits, after the DLL's `atexit` handlers, the destructors
+of its global objects and its destructor functions: from a terminator of the DLL, or, when the DLL
+itself ends the process with `exit()`, when the loader detaches it. That comes before the exit-time
+code of the modules that detach after the DLL. It reports nothing when `FreeLibrary` unloads the
+DLL (#232).
 
 ## DbgHelp on Windows
 
