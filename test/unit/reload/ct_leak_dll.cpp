@@ -3,7 +3,8 @@
 // A DLL that links the runtime, as an instrumented DLL does, and allocates through its copy of
 // the runtime (#232): it keeps one block until the process exits, and releases three from its
 // exit-time code, a global object's destructor, an atexit handler and a destructor function. Its
-// copy's leak report must list the first block alone. dll_leak_report_main.cpp loads it.
+// copy's leak report must list the first block alone. It can also end the process with its own
+// C runtime's exit(). dll_leak_report_main.cpp loads it.
 #include <cstddef>
 #include <cstdlib>
 
@@ -46,4 +47,9 @@ extern "C" __declspec(dllexport) void ct_leak_dll_allocate()
     released_by_atexit = __ct_malloc(24, "dll_leak:atexit");
     released_by_function = __ct_malloc(40, "dll_leak:function");
     std::atexit(releaseAtExit);
+}
+
+extern "C" __declspec(dllexport) void ct_leak_dll_exit()
+{
+    std::exit(0);
 }

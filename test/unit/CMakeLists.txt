@@ -224,7 +224,8 @@ if(TARGET dll_leak_report_main)
   set(CT_DLL_LEAK_KEPT "ct: leak ptr=[^ ]+ size=32 alloc_site=dll_leak:kept")
   set(CT_DLL_LEAK_WRONG
     "ct: leaks detected count=([02-9]|[1-9][0-9])|ct: leak ptr=[^ ]+ size=[0-9]+ alloc_site=dll_leak:(object|atexit|function)|ct: leaks detected.*ct: leaks detected")
-  foreach(case "ListsTheBlockKeptAtExit;return" "ListsTheBlockKeptAtExitProcess;exitprocess")
+  foreach(case "ListsTheBlockKeptAtExit;return" "ListsTheBlockKeptAtExitProcess;exitprocess"
+                "ListsTheBlockKeptWhenTheDllCallsExit;dllexit")
     list(GET case 0 name)
     list(GET case 1 how)
     add_test(NAME DllLeakReport.${name}
