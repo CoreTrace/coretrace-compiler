@@ -229,6 +229,11 @@ if(TARGET dll_leak_report_main)
     DllLeakReport.ListsTheBlockKeptAtExitProcess PROPERTIES
     PASS_REGULAR_EXPRESSION "${CT_DLL_LEAK_KEPT}"
     FAIL_REGULAR_EXPRESSION "${CT_DLL_LEAK_WRONG}")
+  add_test(NAME DllLeakReport.SaysNothingWhenFreeLibraryUnloadsTheDll
+    COMMAND dll_leak_report_main free)
+  set_tests_properties(DllLeakReport.SaysNothingWhenFreeLibraryUnloadsTheDll PROPERTIES
+    PASS_REGULAR_EXPRESSION "dll_leak_report_main: done"
+    FAIL_REGULAR_EXPRESSION "ct: leaks detected")
 endif()
 if(TARGET runtime_scan_threads_tests)
   gtest_discover_tests(runtime_scan_threads_tests PROPERTIES ENVIRONMENT CT_AUTOFREE_SCAN=1)
