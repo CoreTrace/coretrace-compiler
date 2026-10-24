@@ -169,6 +169,18 @@ if(TARGET ct_instrument_runtime)
     target_compile_definitions(runtime_unit_tests PRIVATE
       CT_RUNTIME_LIBRARY="$<TARGET_FILE:ct_runtime_library>"
       CT_DLLMAIN_LIBRARY="$<TARGET_FILE:ct_dllmain_library>")
+    # A DLL's copy of the runtime reports its leaks when the process exits, after the DLL's
+    # exit-time code, and says nothing when FreeLibrary unloads the DLL (#232). The program links
+    # no runtime, so the report it prints is the DLL's copy's.
+    add_library(ct_leak_dll MODULE reload/ct_leak_dll.cpp)
+    target_link_libraries(ct_leak_dll PRIVATE ct_instrument_runtime coretrace_logger)
+    add_executable(dll_leak_report_main dll_leak_report_main.cpp)
+    target_compile_definitions(dll_leak_report_main PRIVATE
+      CT_LEAK_DLL="$<TARGET_FILE:ct_leak_dll>")
+    add_dependencies(dll_leak_report_main ct_leak_dll)
+    foreach(target ct_leak_dll dll_leak_report_main)
+      coretrace_force_msvc_runtime(${target})
+    endforeach()
   endif()
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
