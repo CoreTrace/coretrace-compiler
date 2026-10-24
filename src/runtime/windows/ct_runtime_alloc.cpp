@@ -644,11 +644,13 @@ namespace
 // Runs at process exit, from a TLS callback of the executable (ct_report_leaks_tls_callback):
 // after the destructors of the program's static objects, its exit handlers, its terminators
 // and the exit-time code of every DLL, which release blocks too (#187). In a DLL's copy of the
-// runtime, from a terminator of the DLL (ct_report_dll_leaks_terminator), after the DLL's own
-// exit-time code (#232). The loader lock is held by then, and ExitProcess has killed every other
-// thread, maybe while it held a lock that nothing will release: the report waits for no lock,
-// allocates nothing, loads nothing, and writes with the lock-free writers only, logging being
-// off.
+// runtime, after the DLL's own exit-time code, from a terminator of the DLL
+// (ct_report_dll_leaks_terminator), or from its TLS callback when the DLL ended the process with
+// exit() (#232). The loader lock is held by then, and ExitProcess has killed every other thread,
+// maybe while it held a lock that nothing will release: the report only tries the allocation
+// table's lock, allocates nothing, loads nothing, and writes with the writers that take no lock
+// of the runtime, logging being off. They write with the C runtime's _write, which takes the lock
+// of the standard error's descriptor.
 CT_NOINSTR bool ct_report_leaks(void)
 {
     if (!ct_alloc_table_built.load(std::memory_order_acquire))
