@@ -218,6 +218,18 @@ endif()
 if(TARGET runtime_fork_handlers_tests)
   gtest_discover_tests(runtime_fork_handlers_tests)
 endif()
+if(TARGET dll_leak_report_main)
+  # The block kept, alone: the three released by the DLL's exit-time code are no leak.
+  set(CT_DLL_LEAK_KEPT "ct: leak ptr=[^ ]+ size=32 alloc_site=dll_leak:kept")
+  set(CT_DLL_LEAK_WRONG
+    "ct: leaks detected count=([02-9]|[1-9][0-9])|ct: leak ptr=[^ ]+ size=[0-9]+ alloc_site=dll_leak:(object|atexit|function)")
+  add_test(NAME DllLeakReport.ListsTheBlockKeptAtExit COMMAND dll_leak_report_main)
+  add_test(NAME DllLeakReport.ListsTheBlockKeptAtExitProcess COMMAND dll_leak_report_main exitprocess)
+  set_tests_properties(DllLeakReport.ListsTheBlockKeptAtExit
+    DllLeakReport.ListsTheBlockKeptAtExitProcess PROPERTIES
+    PASS_REGULAR_EXPRESSION "${CT_DLL_LEAK_KEPT}"
+    FAIL_REGULAR_EXPRESSION "${CT_DLL_LEAK_WRONG}")
+endif()
 if(TARGET runtime_scan_threads_tests)
   gtest_discover_tests(runtime_scan_threads_tests PROPERTIES ENVIRONMENT CT_AUTOFREE_SCAN=1)
 endif()
