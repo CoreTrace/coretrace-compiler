@@ -441,6 +441,17 @@ CT_NOINSTR inline void ct_log(CTLevel level, std::string_view fmt, Args&&... arg
 // The leak report of the Windows runtime, which runs at process exit. False when it was
 // skipped, another thread holding the allocation table (#187).
 CT_NOINSTR bool ct_report_leaks(void);
+
+// Whether the process is terminating, for the code that runs while the module that holds this
+// copy of the runtime detaches (windows/ct_runtime_shutdown.cpp): Unknown where ntdll.dll does not
+// export RtlDllShutdownInProgress.
+enum class CtProcessShutdown
+{
+    NotInProgress,
+    InProgress,
+    Unknown,
+};
+CT_NODISCARD CT_NOINSTR CtProcessShutdown ct_process_shutdown(void);
 #endif
 
 CT_NOINSTR void ct_log_alloc_details(const char* label, const char* status, size_t req_size,

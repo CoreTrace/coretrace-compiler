@@ -3,6 +3,7 @@
 #include "ct_runtime_internal.h"
 #include "ct_runtime_quarantine.h"
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <malloc.h>
@@ -61,10 +62,19 @@ namespace
 
     using CtAllocTable = std::unordered_map<void*, CtAllocEntry>;
 
+    // Set once the table is built. A copy of the runtime that never built it has nothing to
+    // report, and building it at process exit would allocate with the loader lock held (#232).
+    std::atomic<bool> ct_alloc_table_built{false};
+
     CT_NOINSTR CtAllocTable& ct_alloc_table()
     {
         alignas(CtAllocTable) static unsigned char storage[sizeof(CtAllocTable)];
-        static CtAllocTable* const table = new (storage) CtAllocTable();
+        static CtAllocTable* const table = []
+        {
+            CtAllocTable* built = new (storage) CtAllocTable();
+            ct_alloc_table_built.store(true, std::memory_order_release);
+            return built;
+        }();
         return *table;
     }
 
@@ -631,12 +641,16 @@ namespace
     CtExitLogging ct_exit_logging;
 } // namespace
 
-// Runs at process exit from a TLS callback of the executable (ct_report_leaks_tls_callback):
+// Runs at process exit, from a TLS callback of the executable (ct_report_leaks_tls_callback):
 // after the destructors of the program's static objects, its exit handlers, its terminators
-// and the exit-time code of every DLL, which release blocks too (#187). The loader lock is
-// held by then, and ExitProcess has killed every other thread, maybe while it held a lock
-// that nothing will release: the report waits for no lock, allocates nothing, loads nothing,
-// and writes with the lock-free writers only, logging being off.
+// and the exit-time code of every DLL, which release blocks too (#187). In a DLL's copy of the
+// runtime, after the DLL's own exit-time code, from a terminator of the DLL
+// (ct_report_dll_leaks_terminator), or from its TLS callback when the DLL ended the process with
+// exit() (#232). The loader lock is held by then, and ExitProcess has killed every other thread,
+// maybe while it held a lock that nothing will release: the report only tries the allocation
+// table's lock, allocates nothing, loads nothing, and writes with the writers that take no lock
+// of the runtime, logging being off. They write with the C runtime's _write, which takes the lock
+// of the standard error's descriptor.
 CT_NOINSTR bool ct_report_leaks(void)
 {
     CtRuntimeScope scope;
@@ -645,6 +659,11 @@ CT_NOINSTR bool ct_report_leaks(void)
         ct_write_prefix_nolock(CTLevel::Warn);
         ct_write_cstr("ct: leak report skipped: another thread holds the allocation table\n");
         return false;
+    }
+    if (!ct_alloc_table_built.load(std::memory_order_acquire))
+    {
+        ReleaseSRWLockExclusive(&ct_alloc_lock);
+        return true;
     }
 
     size_t count = 0;
@@ -1301,16 +1320,58 @@ extern "C"
 
 namespace
 {
-    CT_NOINSTR void NTAPI ct_report_leaks_at_exit(PVOID module, DWORD reason, PVOID reserved)
+    // The report of a DLL's copy of the runtime, which has a table of its own, once: when the
+    // process exits, after the DLL's exit-time code, which releases blocks too (#232). When
+    // FreeLibrary unloads the DLL, the process goes on.
+    std::atomic<bool> ct_dll_reported{false};
+    // Set by the TLS callback when the DLL that holds this copy detaches.
+    std::atomic<bool> ct_dll_detaching{false};
+    // Set by the terminator when it runs before the DLL detaches: in the executable, from its C
+    // runtime's exit(); in a DLL, from the DLL's own exit(), whose C runtime runs the DLL's
+    // exit-time code then, and not again at detach.
+    std::atomic<bool> ct_terminators_ran{false};
+
+    CT_NOINSTR void ct_report_dll_leaks_once()
     {
-        // The executable detaches only when the process exits, and then with a null
-        // `reserved`; a DLL that links the runtime has a non-null one then, and a null one
-        // when FreeLibrary unloads it, which is no exit.
-        if (reason == DLL_PROCESS_DETACH &&
-            (reserved != nullptr || module == GetModuleHandleW(nullptr)))
+        if (ct_process_shutdown() == CtProcessShutdown::InProgress &&
+            !ct_dll_reported.exchange(true, std::memory_order_acq_rel))
         {
             (void)ct_report_leaks();
         }
+    }
+
+    // The executable detaches only when the process exits: it reports then. A DLL reports here
+    // when its own exit() has already run its exit-time code, terminators included. A DLL's TLS
+    // callbacks run before its exit-time code otherwise.
+    CT_NOINSTR void NTAPI ct_report_leaks_at_exit(PVOID module, DWORD reason, PVOID)
+    {
+        if (reason != DLL_PROCESS_DETACH)
+        {
+            return;
+        }
+        if (module == GetModuleHandleW(nullptr))
+        {
+            (void)ct_report_leaks();
+            return;
+        }
+        ct_dll_detaching.store(true, std::memory_order_release);
+        if (ct_terminators_ran.load(std::memory_order_acquire))
+        {
+            ct_report_dll_leaks_once();
+        }
+    }
+
+    // A DLL's C runtime runs its .CRT$XTY terminators after its atexit handlers, the destructors
+    // of its global objects and its destructor functions, when FreeLibrary unloads it and when the
+    // process exits.
+    CT_NOINSTR void ct_report_dll_leaks_at_exit()
+    {
+        if (!ct_dll_detaching.load(std::memory_order_acquire))
+        {
+            ct_terminators_ran.store(true, std::memory_order_release);
+            return;
+        }
+        ct_report_dll_leaks_once();
     }
 } // namespace
 
@@ -1323,3 +1384,9 @@ namespace
 #pragma section(".CRT$XLY", read)
 extern "C" __declspec(allocate(".CRT$XLY")) __attribute__((used))
 const PIMAGE_TLS_CALLBACK ct_report_leaks_tls_callback = ct_report_leaks_at_exit;
+
+// The terminator of a DLL's copy. .CRT$XTY comes after .CRT$XTU, where programs place theirs.
+#pragma comment(linker, "/INCLUDE:ct_report_dll_leaks_terminator")
+#pragma section(".CRT$XTY", read)
+extern "C" __declspec(allocate(".CRT$XTY"))
+__attribute__((used)) void (*const ct_report_dll_leaks_terminator)() = ct_report_dll_leaks_at_exit;

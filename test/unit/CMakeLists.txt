@@ -169,6 +169,18 @@ if(TARGET ct_instrument_runtime)
     target_compile_definitions(runtime_unit_tests PRIVATE
       CT_RUNTIME_LIBRARY="$<TARGET_FILE:ct_runtime_library>"
       CT_DLLMAIN_LIBRARY="$<TARGET_FILE:ct_dllmain_library>")
+    # A DLL's copy of the runtime reports its leaks when the process exits, after the DLL's
+    # exit-time code, and says nothing when FreeLibrary unloads the DLL (#232). The program links
+    # no runtime, so the report it prints is the DLL's copy's.
+    add_library(ct_leak_dll MODULE reload/ct_leak_dll.cpp)
+    target_link_libraries(ct_leak_dll PRIVATE ct_instrument_runtime coretrace_logger)
+    add_executable(dll_leak_report_main dll_leak_report_main.cpp)
+    target_compile_definitions(dll_leak_report_main PRIVATE
+      CT_LEAK_DLL="$<TARGET_FILE:ct_leak_dll>")
+    add_dependencies(dll_leak_report_main ct_leak_dll)
+    foreach(target ct_leak_dll dll_leak_report_main)
+      coretrace_force_msvc_runtime(${target})
+    endforeach()
   endif()
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
@@ -205,6 +217,26 @@ if(TARGET runtime_vtable_symbol_tests)
 endif()
 if(TARGET runtime_fork_handlers_tests)
   gtest_discover_tests(runtime_fork_handlers_tests)
+endif()
+if(TARGET dll_leak_report_main)
+  # The block kept, alone and reported once: the three released by the DLL's exit-time code are
+  # no leak.
+  set(CT_DLL_LEAK_KEPT "ct: leak ptr=[^ ]+ size=32 alloc_site=dll_leak:kept")
+  set(CT_DLL_LEAK_WRONG
+    "ct: leaks detected count=([02-9]|[1-9][0-9])|ct: leak ptr=[^ ]+ size=[0-9]+ alloc_site=dll_leak:(object|atexit|function)|ct: leaks detected.*ct: leaks detected")
+  foreach(case "ListsTheBlockKeptAtExit;return" "ListsTheBlockKeptAtExitProcess;exitprocess"
+                "ListsTheBlockKeptWhenTheDllCallsExit;dllexit")
+    list(GET case 0 name)
+    list(GET case 1 how)
+    add_test(NAME DllLeakReport.${name}
+      COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:dll_leak_report_main> -DARGS=${how}
+        "-DEXPECT=${CT_DLL_LEAK_KEPT}" "-DFORBID=${CT_DLL_LEAK_WRONG}"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/check_program_output.cmake)
+  endforeach()
+  add_test(NAME DllLeakReport.SaysNothingWhenFreeLibraryUnloadsTheDll
+    COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:dll_leak_report_main> -DARGS=free
+      "-DEXPECT=dll_leak_report_main: done" "-DFORBID=ct: leaks detected"
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/check_program_output.cmake)
 endif()
 if(TARGET runtime_scan_threads_tests)
   gtest_discover_tests(runtime_scan_threads_tests PROPERTIES ENVIRONMENT CT_AUTOFREE_SCAN=1)

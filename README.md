@@ -231,6 +231,14 @@ exit: after the program's exit-time code and that of every DLL, whether the prog
 lock is held then, and every other thread has been terminated: if one of them held the runtime's
 allocation table, the report says `ct: leak report skipped` instead of waiting for it (#187).
 
+A DLL that links the runtime, as an instrumented DLL does, has a copy of the runtime of its own,
+with its own table. When the DLL uses the static C runtime, as `cc` links it by default, that copy
+reports the DLL's leaks when the process exits, after the DLL's `atexit` handlers, the destructors
+of its global objects and its destructor functions: from a terminator of the DLL, or, when the DLL
+itself ends the process with `exit()`, when the loader detaches it. That comes before the exit-time
+code of the modules that detach after the DLL. It reports nothing when `FreeLibrary` unloads the
+DLL (#232).
+
 ## DbgHelp on Windows
 
 On Windows, the runtime names the targets of virtual calls in vtable boxes, and the frames of crash
