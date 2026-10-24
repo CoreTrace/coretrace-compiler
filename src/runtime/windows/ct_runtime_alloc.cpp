@@ -62,10 +62,19 @@ namespace
 
     using CtAllocTable = std::unordered_map<void*, CtAllocEntry>;
 
+    // Set once the table is built. A copy of the runtime that never built it has nothing to
+    // report, and building it at process exit would allocate with the loader lock held (#232).
+    std::atomic<bool> ct_alloc_table_built{false};
+
     CT_NOINSTR CtAllocTable& ct_alloc_table()
     {
         alignas(CtAllocTable) static unsigned char storage[sizeof(CtAllocTable)];
-        static CtAllocTable* const table = new (storage) CtAllocTable();
+        static CtAllocTable* const table = []
+        {
+            CtAllocTable* built = new (storage) CtAllocTable();
+            ct_alloc_table_built.store(true, std::memory_order_release);
+            return built;
+        }();
         return *table;
     }
 
@@ -642,6 +651,10 @@ namespace
 // off.
 CT_NOINSTR bool ct_report_leaks(void)
 {
+    if (!ct_alloc_table_built.load(std::memory_order_acquire))
+    {
+        return true;
+    }
     CtRuntimeScope scope;
     if (!TryAcquireSRWLockExclusive(&ct_alloc_lock))
     {
