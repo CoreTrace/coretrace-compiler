@@ -631,12 +631,14 @@ namespace
     CtExitLogging ct_exit_logging;
 } // namespace
 
-// Runs at process exit from a TLS callback of the executable (ct_report_leaks_tls_callback):
+// Runs at process exit, from a TLS callback of the executable (ct_report_leaks_tls_callback):
 // after the destructors of the program's static objects, its exit handlers, its terminators
-// and the exit-time code of every DLL, which release blocks too (#187). The loader lock is
-// held by then, and ExitProcess has killed every other thread, maybe while it held a lock
-// that nothing will release: the report waits for no lock, allocates nothing, loads nothing,
-// and writes with the lock-free writers only, logging being off.
+// and the exit-time code of every DLL, which release blocks too (#187). In a DLL's copy of the
+// runtime, from a terminator of the DLL (ct_report_dll_leaks_terminator), after the DLL's own
+// exit-time code (#232). The loader lock is held by then, and ExitProcess has killed every other
+// thread, maybe while it held a lock that nothing will release: the report waits for no lock,
+// allocates nothing, loads nothing, and writes with the lock-free writers only, logging being
+// off.
 CT_NOINSTR bool ct_report_leaks(void)
 {
     CtRuntimeScope scope;
@@ -1299,15 +1301,29 @@ extern "C"
     CT_NOINSTR void __ct_schedule_leak_report(void) {}
 }
 
+// The module that holds this copy of the runtime.
+extern "C" IMAGE_DOS_HEADER __ImageBase;
+
 namespace
 {
-    CT_NOINSTR void NTAPI ct_report_leaks_at_exit(PVOID module, DWORD reason, PVOID reserved)
+    // The executable's report. The executable detaches only when the process exits.
+    CT_NOINSTR void NTAPI ct_report_leaks_at_exit(PVOID module, DWORD reason, PVOID)
     {
-        // The executable detaches only when the process exits, and then with a null
-        // `reserved`; a DLL that links the runtime has a non-null one then, and a null one
-        // when FreeLibrary unloads it, which is no exit.
-        if (reason == DLL_PROCESS_DETACH &&
-            (reserved != nullptr || module == GetModuleHandleW(nullptr)))
+        if (reason == DLL_PROCESS_DETACH && module == GetModuleHandleW(nullptr))
+        {
+            (void)ct_report_leaks();
+        }
+    }
+
+    // The report of a DLL's copy of the runtime, which has a table of its own, when the process
+    // exits; when FreeLibrary unloads the DLL, the process goes on (#232). A DLL's TLS callbacks
+    // run before its exit-time code, which releases blocks too. Its C runtime's .CRT$XTY
+    // terminators run after its atexit handlers, the destructors of its global objects and its
+    // destructor functions, when FreeLibrary unloads it and when the process exits.
+    CT_NOINSTR void ct_report_dll_leaks_at_exit()
+    {
+        if (reinterpret_cast<HMODULE>(&__ImageBase) != GetModuleHandleW(nullptr) &&
+            ct_process_shutdown() == CtProcessShutdown::InProgress)
         {
             (void)ct_report_leaks();
         }
@@ -1323,3 +1339,9 @@ namespace
 #pragma section(".CRT$XLY", read)
 extern "C" __declspec(allocate(".CRT$XLY")) __attribute__((used))
 const PIMAGE_TLS_CALLBACK ct_report_leaks_tls_callback = ct_report_leaks_at_exit;
+
+// The terminator of a DLL's copy. .CRT$XTY comes after .CRT$XTU, where programs place theirs.
+#pragma comment(linker, "/INCLUDE:ct_report_dll_leaks_terminator")
+#pragma section(".CRT$XTY", read)
+extern "C" __declspec(allocate(".CRT$XTY"))
+__attribute__((used)) void (*const ct_report_dll_leaks_terminator)() = ct_report_dll_leaks_at_exit;
