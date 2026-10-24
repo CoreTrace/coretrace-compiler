@@ -653,16 +653,17 @@ namespace
 // of the standard error's descriptor.
 CT_NOINSTR bool ct_report_leaks(void)
 {
-    if (!ct_alloc_table_built.load(std::memory_order_acquire))
-    {
-        return true;
-    }
     CtRuntimeScope scope;
     if (!TryAcquireSRWLockExclusive(&ct_alloc_lock))
     {
         ct_write_prefix_nolock(CTLevel::Warn);
         ct_write_cstr("ct: leak report skipped: another thread holds the allocation table\n");
         return false;
+    }
+    if (!ct_alloc_table_built.load(std::memory_order_acquire))
+    {
+        ReleaseSRWLockExclusive(&ct_alloc_lock);
+        return true;
     }
 
     size_t count = 0;
