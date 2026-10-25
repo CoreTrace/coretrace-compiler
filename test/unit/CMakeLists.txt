@@ -181,6 +181,14 @@ if(TARGET ct_instrument_runtime)
     foreach(target ct_leak_dll dll_leak_report_main)
       coretrace_force_msvc_runtime(${target})
     endforeach()
+    # Probe for #231, not to merge: ExitProcess while other threads call into the loader.
+    add_executable(detach_lookup_probe detach_lookup_probe.cpp)
+    target_compile_definitions(detach_lookup_probe PRIVATE
+      CT_RUNTIME_LIBRARY="$<TARGET_FILE:ct_runtime_library>")
+    add_dependencies(detach_lookup_probe ct_runtime_library)
+    coretrace_force_msvc_runtime(detach_lookup_probe)
+    add_test(NAME Probe231.RuntimeDll COMMAND detach_lookup_probe parent runtime 300)
+    add_test(NAME Probe231.Control COMMAND detach_lookup_probe parent control 300)
   endif()
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
