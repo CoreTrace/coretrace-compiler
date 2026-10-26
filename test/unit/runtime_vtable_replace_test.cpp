@@ -686,6 +686,31 @@ namespace
         return frames;
     }
 
+    // An image that the child printed after a mark: its base and size.
+    struct CrashImage
+    {
+        unsigned long long base = 0;
+        unsigned long long size = 0;
+
+        bool holds(unsigned long long address) const
+        {
+            return address - base < size;
+        }
+    };
+
+    CrashImage imageAfter(const std::string& output, const char* mark)
+    {
+        CrashImage image;
+        const size_t at = output.find(mark);
+        if (at != std::string::npos)
+        {
+            char* end = nullptr;
+            image.base = std::strtoull(output.c_str() + at + std::strlen(mark), &end, 16);
+            image.size = std::strtoull(end, nullptr, 16);
+        }
+        return image;
+    }
+
     // What the backtrace of a process that the crash handler ended shows.
     enum class Backtrace
     {
@@ -697,6 +722,9 @@ namespace
         NamesNothingAfterTheFirstBuild,
         // Frames, none of them named.
         NamesNothing,
+        // Names for frames of the executable, whose image the child printed after "exe:2", and
+        // for no other frame.
+        NamesTheExecutableOnly,
     };
 
     class CrashBacktrace : public testing::MatcherInterface<const std::string&>
@@ -730,6 +758,27 @@ namespace
                 }
                 return true;
             }
+            if (expected_ == Backtrace::NamesTheExecutableOnly)
+            {
+                const CrashImage executable = imageAfter(output, "exe:2 ");
+                const auto outside = std::find_if(
+                    frames.begin(), frames.end(), [&](const CrashFrame& frame)
+                    { return !frame.name.empty() && !executable.holds(frame.address); });
+                if (outside != frames.end())
+                {
+                    *listener << "a frame outside the executable is named " << outside->name;
+                    return false;
+                }
+                if (std::none_of(frames.begin(), frames.end(),
+                                 [&](const CrashFrame& frame) {
+                                     return !frame.name.empty() && executable.holds(frame.address);
+                                 }))
+                {
+                    *listener << "no frame of the executable is named";
+                    return false;
+                }
+                return true;
+            }
             if (std::none_of(frames.begin(), frames.end(), [](const CrashFrame& frame)
                              { return frame.name == "RaiseException"; }))
             {
@@ -745,13 +794,9 @@ namespace
                 *listener << "a frame is named after the first build: " << stale->name;
                 return false;
             }
-            const size_t mark = output.find("fault:2 ");
-            char* end = nullptr;
-            const unsigned long long base =
-                mark == std::string::npos ? 0 : std::strtoull(output.c_str() + mark + 8, &end, 16);
-            const unsigned long long size = base == 0 ? 0 : std::strtoull(end, nullptr, 16);
+            const CrashImage second = imageAfter(output, "fault:2 ");
             if (std::none_of(frames.begin(), frames.end(),
-                             [&](const CrashFrame& frame) { return frame.address - base < size; }))
+                             [&](const CrashFrame& frame) { return second.holds(frame.address); }))
             {
                 *listener << "no frame is in the second build";
                 return false;
@@ -772,6 +817,9 @@ namespace
                 break;
             case Backtrace::NamesNothing:
                 *os << "is a crash backtrace that names no frame";
+                break;
+            case Backtrace::NamesTheExecutableOnly:
+                *os << "is a crash backtrace that names frames of the executable only";
                 break;
             }
         }
@@ -816,6 +864,17 @@ namespace
                      crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
     }
 
+    // Prints `mark`, then the base and the size of the image of `module`, for the matcher.
+    void printImage(const char* mark, HMODULE module)
+    {
+        const auto* image = reinterpret_cast<const unsigned char*>(module);
+        const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+            image + reinterpret_cast<const IMAGE_DOS_HEADER*>(image)->e_lfanew);
+        std::fprintf(stderr, "%s %p %lx\n", mark, static_cast<const void*>(image),
+                     static_cast<unsigned long>(headers->OptionalHeader.SizeOfImage));
+        std::fflush(stderr);
+    }
+
     // The copy of the library that the child loads, built in turn from both builds.
     fs::path faultingLibraryPath()
     {
@@ -848,12 +907,7 @@ namespace
             std::fprintf(stderr, "fault: the second build is not at the first one's base\n");
             std::exit(2);
         }
-        const auto* image = reinterpret_cast<const unsigned char*>(replaced);
-        const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(
-            image + reinterpret_cast<const IMAGE_DOS_HEADER*>(image)->e_lfanew);
-        std::fprintf(stderr, "fault:2 %p %lx\n", static_cast<const void*>(image),
-                     static_cast<unsigned long>(headers->OptionalHeader.SizeOfImage));
-        std::fflush(stderr);
+        printImage("fault:2", replaced);
         faultOnAThread(fault);
     }
 
@@ -880,5 +934,34 @@ namespace
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
         EXPECT_DEATH(faultOnceTheWatchHasStopped(), crashBacktrace(Backtrace::NamesNothing));
+    }
+
+    // Has the loader unload twice as many DLLs as the runtime keeps the bases of since the
+    // handler's installation, then faults. Prints why and exits with 2 when the library does
+    // not load.
+    [[noreturn]] void faultAfterManyUnloads()
+    {
+        constexpr int kUnloads = 2 * 64;
+        for (int unload = 0; unload < kUnloads; ++unload)
+        {
+            HMODULE library = LoadLibraryA(CT_RELOAD_LIBRARY_A);
+            if (!library)
+            {
+                std::fprintf(stderr, "unloads: the library did not load\n");
+                std::exit(2);
+            }
+            FreeLibrary(library);
+        }
+        printImage("exe:2", GetModuleHandleW(nullptr));
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // The runtime can no longer tell which of its session's modules the loader unloaded: only
+    // the frames of the executable, which the loader cannot have unloaded, keep their names.
+    TEST(BacktraceReplaceDeathTest, ACrashAfterManyUnloadsNamesTheExecutableOnly)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_DEATH(faultAfterManyUnloads(), crashBacktrace(Backtrace::NamesTheExecutableOnly));
     }
 } // namespace
