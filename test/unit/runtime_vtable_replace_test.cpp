@@ -730,7 +730,8 @@ namespace
                 }
                 return true;
             }
-            if (named("RaiseException") == frames.end())
+            if (std::none_of(frames.begin(), frames.end(), [](const CrashFrame& frame)
+                             { return frame.name == "RaiseException"; }))
             {
                 *listener << "no frame is named RaiseException";
                 return false;
@@ -806,7 +807,7 @@ namespace
     }
 
     // Without a virtual call box, the session's modules date from the handler's installation:
-    // the frames of the modules loaded since then keep their names.
+    // the frames of the modules it listed then, which the loader kept loaded, keep their names.
     TEST(BacktraceReplaceDeathTest, ACrashNamesTheFramesOfTheModulesLoadedAllAlong)
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
