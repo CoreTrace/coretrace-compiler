@@ -636,22 +636,25 @@ namespace
       public:
         BacktraceInChildren()
         {
-            wchar_t value[16];
-            had_value_ = GetEnvironmentVariableW(L"CT_BACKTRACE", value, 16) != 0;
+            wchar_t value[256];
+            const DWORD length = GetEnvironmentVariableW(L"CT_BACKTRACE", value, 256);
+            had_value_ = length != 0 && length < 256;
+            if (had_value_)
+            {
+                previous_.assign(value, length);
+            }
             SetEnvironmentVariableW(L"CT_BACKTRACE", L"1");
         }
         ~BacktraceInChildren()
         {
-            if (!had_value_)
-            {
-                SetEnvironmentVariableW(L"CT_BACKTRACE", nullptr);
-            }
+            SetEnvironmentVariableW(L"CT_BACKTRACE", had_value_ ? previous_.c_str() : nullptr);
         }
         BacktraceInChildren(const BacktraceInChildren&) = delete;
         BacktraceInChildren& operator=(const BacktraceInChildren&) = delete;
 
       private:
         bool had_value_ = false;
+        std::wstring previous_;
     };
 
     struct CrashFrame
@@ -812,13 +815,19 @@ namespace
                      crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
     }
 
+    // The copy of the library that the child loads, built in turn from both builds.
+    fs::path faultingLibraryPath()
+    {
+        return fs::path(testing::TempDir()) / "ct_faulting_library.dll";
+    }
+
     // Loads the first build of the library at a path and names its function, so that the
     // session lists it with its names, unloads it, then loads the second build from the same
     // path at the first one's base, and faults in it. Prints why and exits with 2 when it cannot
     // set this up.
     [[noreturn]] void faultInALibraryReplacedAtItsBase()
     {
-        const fs::path path = fs::path(testing::TempDir()) / "ct_faulting_library.dll";
+        const fs::path path = faultingLibraryPath();
         HMODULE first =
             copyWithoutTimeStamp(CT_RELOAD_LIBRARY_A, path) ? LoadLibraryW(path.c_str()) : nullptr;
         if (!first ||
@@ -853,6 +862,8 @@ namespace
         BacktraceInChildren backtrace;
         EXPECT_DEATH(faultInALibraryReplacedAtItsBase(),
                      crashBacktrace(Backtrace::NamesNothingAfterTheFirstBuild));
+        std::error_code ignored;
+        fs::remove(faultingLibraryPath(), ignored);
     }
 
     // Stops the watch of the loader, as the TLS callback does when the module that holds this
