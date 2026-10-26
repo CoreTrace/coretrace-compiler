@@ -622,6 +622,10 @@ namespace
     }
 } // namespace
 
+// The TLS callback of the runtime's watch of the loader, which stops the watch when the module
+// that holds this copy of the runtime detaches.
+extern "C" const PIMAGE_TLS_CALLBACK ct_module_changes_tls_callback;
+
 namespace
 {
     // The crash handler names the frames of its backtraces through the same session (#225). The
@@ -688,6 +692,8 @@ namespace
         // printed after "fault:2", while no frame is named after the first build, which the
         // loader unloaded from that base.
         NamesNothingAfterTheFirstBuild,
+        // Frames, none of them named.
+        NamesNothing,
     };
 
     class CrashBacktrace : public testing::MatcherInterface<const std::string&>
@@ -709,6 +715,18 @@ namespace
                 return std::find_if(frames.begin(), frames.end(), [&](const CrashFrame& frame)
                                     { return frame.name.find(name) != std::string::npos; });
             };
+            if (expected_ == Backtrace::NamesNothing)
+            {
+                const auto any =
+                    std::find_if(frames.begin(), frames.end(),
+                                 [](const CrashFrame& frame) { return !frame.name.empty(); });
+                if (any != frames.end())
+                {
+                    *listener << "a frame is named " << any->name;
+                    return false;
+                }
+                return true;
+            }
             if (named("RaiseException") == frames.end())
             {
                 *listener << "no frame is named RaiseException";
@@ -747,6 +765,9 @@ namespace
             case Backtrace::NamesNothingAfterTheFirstBuild:
                 *os << "is a crash backtrace that names RaiseException, has a frame in the second "
                        "build, and names none after the first";
+                break;
+            case Backtrace::NamesNothing:
+                *os << "is a crash backtrace that names no frame";
                 break;
             }
         }
@@ -832,5 +853,20 @@ namespace
         BacktraceInChildren backtrace;
         EXPECT_DEATH(faultInALibraryReplacedAtItsBase(),
                      crashBacktrace(Backtrace::NamesNothingAfterTheFirstBuild));
+    }
+
+    // Stops the watch of the loader, as the TLS callback does when the module that holds this
+    // copy of the runtime detaches, then faults: the loader no longer reports what it unloads.
+    [[noreturn]] void faultOnceTheWatchHasStopped()
+    {
+        ct_module_changes_tls_callback(nullptr, DLL_PROCESS_DETACH, nullptr);
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    TEST(BacktraceReplaceDeathTest, ACrashOnceTheWatchHasStoppedNamesNoFrame)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_DEATH(faultOnceTheWatchHasStopped(), crashBacktrace(Backtrace::NamesNothing));
     }
 } // namespace
