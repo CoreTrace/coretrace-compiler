@@ -12,6 +12,7 @@
 // one forever.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdlib>
@@ -20,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -615,5 +617,128 @@ namespace
         EXPECT_EXIT(
             nameCallsWhileAConstructorHoldsTheLoaderLock(),
             [](int status) { return status == 0 || status == 10 || status == 11; }, "");
+    }
+} // namespace
+
+namespace
+{
+    // The crash handler names the frames of its backtraces through the same session (#225). The
+    // runtime reads CT_BACKTRACE when the process starts: this sets it for the processes started
+    // meanwhile, a death test's child among them, whose runtime then installs the handler.
+    class BacktraceInChildren
+    {
+      public:
+        BacktraceInChildren()
+        {
+            wchar_t value[16];
+            had_value_ = GetEnvironmentVariableW(L"CT_BACKTRACE", value, 16) != 0;
+            SetEnvironmentVariableW(L"CT_BACKTRACE", L"1");
+        }
+        ~BacktraceInChildren()
+        {
+            if (!had_value_)
+            {
+                SetEnvironmentVariableW(L"CT_BACKTRACE", nullptr);
+            }
+        }
+        BacktraceInChildren(const BacktraceInChildren&) = delete;
+        BacktraceInChildren& operator=(const BacktraceInChildren&) = delete;
+
+      private:
+        bool had_value_ = false;
+    };
+
+    struct CrashFrame
+    {
+        unsigned long long address = 0;
+        std::string name;
+    };
+
+    // The frames of a crash backtrace in a standard error: the lines "  at <address> [<name>]".
+    std::vector<CrashFrame> crashFramesOf(const std::string& output)
+    {
+        std::vector<CrashFrame> frames;
+        std::istringstream lines(output);
+        for (std::string line; std::getline(lines, line);)
+        {
+            const size_t at = line.find("  at ");
+            if (at == std::string::npos)
+            {
+                continue;
+            }
+            char* end = nullptr;
+            CrashFrame frame;
+            frame.address = std::strtoull(line.c_str() + at + 5, &end, 16);
+            frame.name = end;
+            frame.name.erase(0, frame.name.find_first_not_of(' '));
+            frame.name.erase(frame.name.find_last_not_of("\r\n ") + 1);
+            frames.push_back(std::move(frame));
+        }
+        return frames;
+    }
+
+    // The standard error of a process that the crash handler ended: the handler printed a
+    // backtrace, and named the frame of RaiseException, whose module the loader kept loaded all
+    // along.
+    class CrashBacktrace : public testing::MatcherInterface<const std::string&>
+    {
+      public:
+        bool MatchAndExplain(const std::string& output,
+                             testing::MatchResultListener* listener) const override
+        {
+            const std::vector<CrashFrame> frames = crashFramesOf(output);
+            if (output.find("ct: fatal exception code=") == std::string::npos || frames.empty())
+            {
+                *listener << "the crash handler printed no backtrace";
+                return false;
+            }
+            if (std::none_of(frames.begin(), frames.end(), [](const CrashFrame& frame)
+                             { return frame.name.find("RaiseException") != std::string::npos; }))
+            {
+                *listener << "no frame is named RaiseException";
+                return false;
+            }
+            return true;
+        }
+
+        void DescribeTo(std::ostream* os) const override
+        {
+            *os << "is a crash backtrace that names RaiseException";
+        }
+    };
+
+    testing::Matcher<const std::string&> crashBacktrace()
+    {
+        return testing::MakeMatcher(new CrashBacktrace());
+    }
+
+    // Raises an exception that no handler catches, on a thread of its own: on the test's thread,
+    // the test's own handler would catch it. Ends with 7 when the crash handler has not ended
+    // the process within 20 seconds.
+    [[noreturn]] void faultOnAThread(void (*fault)())
+    {
+        std::thread(
+            []
+            {
+                Sleep(20000);
+                TerminateProcess(GetCurrentProcess(), 7);
+            })
+            .detach();
+        std::thread(fault).join();
+        std::exit(8);
+    }
+
+    void raiseUnhandledException()
+    {
+        RaiseException(0xE0000225, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+    }
+
+    // Without a virtual call box, the session's modules date from the handler's installation:
+    // the frames of the modules loaded since then keep their names.
+    TEST(BacktraceReplaceDeathTest, ACrashNamesTheFramesOfTheModulesLoadedAllAlong)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_DEATH(faultOnAThread(&raiseUnhandledException), crashBacktrace());
     }
 } // namespace
