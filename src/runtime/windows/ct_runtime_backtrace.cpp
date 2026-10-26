@@ -91,11 +91,13 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
     }
 
     {
-        // The session starts now rather than in the filter, where the heap may be corrupt.
+        // The session starts now rather than in the filter, where the heap may be corrupt, with
+        // its modules up to date.
         CtDbgHelpLock dbghelp(CtDbgHelpLock::kLookupWait);
-        if (dbghelp.owns())
+        HANDLE process = dbghelp.owns() ? ct_dbghelp_session_locked() : nullptr;
+        if (process)
         {
-            (void)ct_dbghelp_session_locked();
+            (void)ct_dbghelp_sync_modules_locked(process);
         }
     }
     SetUnhandledExceptionFilter(ct_exception_filter);
