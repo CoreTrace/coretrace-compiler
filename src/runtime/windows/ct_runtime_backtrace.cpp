@@ -98,7 +98,8 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
     {
         // The session starts now rather than in the filter, where the heap may be corrupt, with
         // its modules up to date: the filter names the frames of those that the loader has not
-        // unloaded since.
+        // unloaded since. Listing them allocates for the runtime itself (#197).
+        CtRuntimeScope scope;
         CtDbgHelpLock dbghelp(CtDbgHelpLock::kLookupWait);
         HANDLE process = dbghelp.owns() ? ct_dbghelp_session_locked() : nullptr;
         if (process)
