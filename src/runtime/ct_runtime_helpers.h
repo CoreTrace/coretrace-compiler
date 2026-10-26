@@ -14,6 +14,8 @@ enum class CtDemangleOutcome
 };
 
 #if defined(_WIN32)
+#include "compilerlib/attributes.hpp"
+
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -62,6 +64,12 @@ HANDLE ct_dbghelp_session_locked();
 
 // The session if it has started, null otherwise. Call with the DbgHelp lock held.
 HANDLE ct_dbghelp_started_session_locked();
+
+// Brings the session's modules up to date with what the loader reported: drops those of the DLLs
+// unloaded since the last time and lists those loaded. False when a step failed: its modules then
+// do not count as current. Call with the DbgHelp lock held, never from the crash handler, since it
+// lists the modules.
+CT_NODISCARD bool ct_dbghelp_sync_modules_locked(HANDLE process);
 
 // UnDecorateSymbolName, with the DbgHelp lock: Unavailable when the lock was not free in time.
 inline CtDemangleOutcome ct_demangle_outcome(const char* name, std::string& out)
