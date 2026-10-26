@@ -833,6 +833,17 @@ namespace
         return testing::MakeMatcher(new CrashBacktrace(expected));
     }
 
+    // The code of the exceptions that the faults raise, here and in the reload library's fault().
+    // A process that the crash handler ends after the fault exits with it; the children exit with
+    // 2 when they cannot set their fault up, with 7 when the crash handler has not ended the
+    // process in time, and with 8 when the fault returned.
+    constexpr DWORD kFaultCode = 0xE0000225;
+
+    testing::ExitedWithCode endedByTheFault()
+    {
+        return testing::ExitedWithCode(static_cast<int>(kFaultCode));
+    }
+
     // Raises an exception that no handler catches, on a thread of its own: on the test's thread,
     // the test's own handler would catch it. Ends with 7 when the crash handler has not ended
     // the process within 20 seconds.
@@ -851,7 +862,7 @@ namespace
 
     void raiseUnhandledException()
     {
-        RaiseException(0xE0000225, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+        RaiseException(kFaultCode, EXCEPTION_NONCONTINUABLE, 0, nullptr);
     }
 
     // Without a virtual call box, the session's modules date from the handler's installation:
@@ -860,8 +871,8 @@ namespace
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
-        EXPECT_DEATH(faultOnAThread(&raiseUnhandledException),
-                     crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
+        EXPECT_EXIT(faultOnAThread(&raiseUnhandledException), endedByTheFault(),
+                    crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
     }
 
     // Prints `mark`, then the base and the size of the image of `module`, for the matcher.
@@ -915,8 +926,8 @@ namespace
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
-        EXPECT_DEATH(faultInALibraryReplacedAtItsBase(),
-                     crashBacktrace(Backtrace::NamesNothingAfterTheFirstBuild));
+        EXPECT_EXIT(faultInALibraryReplacedAtItsBase(), endedByTheFault(),
+                    crashBacktrace(Backtrace::NamesNothingAfterTheFirstBuild));
         std::error_code ignored;
         fs::remove(faultingLibraryPath(), ignored);
     }
@@ -933,7 +944,8 @@ namespace
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
-        EXPECT_DEATH(faultOnceTheWatchHasStopped(), crashBacktrace(Backtrace::NamesNothing));
+        EXPECT_EXIT(faultOnceTheWatchHasStopped(), endedByTheFault(),
+                    crashBacktrace(Backtrace::NamesNothing));
     }
 
     // Has the loader unload twice as many DLLs as the runtime keeps the bases of since the
@@ -962,6 +974,7 @@ namespace
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
-        EXPECT_DEATH(faultAfterManyUnloads(), crashBacktrace(Backtrace::NamesTheExecutableOnly));
+        EXPECT_EXIT(faultAfterManyUnloads(), endedByTheFault(),
+                    crashBacktrace(Backtrace::NamesTheExecutableOnly));
     }
 } // namespace
