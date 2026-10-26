@@ -5,7 +5,8 @@
 // them when FreeLibrary unloads the DLL that holds this copy, after the DLL's last virtual calls
 // (#208), and leaves them to the system when the process terminates (#226). It also watches the
 // loader: before a lookup, the session drops the modules of the DLLs unloaded and lists those
-// loaded (#208).
+// loaded (#208), and the crash handler, which cannot list them, prints bare the frames of the
+// modules unloaded since (#225).
 #include "ct_runtime_helpers.h"
 #include "ct_runtime_internal.h"
 
@@ -315,6 +316,38 @@ CT_NOINSTR bool ct_dbghelp_sync_modules_locked(HANDLE process)
     changes.synced_changes = count;
     changes.synced_unloads = unloads;
     return true;
+}
+
+// Whether the session's module at `address` is still the one the loader has there, told without
+// listing the modules, which the crash handler cannot do: they were brought up to date, the
+// watch is still on, and no DLL unloaded since was at that module's base. Once the watch has
+// stopped, at detach, the loader no longer reports what it unloads: `watched` stays true for the
+// lookups of the module's destructors, but no module counts as current here. The ring is read as
+// ct_dbghelp_sync_modules_locked reads it, and a module counts as current only while fewer DLLs
+// were unloaded since than it keeps. Call with the DbgHelp lock held.
+CT_NOINSTR bool ct_dbghelp_module_current_locked(HANDLE process, DWORD64 address)
+{
+    const CtModuleChanges& changes = ct_module_changes;
+    if (!changes.synced || !changes.cookie.load(std::memory_order_acquire))
+    {
+        return false;
+    }
+    const DWORD64 base = SymGetModuleBase64(process, address);
+    const unsigned long unloads = changes.unloads.load(std::memory_order_acquire);
+    if (base == 0 || unloads - changes.synced_unloads >= CtModuleChanges::kUnloadedBases)
+    {
+        return false;
+    }
+    for (unsigned long index = changes.synced_unloads; index != unloads; ++index)
+    {
+        if (changes.unloaded[index % CtModuleChanges::kUnloadedBases].load(
+                std::memory_order_acquire) == base)
+        {
+            return false;
+        }
+    }
+    return changes.unloads.load(std::memory_order_acquire) - changes.synced_unloads <
+           CtModuleChanges::kUnloadedBases;
 }
 
 // The TLS callback of the watch, in the file of the session, which the virtual call boxes and the

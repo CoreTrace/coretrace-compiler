@@ -20,23 +20,27 @@ namespace
 
     // Runs inside the unhandled-exception filter, like the POSIX signal handler: only the
     // lock-free writers, and a symbol name only from a session, which the caller passes with the
-    // DbgHelp lock held.
+    // DbgHelp lock held, and only for a module that the loader has not unloaded since the
+    // session's modules were brought up to date (#225).
     CT_NOINSTR void ct_write_stack_frame(HANDLE process, void* frame)
     {
         ct_write_prefix_nolock(CTLevel::Error);
         ct_write_cstr("  at ");
         ct_write_hex(reinterpret_cast<uintptr_t>(frame));
 
-        if (process)
+        const DWORD64 address = reinterpret_cast<DWORD64>(frame);
+        if (process && ct_dbghelp_module_current_locked(process, address))
         {
             char symbol_buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
             auto* symbol = reinterpret_cast<SYMBOL_INFO*>(symbol_buffer);
             symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
             symbol->MaxNameLen = MAX_SYM_NAME;
 
+            // Checked again once named: another thread may have had the loader unload the
+            // module meanwhile.
             DWORD64 displacement = 0;
-            if (SymFromAddr(process, reinterpret_cast<DWORD64>(frame), &displacement, symbol) !=
-                FALSE)
+            if (SymFromAddr(process, address, &displacement, symbol) != FALSE &&
+                ct_dbghelp_module_current_locked(process, address))
             {
                 ct_write_cstr(" ");
                 ct_write_cstr(symbol->Name);
@@ -60,8 +64,9 @@ namespace
 
         // Never wait for DbgHelp here: the faulting thread may be the one holding its lock,
         // and waiting would hang the process instead of letting it die. Nor start the session,
-        // which ct_maybe_install_backtrace started. Without the lock or the session, frames are
-        // printed as bare addresses.
+        // which ct_maybe_install_backtrace started, or bring its modules up to date, which lists
+        // them. Without the lock or the session, frames are printed as bare addresses, and so
+        // are those of the modules that the loader may have unloaded since.
         CtDbgHelpLock dbghelp(0);
         HANDLE process = dbghelp.owns() ? ct_dbghelp_started_session_locked() : nullptr;
 
@@ -92,7 +97,8 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
 
     {
         // The session starts now rather than in the filter, where the heap may be corrupt, with
-        // its modules up to date.
+        // its modules up to date: the filter names the frames of those that the loader has not
+        // unloaded since.
         CtDbgHelpLock dbghelp(CtDbgHelpLock::kLookupWait);
         HANDLE process = dbghelp.owns() ? ct_dbghelp_session_locked() : nullptr;
         if (process)
