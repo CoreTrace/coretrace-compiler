@@ -169,6 +169,8 @@ namespace
         // detach: the lookups that come after, from the module's destructors, use what it
         // recorded, without listing every module again.
         std::atomic<bool> watched{false};
+        // The base of the executable, which stays loaded as long as the process.
+        std::atomic<ULONG_PTR> executable{0};
         unsigned long synced_changes = 0;
         unsigned long synced_unloads = 0;
         bool synced = false;
@@ -211,6 +213,8 @@ namespace
         auto* register_notification = reinterpret_cast<RegisterFn>(
             GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "LdrRegisterDllNotification"));
         PVOID cookie = nullptr;
+        ct_module_changes.executable.store(reinterpret_cast<ULONG_PTR>(GetModuleHandleW(nullptr)),
+                                           std::memory_order_release);
         if (register_notification &&
             register_notification(0, &ct_module_notification, nullptr, &cookie) >= 0)
         {
@@ -324,7 +328,8 @@ CT_NOINSTR bool ct_dbghelp_sync_modules_locked(HANDLE process)
 // stopped, at detach, the loader no longer reports what it unloads: `watched` stays true for the
 // lookups of the module's destructors, but no module counts as current here. The ring is read as
 // ct_dbghelp_sync_modules_locked reads it, and a module counts as current only while fewer DLLs
-// were unloaded since than it keeps. Call with the DbgHelp lock held.
+// were unloaded since than it keeps, but for the executable and the module that holds this copy,
+// which the loader cannot have unloaded. Call with the DbgHelp lock held.
 CT_NOINSTR bool ct_dbghelp_module_current_locked(HANDLE process, DWORD64 address)
 {
     const CtModuleChanges& changes = ct_module_changes;
@@ -333,8 +338,20 @@ CT_NOINSTR bool ct_dbghelp_module_current_locked(HANDLE process, DWORD64 address
         return false;
     }
     const DWORD64 base = SymGetModuleBase64(process, address);
+    if (base == 0)
+    {
+        return false;
+    }
+    // The executable stays loaded as long as the process, and the module that holds this copy as
+    // long as its code runs: the session's modules at their bases stay theirs, however many DLLs
+    // the loader has unloaded since.
+    if (base == changes.executable.load(std::memory_order_acquire) ||
+        base == reinterpret_cast<ULONG_PTR>(&__ImageBase))
+    {
+        return true;
+    }
     const unsigned long unloads = changes.unloads.load(std::memory_order_acquire);
-    if (base == 0 || unloads - changes.synced_unloads >= CtModuleChanges::kUnloadedBases)
+    if (unloads - changes.synced_unloads >= CtModuleChanges::kUnloadedBases)
     {
         return false;
     }

@@ -73,8 +73,9 @@ CT_NODISCARD bool ct_dbghelp_sync_modules_locked(HANDLE process);
 
 // Whether the session's module at `address` is still the one the loader has there: its modules
 // were brought up to date, the loader is still watched, and it has unloaded no DLL at that
-// module's base since. Reads only what the loader reported, for the crash handler. Call with the
-// DbgHelp lock held.
+// module's base since, which is always true of the executable and of the module that holds this
+// copy. Reads only what the loader reported, for the crash handler. Call with the DbgHelp lock
+// held.
 CT_NODISCARD bool ct_dbghelp_module_current_locked(HANDLE process, DWORD64 address);
 
 // UnDecorateSymbolName, with the DbgHelp lock: Unavailable when the lock was not free in time.
