@@ -9,12 +9,14 @@
 // of its own and under the DbgHelp lock of the process, which every copy of it takes, the copy in
 // a DLL built from reload/ct_runtime_library.cpp included; that copy watches the loader until it
 // unloads. A lookup made under the loader lock, from reload/ct_dllmain_library.cpp, waits for no
-// one forever.
+// one forever. The crash handler's backtraces, which name frames through the same session, name
+// none after a DLL unloaded since (#225).
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
@@ -677,12 +679,22 @@ namespace
         return frames;
     }
 
-    // The standard error of a process that the crash handler ended: the handler printed a
-    // backtrace, and named the frame of RaiseException, whose module the loader kept loaded all
-    // along.
+    // What the backtrace of a process that the crash handler ended shows.
+    enum class Backtrace
+    {
+        // A name for the frame of RaiseException, whose module the loader kept loaded all along.
+        NamesTheModulesLoadedAllAlong,
+        // That name, and a frame in the second build of the library, whose image the child
+        // printed after "fault:2", while no frame is named after the first build, which the
+        // loader unloaded from that base.
+        NamesNothingAfterTheFirstBuild,
+    };
+
     class CrashBacktrace : public testing::MatcherInterface<const std::string&>
     {
       public:
+        explicit CrashBacktrace(Backtrace expected) : expected_(expected) {}
+
         bool MatchAndExplain(const std::string& output,
                              testing::MatchResultListener* listener) const override
         {
@@ -692,10 +704,34 @@ namespace
                 *listener << "the crash handler printed no backtrace";
                 return false;
             }
-            if (std::none_of(frames.begin(), frames.end(), [](const CrashFrame& frame)
-                             { return frame.name.find("RaiseException") != std::string::npos; }))
+            const auto named = [&](const char* name)
+            {
+                return std::find_if(frames.begin(), frames.end(), [&](const CrashFrame& frame)
+                                    { return frame.name.find(name) != std::string::npos; });
+            };
+            if (named("RaiseException") == frames.end())
             {
                 *listener << "no frame is named RaiseException";
+                return false;
+            }
+            if (expected_ == Backtrace::NamesTheModulesLoadedAllAlong)
+            {
+                return true;
+            }
+            if (const auto stale = named("reload_a"); stale != frames.end())
+            {
+                *listener << "a frame is named after the first build: " << stale->name;
+                return false;
+            }
+            const size_t mark = output.find("fault:2 ");
+            char* end = nullptr;
+            const unsigned long long base =
+                mark == std::string::npos ? 0 : std::strtoull(output.c_str() + mark + 8, &end, 16);
+            const unsigned long long size = base == 0 ? 0 : std::strtoull(end, nullptr, 16);
+            if (std::none_of(frames.begin(), frames.end(),
+                             [&](const CrashFrame& frame) { return frame.address - base < size; }))
+            {
+                *listener << "no frame is in the second build";
                 return false;
             }
             return true;
@@ -703,13 +739,25 @@ namespace
 
         void DescribeTo(std::ostream* os) const override
         {
-            *os << "is a crash backtrace that names RaiseException";
+            switch (expected_)
+            {
+            case Backtrace::NamesTheModulesLoadedAllAlong:
+                *os << "is a crash backtrace that names RaiseException";
+                break;
+            case Backtrace::NamesNothingAfterTheFirstBuild:
+                *os << "is a crash backtrace that names RaiseException, has a frame in the second "
+                       "build, and names none after the first";
+                break;
+            }
         }
+
+      private:
+        Backtrace expected_;
     };
 
-    testing::Matcher<const std::string&> crashBacktrace()
+    testing::Matcher<const std::string&> crashBacktrace(Backtrace expected)
     {
-        return testing::MakeMatcher(new CrashBacktrace());
+        return testing::MakeMatcher(new CrashBacktrace(expected));
     }
 
     // Raises an exception that no handler catches, on a thread of its own: on the test's thread,
@@ -739,6 +787,50 @@ namespace
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
-        EXPECT_DEATH(faultOnAThread(&raiseUnhandledException), crashBacktrace());
+        EXPECT_DEATH(faultOnAThread(&raiseUnhandledException),
+                     crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
+    }
+
+    // Loads the first build of the library at a path and names its function, so that the
+    // session lists it with its names, unloads it, then loads the second build from the same
+    // path at the first one's base, and faults in it. Prints why and exits with 2 when it cannot
+    // set this up.
+    [[noreturn]] void faultInALibraryReplacedAtItsBase()
+    {
+        const fs::path path = fs::path(testing::TempDir()) / "ct_faulting_library.dll";
+        HMODULE first =
+            copyWithoutTimeStamp(CT_RELOAD_LIBRARY_A, path) ? LoadLibraryW(path.c_str()) : nullptr;
+        if (!first ||
+            !names(symbolOf(traceACall(first, "fault:1"), "fault:1"), "reload_a::describe"))
+        {
+            std::fprintf(stderr, "fault: the first build was not named\n");
+            std::exit(2);
+        }
+        FreeLibrary(first);
+        HMODULE replaced =
+            copyWithoutTimeStamp(CT_RELOAD_LIBRARY_B, path) ? LoadLibraryW(path.c_str()) : nullptr;
+        auto* fault = reinterpret_cast<void (*)()>(
+            replaced == first ? callEntry(replaced, "ct_reload_fault") : nullptr);
+        if (!fault)
+        {
+            // Elsewhere, the session would not list the first build at its address.
+            std::fprintf(stderr, "fault: the second build is not at the first one's base\n");
+            std::exit(2);
+        }
+        const auto* image = reinterpret_cast<const unsigned char*>(replaced);
+        const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+            image + reinterpret_cast<const IMAGE_DOS_HEADER*>(image)->e_lfanew);
+        std::fprintf(stderr, "fault:2 %p %lx\n", static_cast<const void*>(image),
+                     static_cast<unsigned long>(headers->OptionalHeader.SizeOfImage));
+        std::fflush(stderr);
+        faultOnAThread(fault);
+    }
+
+    TEST(BacktraceReplaceDeathTest, ACrashNamesNoFrameAfterADllUnloadedFromItsBase)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_DEATH(faultInALibraryReplacedAtItsBase(),
+                     crashBacktrace(Backtrace::NamesNothingAfterTheFirstBuild));
     }
 } // namespace
