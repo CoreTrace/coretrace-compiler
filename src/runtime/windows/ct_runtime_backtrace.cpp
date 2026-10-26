@@ -78,6 +78,8 @@ namespace
             ct_write_stack_frame(process, frames[index]);
         }
 
+        // Mutant for #225, not to merge: the backtrace is printed, then the handler hangs.
+        Sleep(INFINITE);
         return EXCEPTION_EXECUTE_HANDLER;
     }
 } // namespace
