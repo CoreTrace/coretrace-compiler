@@ -63,6 +63,15 @@ pull request.
   destructors of its global objects and its destructor functions, whether the program returns
   from `main`, calls `ExitProcess`, or the DLL calls `exit()`; it still reports nothing when
   `FreeLibrary` unloads the DLL (#232).
+- **Crash backtraces after a DLL was unloaded, on Windows.** With `CT_BACKTRACE`, the crash
+  handler named the frames through the runtime's DbgHelp session without bringing its modules up
+  to date: a frame in a DLL loaded at the address of a DLL unloaded since could be named after
+  the unloaded DLL's functions. The handler now brings the session's modules up to date when it is
+  installed, and prints bare the frames of the modules that the loader has unloaded since they
+  were last brought up to date. When it cannot tell, after more unloads than the runtime keeps
+  track of, it names only the frames of the executable and of the module that holds the runtime's
+  copy; it names none once the runtime has stopped following the loader, when that module
+  detaches (README, "DbgHelp on Windows") (#225).
 
 ## v0.12.0 (2026-10-22)
 

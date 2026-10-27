@@ -274,7 +274,13 @@ runtime as follows:
 - **Modules.** The runtime follows the loader's notifications (`LdrRegisterDllNotification`), so
   that a vtable box names the functions of the DLLs loaded when it is printed, a DLL replaced by
   another one at the same address included. When its session cannot be brought up to date, the box
-  names nothing rather than a function of a DLL unloaded since.
+  names nothing rather than a function of a DLL unloaded since. The crash handler, which cannot list
+  the modules, prints bare the frames of the modules that the loader has unloaded since they were
+  last brought up to date: when the handler was installed, or at a vtable box since. When the loader
+  has unloaded more DLLs since than the runtime keeps the bases of (64), the handler names only the
+  frames of the executable and of the module that holds the runtime's copy, which the loader cannot
+  have unloaded. Once that copy has stopped following the loader, when the module that holds it
+  detaches, the handler prints every frame bare.
 
 ## LLVM versions
 
