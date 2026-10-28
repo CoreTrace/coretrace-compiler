@@ -74,7 +74,7 @@ jobs:
   # only meet by chance: stubs replay one, in the Ubuntu 22.04 image, which lacks gpg.
   check-install-llvm-apt:
     name: Check install-llvm-apt.sh retries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v4
