@@ -73,6 +73,12 @@ pull request.
   copy; it names none once the runtime has stopped following the loader, when that module
   detaches (README, "DbgHelp on Windows") (#225).
 
+### Tests and CI
+
+- When `sbrk()` fails in the sbrk test of the full allocation table, the test reports `errno`,
+  the program break and the mapping above it, `RLIMIT_DATA`, and the memory of the process and
+  of the system (#239, #233).
+
 ## v0.12.0 (2026-10-22)
 
 Release traces name the kind and the allocation site of each block, and the Windows runtime
