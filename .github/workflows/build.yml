@@ -50,8 +50,8 @@ jobs:
   # (CORETRACE_COMPILER_BUILD_RUNTIME=OFF): no coretrace-log fetch, and --instrument
   # takes a runtime built elsewhere through CT_RUNTIME_LIB_DIR.
   build-without-runtime:
-    name: Build without the runtime (ubuntu-latest)
-    runs-on: ubuntu-latest
+    name: Build without the runtime (ubuntu-24.04)
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v4
