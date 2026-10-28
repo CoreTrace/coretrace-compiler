@@ -73,6 +73,14 @@ pull request.
   copy; it names none once the runtime has stopped following the loader, when that module
   detaches (README, "DbgHelp on Windows") (#225).
 
+### Tests and CI
+
+- The jobs of the Build and clang-format workflows that ran on `ubuntu-latest` run on Ubuntu
+  24.04, and the format check installs and runs clang-format 18. `ubuntu-latest` had moved to
+  Ubuntu 26.04, where clang-format 19 ran and apt.llvm.org has no LLVM 20. `scripts/format.sh`
+  and `scripts/format-check.sh` run the binary that `CLANG_FORMAT` names and print its version
+  (#238, #237).
+
 ## v0.12.0 (2026-10-22)
 
 Release traces name the kind and the allocation site of each block, and the Windows runtime
