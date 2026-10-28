@@ -14,7 +14,7 @@ jobs:
   # Computed once per run, from the Conventional Commits since the last tag.
   semver:
     name: Compute next version (SemVer)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v4
