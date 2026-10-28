@@ -17,5 +17,8 @@ if [ "${#files[@]}" -eq 0 ]; then
     exit 0
 fi
 
+clang_format="${CLANG_FORMAT:-clang-format}"
+"${clang_format}" --version
+
 echo "Formatting ${#files[@]} files with clang-format (style from ${REPO_ROOT}/.clang-format)..."
-clang-format -i "${files[@]}"
+"${clang_format}" -i "${files[@]}"

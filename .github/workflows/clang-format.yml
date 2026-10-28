@@ -8,16 +8,19 @@ on:
 
 jobs:
   format-check:
-    runs-on: ubuntu-latest
+    # The tree is formatted with clang-format 18: another version formats some files
+    # differently.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install clang-format 19
+      - name: Install clang-format 18
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-format-19
-          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-19 100
+          sudo apt-get install -y clang-format-18
 
       - name: Run format-check
+        env:
+          CLANG_FORMAT: clang-format-18
         run: ./scripts/format-check.sh

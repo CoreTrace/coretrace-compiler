@@ -14,7 +14,7 @@ jobs:
   # Computed once per run, from the Conventional Commits since the last tag.
   semver:
     name: Compute next version (SemVer)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v4
@@ -28,7 +28,7 @@ jobs:
   docker:
     name: Docker tests (multi-arch, Linux)
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v4
@@ -50,8 +50,8 @@ jobs:
   # (CORETRACE_COMPILER_BUILD_RUNTIME=OFF): no coretrace-log fetch, and --instrument
   # takes a runtime built elsewhere through CT_RUNTIME_LIB_DIR.
   build-without-runtime:
-    name: Build without the runtime (ubuntu-latest)
-    runs-on: ubuntu-latest
+    name: Build without the runtime (ubuntu-24.04)
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v4
@@ -74,7 +74,7 @@ jobs:
   # only meet by chance: stubs replay one, in the Ubuntu 22.04 image, which lacks gpg.
   check-install-llvm-apt:
     name: Check install-llvm-apt.sh retries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - uses: actions/checkout@v4
