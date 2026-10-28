@@ -124,7 +124,9 @@ to skip them.
 
 ## Code Style (clang-format)
 
-- Target version: `clang-format` 17 (CI uses this).
+- Target version: `clang-format` 18 (CI uses this).
+- The scripts run `clang-format` from `PATH`, or the binary that `CLANG_FORMAT` names:
+  `CLANG_FORMAT=clang-format-18 ./scripts/format.sh`
 - Format locally: `./scripts/format.sh`
 - Check without modifying: `./scripts/format-check.sh`
 - CMake targets: `cmake --build build --target format` or `--target format-check`
