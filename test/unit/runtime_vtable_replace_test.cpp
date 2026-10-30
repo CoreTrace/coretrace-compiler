@@ -26,11 +26,13 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include <windows.h>
 #include <dbghelp.h>
+#include <psapi.h>
 
 #pragma comment(lib, "Dbghelp.lib")
 
@@ -976,5 +978,188 @@ namespace
         BacktraceInChildren backtrace;
         EXPECT_EXIT(faultAfterManyUnloads(), endedByTheFault(),
                     crashBacktrace(Backtrace::NamesTheExecutableOnly));
+    }
+
+    // Probe for #227, not to merge: the blocks that stay allocated in the process's heaps after
+    // load and unload cycles of a DLL. The control DLL is built as the one that links the
+    // runtime, with the same C runtime, and links nothing else.
+    struct HeapBlock
+    {
+        HANDLE heap;
+        const unsigned char* address;
+        size_t size;
+
+        bool operator<(const HeapBlock& other) const
+        {
+            return std::tie(heap, address, size) < std::tie(other.heap, other.address, other.size);
+        }
+    };
+
+    // The busy blocks of every heap of the process, into `blocks`, whose storage is reserved
+    // beforehand so that the walk does not see it move.
+    void busyBlocks(std::vector<HeapBlock>& blocks)
+    {
+        blocks.clear();
+        HANDLE heaps[256];
+        const DWORD count = GetProcessHeaps(256, heaps);
+        for (DWORD index = 0; index < count && index < 256; ++index)
+        {
+            if (!HeapLock(heaps[index]))
+            {
+                continue;
+            }
+            PROCESS_HEAP_ENTRY entry{};
+            while (HeapWalk(heaps[index], &entry) && blocks.size() < blocks.capacity())
+            {
+                if ((entry.wFlags & PROCESS_HEAP_ENTRY_BUSY) != 0)
+                {
+                    blocks.push_back({heaps[index], static_cast<const unsigned char*>(entry.lpData),
+                                      entry.cbData});
+                }
+            }
+            HeapUnlock(heaps[index]);
+        }
+        std::sort(blocks.begin(), blocks.end());
+    }
+
+    std::string dump(const HeapBlock& block, uintptr_t image, size_t image_size)
+    {
+        std::ostringstream out;
+        const size_t shown = std::min<size_t>(block.size, 96);
+        for (size_t offset = 0; offset < shown; ++offset)
+        {
+            char hex[4];
+            std::snprintf(hex, sizeof(hex), "%02x", block.address[offset]);
+            out << hex << ((offset % 8 == 7) ? " " : "");
+        }
+        out << " |";
+        for (size_t offset = 0; offset < shown; ++offset)
+        {
+            const unsigned char c = block.address[offset];
+            out << ((c >= 0x20 && c < 0x7f) ? static_cast<char>(c) : '.');
+        }
+        out << "|";
+        for (size_t offset = 0; offset + sizeof(uintptr_t) <= block.size;
+             offset += sizeof(uintptr_t))
+        {
+            uintptr_t word = 0;
+            std::memcpy(&word, block.address + offset, sizeof(word));
+            if (word >= image && word < image + image_size)
+            {
+                out << " dll+0x" << std::hex << (word - image) << "@" << offset << std::dec;
+            }
+        }
+        return out.str();
+    }
+
+    TEST(DllHeapProbe, BlocksKeptPerLoadAndUnload)
+    {
+        DllStandardError output(fs::path(testing::TempDir()) / "ct_runtime_library_probe.txt");
+        struct Variant
+        {
+            const char* name;
+            const char* path;
+            bool trace;
+        };
+        const Variant variants[] = {{"control", CT_RELOAD_LIBRARY_A, false},
+                                    {"runtime", CT_RUNTIME_LIBRARY, false},
+                                    {"runtime-traced", CT_RUNTIME_LIBRARY, true}};
+        constexpr int kCycles = 50;
+        std::vector<HeapBlock> before;
+        std::vector<HeapBlock> after;
+        before.reserve(1 << 18);
+        after.reserve(1 << 18);
+        for (const Variant& variant : variants)
+        {
+            uintptr_t image = 0;
+            size_t image_size = 0;
+            const auto cycle = [&]
+            {
+                HMODULE library = LoadLibraryA(variant.path);
+                if (!library)
+                {
+                    return false;
+                }
+                MODULEINFO info{};
+                if (K32GetModuleInformation(GetCurrentProcess(), library, &info, sizeof(info)))
+                {
+                    image = reinterpret_cast<uintptr_t>(info.lpBaseOfDll);
+                    image_size = info.SizeOfImage;
+                }
+                FARPROC entry = GetProcAddress(library, "ct_runtime_library_trace");
+                if (variant.trace && entry)
+                {
+                    reinterpret_cast<void (*)()>(entry)();
+                }
+                FreeLibrary(library);
+                return true;
+            };
+            ASSERT_TRUE(cycle()) << variant.path;
+            ASSERT_TRUE(cycle());
+            busyBlocks(before);
+            for (int index = 0; index < kCycles; ++index)
+            {
+                ASSERT_TRUE(cycle());
+            }
+            busyBlocks(after);
+            ASSERT_LT(before.size(), before.capacity());
+            ASSERT_LT(after.size(), after.capacity());
+
+            std::vector<HeapBlock> kept;
+            std::set_difference(after.begin(), after.end(), before.begin(), before.end(),
+                                std::back_inserter(kept));
+            std::vector<HeapBlock> gone;
+            std::set_difference(before.begin(), before.end(), after.begin(), after.end(),
+                                std::back_inserter(gone));
+            size_t kept_bytes = 0;
+            for (const HeapBlock& block : kept)
+            {
+                kept_bytes += block.size;
+            }
+            size_t gone_bytes = 0;
+            for (const HeapBlock& block : gone)
+            {
+                gone_bytes += block.size;
+            }
+
+            // Sizes of the new blocks, by number of blocks, largest first.
+            std::vector<std::pair<size_t, std::vector<const HeapBlock*>>> sizes;
+            for (const HeapBlock& block : kept)
+            {
+                auto found = std::find_if(sizes.begin(), sizes.end(), [&](const auto& group)
+                                          { return group.first == block.size; });
+                if (found == sizes.end())
+                {
+                    sizes.push_back({block.size, {}});
+                    found = std::prev(sizes.end());
+                }
+                found->second.push_back(&block);
+            }
+            std::sort(sizes.begin(), sizes.end(), [](const auto& left, const auto& right)
+                      { return left.second.size() > right.second.size(); });
+
+            std::ostringstream report;
+            report << "probe-227 " << variant.name << " cycles=" << kCycles
+                   << " blocks_before=" << before.size() << " blocks_after=" << after.size()
+                   << " new_blocks=" << kept.size() << " new_bytes=" << kept_bytes
+                   << " freed_blocks=" << gone.size() << " freed_bytes=" << gone_bytes
+                   << " net_per_cycle="
+                   << (static_cast<long long>(kept_bytes) - static_cast<long long>(gone_bytes)) /
+                          kCycles
+                   << " image_size=" << image_size;
+            for (size_t group = 0; group < sizes.size() && group < 12; ++group)
+            {
+                const auto& [size, blocks] = sizes[group];
+                report << "\nprobe-227 " << variant.name << " size=" << size
+                       << " count=" << blocks.size();
+                for (size_t sample = 0; sample < blocks.size() && sample < 3; ++sample)
+                {
+                    report << "\nprobe-227 " << variant.name << "   heap=" << blocks[sample]->heap
+                           << " " << dump(*blocks[sample], image, image_size);
+                }
+            }
+            // Reported as a failure, so that ctest --output-on-failure prints it.
+            ADD_FAILURE() << report.str();
+        }
     }
 } // namespace
