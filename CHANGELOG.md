@@ -79,6 +79,14 @@ pull request.
   measurement of #227, whose DLL decoded two names. The copy now frees the cache when `FreeLibrary`
   unloads the DLL, after the DLL's destructors, whose boxes still name types (#227).
 
+### Tests and CI
+
+- The jobs of the Build and clang-format workflows that ran on `ubuntu-latest` run on Ubuntu
+  24.04, and the format check installs and runs clang-format 18. `ubuntu-latest` had moved to
+  Ubuntu 26.04, where clang-format 19 ran and apt.llvm.org has no LLVM 20. `scripts/format.sh`
+  and `scripts/format-check.sh` run the binary that `CLANG_FORMAT` names and print its version
+  (#238, #237).
+
 ## v0.12.0 (2026-10-22)
 
 Release traces name the kind and the allocation site of each block, and the Windows runtime
