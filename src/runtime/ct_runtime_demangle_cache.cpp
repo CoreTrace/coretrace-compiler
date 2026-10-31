@@ -106,6 +106,10 @@ CT_NODISCARD CT_NOINSTR bool CtDemangleCache::demangle(const char* name, std::st
     try
     {
         CtDemangleCacheLock lock;
+        if (!names_ && !released_)
+        {
+            names_.emplace();
+        }
         if (names_ && names_->size() < kMaxEntries)
         {
             names_->emplace(std::string(text), std::move(result));
@@ -129,4 +133,5 @@ CT_NOINSTR void CtDemangleCache::release()
     CtRuntimeScope scope;
     CtDemangleCacheLock lock;
     names_.reset();
+    released_ = true;
 }

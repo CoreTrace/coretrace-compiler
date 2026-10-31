@@ -8,8 +8,9 @@
 // in its place may put another name at the same address, which then gets its own result.
 // The cache holds at most kMaxEntries names; past that, a new name is decoded every time. A name
 // its demangler could not decode for now is not kept, and is decoded again next time (#208).
-// Released, the cache frees the names it holds and decodes every name from then on: on Windows,
-// the copy of the runtime in a DLL releases its cache when FreeLibrary unloads the DLL (#227).
+// The cache allocates nothing until it keeps a name. Released, it frees the names it holds and
+// decodes every name from then on: on Windows, the copy of the runtime in a DLL releases its cache
+// when FreeLibrary unloads the DLL (#227).
 // Safe for concurrent use: every cache shares one lock, which fork() also takes.
 #ifndef CT_RUNTIME_DEMANGLE_CACHE_H
 #define CT_RUNTIME_DEMANGLE_CACHE_H
@@ -61,9 +62,9 @@ class CtDemangleCache
     // One of the two is set.
     Demangler demangler_ = nullptr;
     OutcomeDemangler outcome_demangler_ = nullptr;
-    // None once released.
-    std::optional<std::unordered_map<std::string, Result, Hash, std::equal_to<>>> names_{
-        std::in_place};
+    // Built at the first name kept; none once released.
+    std::optional<std::unordered_map<std::string, Result, Hash, std::equal_to<>>> names_;
+    bool released_ = false;
 };
 
 // The lock of every cache, for the fork() handlers: nothing else may take it.
