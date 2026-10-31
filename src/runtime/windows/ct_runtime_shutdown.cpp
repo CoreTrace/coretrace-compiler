@@ -2,9 +2,10 @@
 //
 // Whether the process that holds this copy of the runtime is terminating, for the code that runs
 // while the module detaches: the leak report of a DLL's copy, and the release of its DbgHelp
-// session and of its names. That code cannot tell from lpvReserved: only DllMain receives it non-null at process
-// termination, the TLS callbacks receive it null then too (#226, #232). That code frees what the
-// copy holds only when FreeLibrary unloads a DLL (ct_dll_unloading_dynamically).
+// session and of its names. That code cannot tell from lpvReserved: only DllMain receives it
+// non-null at process termination, the TLS callbacks receive it null then too (#226, #232). That
+// code frees what the copy holds only when FreeLibrary unloads a DLL
+// (ct_dll_unloading_dynamically).
 #include "ct_runtime_internal.h"
 
 #include <atomic>
