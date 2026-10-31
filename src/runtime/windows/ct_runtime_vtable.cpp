@@ -323,10 +323,10 @@ namespace
     }
 
     // Releases the names of a DLL's copy when FreeLibrary unloads the DLL, after the destructors
-    // of its global objects, which may still name calls. The cache's storage goes away with the
-    // DLL's image, while the names it holds would stay allocated: one cache more at each load
-    // (#227). Code of the DLL that names a call after that, as its terminators, gets every name
-    // decoded at each call.
+    // of its global objects, whose boxes still find their names in it. The cache's storage goes
+    // away with the DLL's image, while the names it holds would stay allocated: one cache more at
+    // each load (#227). Code of the DLL that names a call after the release, as its terminators,
+    // finds the cache empty: it keeps no name, and asks its demangler for each.
     struct CtNameCacheRelease
     {
         // User-provided, so that the object is initialized dynamically, in this file's
