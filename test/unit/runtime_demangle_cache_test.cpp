@@ -199,6 +199,23 @@ namespace
         EXPECT_EQ(out, "again");
     }
 
+    // Released before it kept any name, as when the module of a copy that named nothing unloads,
+    // the cache keeps none of the names asked after either.
+    TEST(DemangleCache, ReleasedBeforeKeepingANameItKeepsNone)
+    {
+        CtDemangleCache cache(countingDemangler);
+        cache.release();
+        decoded = 0;
+        std::string out;
+        for (int i = 0; i < 2; ++i)
+        {
+            ASSERT_TRUE(cache.demangle("m:late", out));
+            EXPECT_EQ(out, "late");
+        }
+        EXPECT_EQ(decoded.load(), 2);
+        EXPECT_EQ(cache.size(), 0u);
+    }
+
     // One thread releases the cache while others name: each still gets the name it asks for,
     // and the cache keeps none of the names asked for after.
     TEST(DemangleCache, ThreadsGetTheNamesTheyAskForWhileAnotherReleasesIt)
