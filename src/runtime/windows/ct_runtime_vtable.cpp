@@ -23,6 +23,11 @@
 
 #pragma comment(lib, "Dbghelp.lib")
 
+// The objects of this file are constructed before the program's and destroyed after them: the
+// release of the names comes after the destructors of the program's global objects, and their
+// virtual calls.
+#pragma init_seg(lib)
+
 namespace
 {
     constexpr size_t kBoxMaxValueWidth = 60;
@@ -316,6 +321,29 @@ namespace
         static CtDemangleCache* const cache = new (storage) CtDemangleCache(ct_demangle_outcome);
         return *cache;
     }
+
+    // Releases the names of a DLL's copy when FreeLibrary unloads the DLL, after the destructors
+    // of its global objects, whose boxes still find their names in it. The cache's storage goes
+    // away with the DLL's image, while the names it holds would stay allocated: one cache more at
+    // each load (#227). Code of the DLL that names a call after the release, as its terminators,
+    // finds the cache empty: it keeps no name, and asks its demangler for each.
+    struct CtNameCacheRelease
+    {
+        // User-provided, so that the object is initialized dynamically, in this file's
+        // init_seg: clang registers the destructor of a constant-initialized object from
+        // .CRT$XCU, with the program's own objects.
+        CT_NOINSTR CtNameCacheRelease() {}
+
+        CT_NOINSTR ~CtNameCacheRelease()
+        {
+            if (ct_dll_unloading_dynamically())
+            {
+                ct_name_cache().release();
+            }
+        }
+    };
+
+    CtNameCacheRelease ct_name_cache_release;
 
     CT_NODISCARD CT_NOINSTR std::string
     ct_format_type_name(const CtRttiTypeDescriptor* type_descriptor)

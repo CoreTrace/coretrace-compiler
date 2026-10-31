@@ -10,7 +10,9 @@
 // a DLL built from reload/ct_runtime_library.cpp included; that copy watches the loader until it
 // unloads. A lookup made under the loader lock, from reload/ct_dllmain_library.cpp, waits for no
 // one forever. The crash handler's backtraces, which name frames through the same session, name
-// none after a DLL unloaded since (#225).
+// none after a DLL unloaded since (#225). The copy in a DLL frees the names it decoded when the DLL
+// unloads: the DLL keeps no heap block at each load, as one without the runtime. The boxes of the
+// DLL's destructors still name types then, as they do when the process exits (#227).
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -23,9 +25,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -357,6 +362,252 @@ namespace
         // Kept, they would add two handles a cycle at least: the lock's and the session's.
         EXPECT_LT(after, before + kCycles)
             << "handles before the cycles: " << before << ", after: " << after;
+    }
+
+    // A busy block of one of the process's heaps.
+    struct HeapBlock
+    {
+        HANDLE heap;
+        const unsigned char* address;
+        size_t size;
+
+        bool operator<(const HeapBlock& other) const
+        {
+            return std::tie(heap, address, size) < std::tie(other.heap, other.address, other.size);
+        }
+    };
+
+    // The busy blocks of every heap of the process, sorted, into `blocks`, whose storage is
+    // reserved beforehand, so that the walk does not change the heaps it walks. False when that
+    // storage is too small.
+    bool listBusyBlocks(std::vector<HeapBlock>& blocks)
+    {
+        blocks.clear();
+        HANDLE heaps[256];
+        const DWORD count = std::min<DWORD>(GetProcessHeaps(256, heaps), 256);
+        for (DWORD index = 0; index < count; ++index)
+        {
+            if (!HeapLock(heaps[index]))
+            {
+                continue;
+            }
+            PROCESS_HEAP_ENTRY entry{};
+            bool room = true;
+            while (room && HeapWalk(heaps[index], &entry))
+            {
+                if ((entry.wFlags & PROCESS_HEAP_ENTRY_BUSY) == 0)
+                {
+                    continue;
+                }
+                room = blocks.size() < blocks.capacity();
+                if (room)
+                {
+                    blocks.push_back({heaps[index], static_cast<const unsigned char*>(entry.lpData),
+                                      entry.cbData});
+                }
+            }
+            HeapUnlock(heaps[index]);
+            if (!room)
+            {
+                return false;
+            }
+        }
+        std::sort(blocks.begin(), blocks.end());
+        return true;
+    }
+
+    constexpr int kLoadCycles = 20;
+
+    // Loads `library` and unloads it; a DLL that links the runtime names a call first when `trace`
+    // is set, and from its destructors when it unloads.
+    bool loadAndUnload(const char* library, bool trace)
+    {
+        HMODULE module = LoadLibraryA(library);
+        if (!module)
+        {
+            return false;
+        }
+        FARPROC entry = GetProcAddress(module, "ct_runtime_library_trace");
+        if (entry && trace)
+        {
+            reinterpret_cast<void (*)()>(entry)();
+        }
+        FreeLibrary(module);
+        return true;
+    }
+
+    // The blocks of the process's heaps that kLoadCycles loads and unloads of `library` leave
+    // allocated, after two to warm up, into `kept`; a call is named before every other unload.
+    bool blocksKeptAcrossLoads(const char* library, std::vector<HeapBlock>& kept)
+    {
+        std::vector<HeapBlock> before;
+        std::vector<HeapBlock> after;
+        before.reserve(1 << 18);
+        after.reserve(1 << 18);
+        if (!loadAndUnload(library, true) || !loadAndUnload(library, false) ||
+            !listBusyBlocks(before))
+        {
+            return false;
+        }
+        for (int index = 0; index < kLoadCycles; ++index)
+        {
+            if (!loadAndUnload(library, index % 2 == 0))
+            {
+                return false;
+            }
+        }
+        if (!listBusyBlocks(after))
+        {
+            return false;
+        }
+        kept.clear();
+        std::set_difference(after.begin(), after.end(), before.begin(), before.end(),
+                            std::back_inserter(kept));
+        return true;
+    }
+
+    // The blocks by size, then the text that some of them start with.
+    std::string describe(const std::vector<HeapBlock>& blocks)
+    {
+        std::map<size_t, size_t> sizes;
+        for (const HeapBlock& block : blocks)
+        {
+            ++sizes[block.size];
+        }
+        std::ostringstream out;
+        out << blocks.size() << " blocks kept:";
+        for (const auto& [size, count] : sizes)
+        {
+            out << " " << count << " of " << size << " bytes;";
+        }
+        size_t shown = 0;
+        for (const HeapBlock& block : blocks)
+        {
+            size_t length = 0;
+            while (length < block.size && length < 64 && block.address[length] >= 0x20 &&
+                   block.address[length] < 0x7f)
+            {
+                ++length;
+            }
+            if (length >= 8 && shown++ < 16)
+            {
+                out << "\n  " << std::string(reinterpret_cast<const char*>(block.address), length);
+            }
+        }
+        return out.str();
+    }
+
+    // Whether `block` holds the name of the type or of the function that the boxes of
+    // reload/ct_runtime_library.cpp name, as the strings of a cache of names do: small blocks,
+    // where a debug C runtime puts its header before the text.
+    bool holdsALibraryName(const HeapBlock& block)
+    {
+        constexpr size_t kSmallBlock = 1024;
+        if (block.size > kSmallBlock)
+        {
+            return false;
+        }
+        const std::string_view bytes(reinterpret_cast<const char*>(block.address), block.size);
+        for (const char* name : {".?AUGadget@", "ct_runtime_library_measure"})
+        {
+            if (bytes.find(name) != std::string_view::npos)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // A DLL that links the runtime frees, when FreeLibrary unloads it, the names its copy decoded
+    // for its boxes (#227). Loaded, made to name a call or only to name one from its destructors,
+    // and unloaded many times, it leaves in the process's heaps no block that holds the name of
+    // its type or of its function.
+    TEST(VtableReplace, ADllThatLinksTheRuntimeFreesTheNamesItDecodedWhenUnloaded)
+    {
+        DllStandardError output(fs::path(testing::TempDir()) / "ct_runtime_library_names.txt");
+        std::vector<HeapBlock> kept;
+        ASSERT_TRUE(blocksKeptAcrossLoads(CT_RUNTIME_LIBRARY, kept)) << CT_RUNTIME_LIBRARY;
+        EXPECT_EQ(std::count_if(kept.begin(), kept.end(), holdsALibraryName), 0) << describe(kept);
+    }
+
+    // Nor does it keep any other block at each load, beyond what a DLL built alike that does not
+    // link the runtime keeps.
+    TEST(VtableReplace, ADllThatLinksTheRuntimeKeepsNoHeapBlockAtEachLoad)
+    {
+        DllStandardError output(fs::path(testing::TempDir()) / "ct_runtime_library_blocks.txt");
+        std::vector<HeapBlock> control;
+        ASSERT_TRUE(blocksKeptAcrossLoads(CT_RELOAD_LIBRARY_A, control)) << CT_RELOAD_LIBRARY_A;
+        std::vector<HeapBlock> kept;
+        ASSERT_TRUE(blocksKeptAcrossLoads(CT_RUNTIME_LIBRARY, kept)) << CT_RUNTIME_LIBRARY;
+        // A block kept at each load would add kLoadCycles of them. The blocks that a cycle leaves
+        // for a later one to free were two at most in the measurement of #227.
+        EXPECT_LT(kept.size(), control.size() + kLoadCycles / 2)
+            << describe(kept) << "\nwithout the runtime: " << describe(control);
+    }
+
+    // The line `label` of the first box of `site`, empty without one.
+    std::string lineOf(const std::string& boxes, const char* site, const char* label)
+    {
+        const size_t box = boxes.find(site);
+        const size_t line = box == std::string::npos ? box : boxes.find(label, box);
+        if (line == std::string::npos)
+        {
+            return std::string();
+        }
+        return boxes.substr(line, boxes.find('\n', line) - line);
+    }
+
+    // The boxes that the DLL's destructors print when FreeLibrary unloads it still name the
+    // dynamic type of their object, whether the copy decoded that name before or not.
+    TEST(VtableReplace, TheBoxesOfADllsDestructorsNameTheirTypeWhenItUnloads)
+    {
+        for (const bool trace_before : {true, false})
+        {
+            DllStandardError output(fs::path(testing::TempDir()) / "ct_runtime_library_types.txt");
+            HMODULE runtime = LoadLibraryA(CT_RUNTIME_LIBRARY);
+            FARPROC entry = runtime ? GetProcAddress(runtime, "ct_runtime_library_trace") : nullptr;
+            ASSERT_NE(entry, nullptr) << CT_RUNTIME_LIBRARY;
+            if (trace_before)
+            {
+                reinterpret_cast<void (*)()>(entry)();
+            }
+            FreeLibrary(runtime);
+            const std::string boxes = output.contents();
+            EXPECT_TRUE(names(lineOf(boxes, "runtime_library:2", "type"), "Gadget"))
+                << "named a call before: " << trace_before << "\n"
+                << boxes;
+        }
+    }
+
+    // Loads a DLL that links the runtime, has its copy name a call, then exits with the DLL
+    // loaded: the DLL's destructors name a call as the process terminates, into the file at
+    // `path`.
+    [[noreturn]] void exitWithTheBoxesOfARuntimeLibraryIn(const fs::path& path)
+    {
+        // Never destroyed: the DLL writes to the file until the process ends.
+        DllStandardError output(path);
+        HMODULE runtime = LoadLibraryA(CT_RUNTIME_LIBRARY);
+        FARPROC entry = runtime ? GetProcAddress(runtime, "ct_runtime_library_trace") : nullptr;
+        if (!entry)
+        {
+            std::exit(2);
+        }
+        reinterpret_cast<void (*)()>(entry)();
+        std::exit(0);
+    }
+
+    // As they do when the process exits with the DLL loaded.
+    TEST(VtableReplaceDeathTest, TheBoxesOfADllsDestructorsNameTheirTypeAtProcessExit)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        const fs::path path = fs::path(testing::TempDir()) / "ct_runtime_library_exit.txt";
+        std::error_code ignored;
+        fs::remove(path, ignored);
+        EXPECT_EXIT(exitWithTheBoxesOfARuntimeLibraryIn(path), testing::ExitedWithCode(0), "");
+        std::ifstream in(path, std::ios::binary);
+        const std::string boxes((std::istreambuf_iterator<char>(in)),
+                                std::istreambuf_iterator<char>());
+        EXPECT_TRUE(names(lineOf(boxes, "runtime_library:2", "type"), "Gadget")) << boxes;
     }
 
     // The slot of `module`'s import table that holds the address of `function`, imported from
