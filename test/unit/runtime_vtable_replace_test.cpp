@@ -442,8 +442,8 @@ namespace
     {
         std::vector<HeapBlock> before;
         std::vector<HeapBlock> after;
-        before.reserve(1 << 16);
-        after.reserve(1 << 16);
+        before.reserve(1 << 18);
+        after.reserve(1 << 18);
         if (!loadAndUnload(library, true) || !loadAndUnload(library, false) ||
             !listBusyBlocks(before))
         {
