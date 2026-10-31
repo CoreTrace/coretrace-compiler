@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Whether the process that holds this copy of the runtime is terminating, for the code that runs
-// while the module detaches: the leak report of a DLL's copy and the release of its DbgHelp
-// session. That code cannot tell from lpvReserved: only DllMain receives it non-null at process
-// termination, the TLS callbacks receive it null then too (#226, #232).
+// while the module detaches: the leak report of a DLL's copy, and the release of its DbgHelp
+// session and of its names. That code cannot tell from lpvReserved: only DllMain receives it
+// non-null at process termination, the TLS callbacks receive it null then too (#226, #232).
+// ct_dll_unloading_dynamically tells whether that code frees what the copy holds.
 #include "ct_runtime_internal.h"
 
 #include <atomic>
+
+// The module that holds this copy of the runtime.
+extern "C" IMAGE_DOS_HEADER __ImageBase;
 
 namespace
 {
@@ -39,6 +43,12 @@ CT_NODISCARD CT_NOINSTR CtProcessShutdown ct_process_shutdown(void)
     }
     return shutdown_in_progress() ? CtProcessShutdown::InProgress
                                   : CtProcessShutdown::NotInProgress;
+}
+
+CT_NODISCARD CT_NOINSTR bool ct_dll_unloading_dynamically(void)
+{
+    return reinterpret_cast<HMODULE>(&__ImageBase) != GetModuleHandleW(nullptr) &&
+           ct_process_shutdown() == CtProcessShutdown::NotInProgress;
 }
 
 // The TLS callback that looks RtlDllShutdownInProgress up, in the file of ct_process_shutdown, so

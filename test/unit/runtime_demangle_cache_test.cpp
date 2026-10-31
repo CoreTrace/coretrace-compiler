@@ -4,7 +4,8 @@
 // decodes a name once, holds a bounded number of names, and looks a name up by its text, so
 // that a name at the address of another, as when a library is unloaded and another loaded
 // in its place, gets its own result. A name its demangler could not decode for now, as when
-// DbgHelp was busy, is decoded again next time.
+// DbgHelp was busy, is decoded again next time. Released, the cache holds no name and decodes
+// every name it is asked (#227).
 #include "ct_runtime_demangle_cache.h"
 #include "ct_runtime_helpers.h"
 
@@ -169,6 +170,91 @@ namespace
         }
         EXPECT_EQ(wrong.load(), 0);
         EXPECT_EQ(cache.size(), 50u);
+    }
+
+    // Released, as the copy of the runtime in a DLL releases it when the DLL unloads (#227), the
+    // cache holds no name; code that still names calls gets its answers, decoded at each call,
+    // none kept.
+    TEST(DemangleCache, ReleasedItHoldsNoNameAndStillAnswers)
+    {
+        CtDemangleCache cache(countingDemangler);
+        std::string out;
+        ASSERT_TRUE(cache.demangle("m:held", out));
+        ASSERT_EQ(cache.size(), 1u);
+
+        cache.release();
+        EXPECT_EQ(cache.size(), 0u);
+        decoded = 0;
+        for (int i = 0; i < 3; ++i)
+        {
+            ASSERT_TRUE(cache.demangle("m:held", out));
+            EXPECT_EQ(out, "held");
+            EXPECT_FALSE(cache.demangle("plain", out));
+        }
+        EXPECT_EQ(decoded.load(), 6);
+        EXPECT_EQ(cache.size(), 0u);
+
+        cache.release();
+        ASSERT_TRUE(cache.demangle("m:again", out));
+        EXPECT_EQ(out, "again");
+    }
+
+    // Released before it kept any name, as when the module of a copy that named nothing unloads,
+    // the cache keeps none of the names asked after either.
+    TEST(DemangleCache, ReleasedBeforeKeepingANameItKeepsNone)
+    {
+        CtDemangleCache cache(countingDemangler);
+        cache.release();
+        decoded = 0;
+        std::string out;
+        for (int i = 0; i < 2; ++i)
+        {
+            ASSERT_TRUE(cache.demangle("m:late", out));
+            EXPECT_EQ(out, "late");
+        }
+        EXPECT_EQ(decoded.load(), 2);
+        EXPECT_EQ(cache.size(), 0u);
+    }
+
+    // One thread releases the cache while others name: each still gets the name it asks for,
+    // and the cache keeps none of the names asked for after.
+    TEST(DemangleCache, ThreadsGetTheNamesTheyAskForWhileAnotherReleasesIt)
+    {
+        CtDemangleCache cache(countingDemangler);
+        constexpr int kThreads = 4;
+        constexpr int kRounds = 2000;
+        std::atomic<int> asked{0};
+        std::atomic<int> wrong{0};
+        std::vector<std::thread> threads;
+        for (int t = 0; t < kThreads; ++t)
+        {
+            threads.emplace_back(
+                [t, &cache, &asked, &wrong]
+                {
+                    std::string out;
+                    for (int i = 0; i < kRounds; ++i)
+                    {
+                        const std::string text = "shared" + std::to_string((i + t) % 50);
+                        const std::string name = "m:" + text;
+                        if (!cache.demangle(name.c_str(), out) || out != text)
+                        {
+                            wrong.fetch_add(1);
+                        }
+                        asked.fetch_add(1);
+                    }
+                });
+        }
+        while (asked.load() < kThreads * kRounds / 4)
+        {
+            std::this_thread::yield();
+        }
+        cache.release();
+        for (std::thread& thread : threads)
+        {
+            thread.join();
+        }
+        EXPECT_EQ(wrong.load(), 0);
+        EXPECT_EQ(cache.size(), 0u);
     }
 
 #if defined(__linux__)

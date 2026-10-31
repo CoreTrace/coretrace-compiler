@@ -73,14 +73,17 @@ CT_NODISCARD CT_NOINSTR bool CtDemangleCache::demangle(const char* name, std::st
     const std::string_view text(name);
     {
         CtDemangleCacheLock lock;
-        const auto it = names_.find(text);
-        if (it != names_.end())
+        if (names_)
         {
-            if (it->second.decoded)
+            const auto it = names_->find(text);
+            if (it != names_->end())
             {
-                out = it->second.text;
+                if (it->second.decoded)
+                {
+                    out = it->second.text;
+                }
+                return it->second.decoded;
             }
-            return it->second.decoded;
         }
     }
 
@@ -103,9 +106,13 @@ CT_NODISCARD CT_NOINSTR bool CtDemangleCache::demangle(const char* name, std::st
     try
     {
         CtDemangleCacheLock lock;
-        if (names_.size() < kMaxEntries)
+        if (!names_ && !released_)
         {
-            names_.emplace(std::string(text), std::move(result));
+            names_.emplace();
+        }
+        if (names_ && names_->size() < kMaxEntries)
+        {
+            names_->emplace(std::string(text), std::move(result));
         }
     }
     catch (...)
@@ -118,5 +125,13 @@ CT_NODISCARD CT_NOINSTR bool CtDemangleCache::demangle(const char* name, std::st
 CT_NODISCARD CT_NOINSTR size_t CtDemangleCache::size() const
 {
     CtDemangleCacheLock lock;
-    return names_.size();
+    return names_ ? names_->size() : 0;
+}
+
+CT_NOINSTR void CtDemangleCache::release()
+{
+    CtRuntimeScope scope;
+    CtDemangleCacheLock lock;
+    names_.reset();
+    released_ = true;
 }

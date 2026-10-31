@@ -72,6 +72,12 @@ pull request.
   track of, it names only the frames of the executable and of the module that holds the runtime's
   copy; it names none once the runtime has stopped following the loader, when that module
   detaches (README, "DbgHelp on Windows") (#225).
+- **Memory kept after a DLL unloaded, on Windows.** The copy of the runtime in a DLL that links it
+  keeps the names it decodes for the vtable boxes in a cache that is never destroyed, so that code
+  that runs at exit still prints boxes. When `FreeLibrary` unloaded the DLL, that cache stayed
+  allocated, and each load of the DLL built another one: 488 bytes per load and unload in the
+  measurement of #227, whose DLL decoded two names. The copy now frees the cache when `FreeLibrary`
+  unloads the DLL, after the DLL's destructors, whose boxes still name types (#227).
 
 ## v0.12.0 (2026-10-22)
 
