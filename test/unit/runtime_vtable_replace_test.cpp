@@ -596,7 +596,7 @@ namespace
         std::exit(0);
     }
 
-    // As they do when the process exits: the copy in a DLL keeps its names until the end.
+    // As they do when the process exits with the DLL loaded.
     TEST(VtableReplaceDeathTest, TheBoxesOfADllsDestructorsNameTheirTypeAtProcessExit)
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
