@@ -8,6 +8,7 @@
 // in its place may put another name at the same address, which then gets its own result.
 // The cache holds at most kMaxEntries names; past that, a new name is decoded every time. A name
 // its demangler could not decode for now is not kept, and is decoded again next time (#208).
+// Released, the cache frees the names it holds and decodes every name from then on.
 // Safe for concurrent use: every cache shares one lock, which fork() also takes.
 #ifndef CT_RUNTIME_DEMANGLE_CACHE_H
 #define CT_RUNTIME_DEMANGLE_CACHE_H
@@ -17,6 +18,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -37,6 +39,8 @@ class CtDemangleCache
     CT_NODISCARD CT_NOINSTR bool demangle(const char* name, std::string& out);
     // Names held.
     CT_NODISCARD CT_NOINSTR size_t size() const;
+    // Frees the names held, and keeps none from then on.
+    CT_NOINSTR void release();
 
   private:
     struct Hash
@@ -56,7 +60,9 @@ class CtDemangleCache
     // One of the two is set.
     Demangler demangler_ = nullptr;
     OutcomeDemangler outcome_demangler_ = nullptr;
-    std::unordered_map<std::string, Result, Hash, std::equal_to<>> names_;
+    // None once released.
+    std::optional<std::unordered_map<std::string, Result, Hash, std::equal_to<>>> names_{
+        std::in_place};
 };
 
 // The lock of every cache, for the fork() handlers: nothing else may take it.
