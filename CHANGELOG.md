@@ -80,6 +80,9 @@ pull request.
   Ubuntu 26.04, where clang-format 19 ran and apt.llvm.org has no LLVM 20. `scripts/format.sh`
   and `scripts/format-check.sh` run the binary that `CLANG_FORMAT` names and print its version
   (#238, #237).
+- When `sbrk()` fails in the sbrk test of the full allocation table, the test reports `errno`,
+  the program break and the mapping above it, `RLIMIT_DATA`, and the memory of the process and
+  of the system (#239, #233).
 
 ## v0.12.0 (2026-10-22)
 

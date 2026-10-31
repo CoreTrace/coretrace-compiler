@@ -16,12 +16,23 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
 #include <future>
+#include <sstream>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
+
+#if defined(__linux__)
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
 
 // The configuration globals of an instrumented program with default options, as
 // runtime_table_test.cpp defines them.
@@ -142,6 +153,54 @@ namespace
     }
 
 #if defined(__linux__)
+    // What the process looked like when sbrk() failed, which #233 could not tell: errno, the
+    // program break and the mapping above it, which the break cannot grow into, RLIMIT_DATA,
+    // the process's memory and the memory the system had available. The caller reads errno and
+    // the break before anything allocates.
+    std::string sbrkFailure(int error, const void* breakAtFailure)
+    {
+        std::ostringstream out;
+        const auto brk = reinterpret_cast<std::uintptr_t>(breakAtFailure);
+        out << "sbrk failed: errno " << error << " (" << std::strerror(error) << "), break 0x"
+            << std::hex << brk << std::dec;
+        std::ifstream maps("/proc/self/maps");
+        for (std::string line; std::getline(maps, line);)
+        {
+            const std::uintptr_t start = std::strtoull(line.c_str(), nullptr, 16);
+            if (start >= brk)
+            {
+                out << "\nnext mapping, 0x" << std::hex << start - brk << std::dec
+                    << " bytes above the break: " << line;
+                break;
+            }
+        }
+        rlimit data{};
+        if (getrlimit(RLIMIT_DATA, &data) == 0)
+        {
+            const auto limit = [](rlim_t value)
+            { return value == RLIM_INFINITY ? std::string("unlimited") : std::to_string(value); };
+            out << "\nRLIMIT_DATA " << limit(data.rlim_cur) << " / " << limit(data.rlim_max);
+        }
+        std::ifstream status("/proc/self/status");
+        for (std::string line; std::getline(status, line);)
+        {
+            if (line.rfind("VmSize:", 0) == 0 || line.rfind("VmData:", 0) == 0 ||
+                line.rfind("VmRSS:", 0) == 0)
+            {
+                out << "\n" << line;
+            }
+        }
+        std::ifstream meminfo("/proc/meminfo");
+        for (std::string line; std::getline(meminfo, line);)
+        {
+            if (line.rfind("MemAvailable:", 0) == 0)
+            {
+                out << "\n" << line;
+            }
+        }
+        return out.str();
+    }
+
     // The runtime records the blocks of sbrk() on Linux only.
     TEST(AllocTableFull, AnSbrkTheTableIsTooFullForIsReportedOutsideTheLock)
     {
@@ -149,7 +208,10 @@ namespace
             []
             {
                 void* previous = __ct_sbrk(16, "full:sbrk");
-                ASSERT_NE(previous, reinterpret_cast<void*>(-1));
+                const int error = errno;
+                const void* breakAtFailure = sbrk(0);
+                ASSERT_NE(previous, reinterpret_cast<void*>(-1))
+                    << sbrkFailure(error, breakAtFailure);
                 (void)__ct_sbrk(static_cast<size_t>(-16), "full:sbrk");
             });
     }
