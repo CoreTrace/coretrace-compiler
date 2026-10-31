@@ -10,7 +10,8 @@
 // a DLL built from reload/ct_runtime_library.cpp included; that copy watches the loader until it
 // unloads. A lookup made under the loader lock, from reload/ct_dllmain_library.cpp, waits for no
 // one forever. The crash handler's backtraces, which name frames through the same session, name
-// none after a DLL unloaded since (#225).
+// none after a DLL unloaded since (#225). The boxes of a DLL's destructors name
+// types when the DLL unloads (#227).
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -357,6 +358,40 @@ namespace
         // Kept, they would add two handles a cycle at least: the lock's and the session's.
         EXPECT_LT(after, before + kCycles)
             << "handles before the cycles: " << before << ", after: " << after;
+    }
+
+    // The line `label` of the first box of `site`, empty without one.
+    std::string lineOf(const std::string& boxes, const char* site, const char* label)
+    {
+        const size_t box = boxes.find(site);
+        const size_t line = box == std::string::npos ? box : boxes.find(label, box);
+        if (line == std::string::npos)
+        {
+            return std::string();
+        }
+        return boxes.substr(line, boxes.find('\n', line) - line);
+    }
+
+    // The boxes that the DLL's destructors print when FreeLibrary unloads it still name the
+    // dynamic type of their object, whether the copy decoded that name before or not.
+    TEST(VtableReplace, TheBoxesOfADllsDestructorsNameTheirTypeWhenItUnloads)
+    {
+        for (const bool trace_before : {true, false})
+        {
+            DllStandardError output(fs::path(testing::TempDir()) / "ct_runtime_library_types.txt");
+            HMODULE runtime = LoadLibraryA(CT_RUNTIME_LIBRARY);
+            FARPROC entry = runtime ? GetProcAddress(runtime, "ct_runtime_library_trace") : nullptr;
+            ASSERT_NE(entry, nullptr) << CT_RUNTIME_LIBRARY;
+            if (trace_before)
+            {
+                reinterpret_cast<void (*)()>(entry)();
+            }
+            FreeLibrary(runtime);
+            const std::string boxes = output.contents();
+            EXPECT_TRUE(names(lineOf(boxes, "runtime_library:2", "type"), "Gadget"))
+                << "named a call before: " << trace_before << "\n"
+                << boxes;
+        }
     }
 
     // The slot of `module`'s import table that holds the address of `function`, imported from
