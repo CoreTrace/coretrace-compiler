@@ -28,6 +28,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <utility>
@@ -496,14 +497,20 @@ namespace
         return out.str();
     }
 
-    // Whether `block` starts with the name of the type or of the function that the boxes of
-    // reload/ct_runtime_library.cpp name, as the strings of a cache of names do.
+    // Whether `block` holds the name of the type or of the function that the boxes of
+    // reload/ct_runtime_library.cpp name, as the strings of a cache of names do: small blocks,
+    // where a debug C runtime puts its header before the text.
     bool holdsALibraryName(const HeapBlock& block)
     {
+        constexpr size_t kSmallBlock = 1024;
+        if (block.size > kSmallBlock)
+        {
+            return false;
+        }
+        const std::string_view bytes(reinterpret_cast<const char*>(block.address), block.size);
         for (const char* name : {".?AUGadget@", "ct_runtime_library_measure"})
         {
-            const size_t length = std::strlen(name);
-            if (block.size >= length && std::memcmp(block.address, name, length) == 0)
+            if (bytes.find(name) != std::string_view::npos)
             {
                 return true;
             }
