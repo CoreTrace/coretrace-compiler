@@ -17,10 +17,13 @@ if [ "${#files[@]}" -eq 0 ]; then
     exit 0
 fi
 
+clang_format="${CLANG_FORMAT:-clang-format}"
+"${clang_format}" --version
+
 echo "Checking formatting on ${#files[@]} files..."
 failed=0
 for file in "${files[@]}"; do
-    if ! clang-format --dry-run --Werror "${file}"; then
+    if ! "${clang_format}" --dry-run --Werror "${file}"; then
         failed=1
     fi
 done

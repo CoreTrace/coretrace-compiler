@@ -75,6 +75,11 @@ pull request.
 
 ### Tests and CI
 
+- The jobs of the Build and clang-format workflows that ran on `ubuntu-latest` run on Ubuntu
+  24.04, and the format check installs and runs clang-format 18. `ubuntu-latest` had moved to
+  Ubuntu 26.04, where clang-format 19 ran and apt.llvm.org has no LLVM 20. `scripts/format.sh`
+  and `scripts/format-check.sh` run the binary that `CLANG_FORMAT` names and print its version
+  (#238, #237).
 - When `sbrk()` fails in the sbrk test of the full allocation table, the test reports `errno`,
   the program break and the mapping above it, `RLIMIT_DATA`, and the memory of the process and
   of the system (#239, #233).
