@@ -11,7 +11,7 @@
 // unloads. A lookup made under the loader lock, from reload/ct_dllmain_library.cpp, waits for no
 // one forever. The crash handler's backtraces, which name frames through the same session, name
 // none after a DLL unloaded since (#225). The boxes of a DLL's destructors name
-// types when the DLL unloads (#227).
+// types when the DLL unloads, as they do when the process exits (#227).
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -392,6 +392,37 @@ namespace
                 << "named a call before: " << trace_before << "\n"
                 << boxes;
         }
+    }
+
+    // Loads a DLL that links the runtime, has its copy name a call, then exits with the DLL
+    // loaded: the DLL's destructors name a call as the process terminates, into the file at
+    // `path`.
+    [[noreturn]] void exitWithTheBoxesOfARuntimeLibraryIn(const fs::path& path)
+    {
+        // Never destroyed: the DLL writes to the file until the process ends.
+        DllStandardError output(path);
+        HMODULE runtime = LoadLibraryA(CT_RUNTIME_LIBRARY);
+        FARPROC entry = runtime ? GetProcAddress(runtime, "ct_runtime_library_trace") : nullptr;
+        if (!entry)
+        {
+            std::exit(2);
+        }
+        reinterpret_cast<void (*)()>(entry)();
+        std::exit(0);
+    }
+
+    // As they do when the process exits: the copy in a DLL keeps its names until the end.
+    TEST(VtableReplaceDeathTest, TheBoxesOfADllsDestructorsNameTheirTypeAtProcessExit)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        const fs::path path = fs::path(testing::TempDir()) / "ct_runtime_library_exit.txt";
+        std::error_code ignored;
+        fs::remove(path, ignored);
+        EXPECT_EXIT(exitWithTheBoxesOfARuntimeLibraryIn(path), testing::ExitedWithCode(0), "");
+        std::ifstream in(path, std::ios::binary);
+        const std::string boxes((std::istreambuf_iterator<char>(in)),
+                                std::istreambuf_iterator<char>());
+        EXPECT_TRUE(names(lineOf(boxes, "runtime_library:2", "type"), "Gadget")) << boxes;
     }
 
     // The slot of `module`'s import table that holds the address of `function`, imported from
