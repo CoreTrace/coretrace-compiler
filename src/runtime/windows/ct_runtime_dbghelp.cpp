@@ -76,8 +76,7 @@ namespace
 
         CT_NOINSTR ~CtDbgHelpRelease()
         {
-            if (reinterpret_cast<HMODULE>(&__ImageBase) == GetModuleHandleW(nullptr) ||
-                ct_process_shutdown() != CtProcessShutdown::NotInProgress)
+            if (!ct_dll_unloading_dynamically())
             {
                 return;
             }
