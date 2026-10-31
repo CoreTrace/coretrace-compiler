@@ -454,10 +454,12 @@ enum class CtProcessShutdown
 CT_NODISCARD CT_NOINSTR CtProcessShutdown ct_process_shutdown(void);
 
 // Whether the code that runs while the module that holds this copy of the runtime detaches frees
-// what the copy holds: only when FreeLibrary unloads a DLL. The executable's copy keeps it until
-// the process ends, and a DLL's copy frees nothing when the process terminates, nor when it
-// cannot tell: the guidance for DllMain, which applies to the destructors the C runtime runs from
-// it, is to free resources only when the DLL is unloaded dynamically (#226).
+// what the copy holds: when FreeLibrary unloads a DLL. The executable's copy keeps it until the
+// process ends, and a DLL's copy frees nothing when the process terminates, nor when it cannot
+// tell: the guidance for DllMain, which applies to the destructors the C runtime runs from it, is
+// to free resources only when the DLL is unloaded dynamically (#226). When a DLL calls exit(),
+// its C runtime runs that code before the loader reports the termination, so its copy frees what
+// it holds then too.
 CT_NODISCARD CT_NOINSTR bool ct_dll_unloading_dynamically(void);
 #endif
 
