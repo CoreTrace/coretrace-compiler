@@ -11,8 +11,8 @@
 // unloads. A lookup made under the loader lock, from reload/ct_dllmain_library.cpp, waits for no
 // one forever. The crash handler's backtraces, which name frames through the same session, name
 // none after a DLL unloaded since (#225). The copy in a DLL frees the names it decoded when the DLL
-// unloads. The boxes of the DLL's destructors still name types then, as they do when the process
-// exits (#227).
+// unloads: the DLL keeps no more heap blocks than one without the runtime. The boxes of the DLL's
+// destructors still name types then, as they do when the process exits (#227).
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -521,6 +521,20 @@ namespace
         std::vector<HeapBlock> kept;
         ASSERT_TRUE(blocksKeptAcrossLoads(CT_RUNTIME_LIBRARY, kept)) << CT_RUNTIME_LIBRARY;
         EXPECT_EQ(std::count_if(kept.begin(), kept.end(), holdsALibraryName), 0) << describe(kept);
+    }
+
+    // Nor does it keep any other block across the loads: no more than a DLL built alike that does
+    // not link the runtime.
+    TEST(VtableReplace, ADllThatLinksTheRuntimeKeepsNoMoreHeapBlocksThanOneWithout)
+    {
+        DllStandardError output(fs::path(testing::TempDir()) / "ct_runtime_library_blocks.txt");
+        std::vector<HeapBlock> control;
+        ASSERT_TRUE(blocksKeptAcrossLoads(CT_RELOAD_LIBRARY_A, control)) << CT_RELOAD_LIBRARY_A;
+        std::vector<HeapBlock> kept;
+        ASSERT_TRUE(blocksKeptAcrossLoads(CT_RUNTIME_LIBRARY, kept)) << CT_RUNTIME_LIBRARY;
+        // Kept at each load, a block would add kLoadCycles of them.
+        EXPECT_LT(kept.size(), control.size() + kLoadCycles)
+            << describe(kept) << "\nwithout the runtime: " << describe(control);
     }
 
     // The line `label` of the first box of `site`, empty without one.
