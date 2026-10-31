@@ -8,7 +8,8 @@
 // in its place may put another name at the same address, which then gets its own result.
 // The cache holds at most kMaxEntries names; past that, a new name is decoded every time. A name
 // its demangler could not decode for now is not kept, and is decoded again next time (#208).
-// Released, the cache frees the names it holds and decodes every name from then on.
+// Released, the cache frees the names it holds and decodes every name from then on: on Windows,
+// the copy of the runtime in a DLL releases its cache when FreeLibrary unloads the DLL (#227).
 // Safe for concurrent use: every cache shares one lock, which fork() also takes.
 #ifndef CT_RUNTIME_DEMANGLE_CACHE_H
 #define CT_RUNTIME_DEMANGLE_CACHE_H
