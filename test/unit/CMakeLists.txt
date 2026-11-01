@@ -170,20 +170,20 @@ if(TARGET ct_instrument_runtime)
       CT_RUNTIME_LIBRARY="$<TARGET_FILE:ct_runtime_library>"
       CT_DLLMAIN_LIBRARY="$<TARGET_FILE:ct_dllmain_library>")
     # A DLL that allocates through its copy of the runtime, which records the blocks and keeps
-    # those it frees in its quarantine (#227); and the same DLL, whose operator delete frees
-    # through its copy, as the copies of the library's inline functions that an instrumented DLL
-    # compiles may (#197).
+    # those it frees in its quarantine (#227); and the same DLL, whose operators new and delete
+    # go through its copy, as the copies of the library's inline functions that an instrumented
+    # DLL compiles may (#197).
     add_library(ct_allocating_library MODULE reload/ct_allocating_library.cpp)
-    add_library(ct_delete_through_runtime_library MODULE reload/ct_allocating_library.cpp
-      reload/ct_delete_through_runtime.cpp)
-    foreach(library ct_allocating_library ct_delete_through_runtime_library)
+    add_library(ct_new_delete_through_runtime_library MODULE reload/ct_allocating_library.cpp
+      reload/ct_new_delete_through_runtime.cpp)
+    foreach(library ct_allocating_library ct_new_delete_through_runtime_library)
       target_link_libraries(${library} PRIVATE ct_instrument_runtime coretrace_logger)
       coretrace_force_msvc_runtime(${library})
       add_dependencies(runtime_unit_tests ${library})
     endforeach()
     target_compile_definitions(runtime_unit_tests PRIVATE
       CT_ALLOCATING_LIBRARY="$<TARGET_FILE:ct_allocating_library>"
-      CT_DELETE_THROUGH_RUNTIME_LIBRARY="$<TARGET_FILE:ct_delete_through_runtime_library>")
+      CT_NEW_DELETE_THROUGH_RUNTIME_LIBRARY="$<TARGET_FILE:ct_new_delete_through_runtime_library>")
     # A DLL's copy of the runtime reports its leaks when the process exits, after the DLL's
     # exit-time code, and says nothing when FreeLibrary unloads the DLL (#232). The program links
     # no runtime, so the report it prints is the DLL's copy's.
