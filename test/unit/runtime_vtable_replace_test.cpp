@@ -1246,6 +1246,26 @@ namespace
         return runtime;
     }
 
+    // Whether a module that FreeLibrary freed is still mapped: the loader unmaps it once nothing
+    // holds it.
+    bool stillMapped(HMODULE module)
+    {
+        MEMORY_BASIC_INFORMATION region = {};
+        return VirtualQuery(module, &region, sizeof(region)) != 0 && region.State != MEM_FREE;
+    }
+
+    // Frees a DLL that links the runtime. Prints why and exits with 2 when the DLL stays mapped:
+    // its copy's handler would still have its code.
+    void unloadRuntimeLibrary(HMODULE module)
+    {
+        FreeLibrary(module);
+        if (stillMapped(module))
+        {
+            std::fprintf(stderr, "a runtime library stayed mapped\n");
+            std::exit(2);
+        }
+    }
+
     // Removes the executable's handler, as for a program that does not link the runtime, loads the
     // DLL that links it, then faults.
     [[noreturn]] void faultWhileADllThatLinksTheRuntimeIsLoaded()
@@ -1266,7 +1286,7 @@ namespace
 
     [[noreturn]] void faultAfterADllThatLinksTheRuntimeUnloaded()
     {
-        FreeLibrary(loadRuntimeLibrary());
+        unloadRuntimeLibrary(loadRuntimeLibrary());
         faultOnAThread(&raiseUnhandledException);
     }
 
@@ -1297,7 +1317,7 @@ namespace
     [[noreturn]] void faultWithTheHostsFilterInstalledBeforeADll()
     {
         SetUnhandledExceptionFilter(&hostFilter);
-        FreeLibrary(loadRuntimeLibrary());
+        unloadRuntimeLibrary(loadRuntimeLibrary());
         faultOnAThread(&raiseUnhandledException);
     }
 
@@ -1316,7 +1336,7 @@ namespace
     {
         HMODULE runtime = loadRuntimeLibrary();
         SetUnhandledExceptionFilter(&hostFilter);
-        FreeLibrary(runtime);
+        unloadRuntimeLibrary(runtime);
         faultOnAThread(&raiseUnhandledException);
     }
 
@@ -1331,42 +1351,50 @@ namespace
                     "host filter e0000225");
     }
 
-    // A copy of the DLL that links the runtime, at a path of its own: the loader maps each copy as
-    // a module apart, with a copy of the runtime of its own.
-    fs::path runtimeLibraryCopyPath(const char* name)
+    // A copy of the DLL that links the runtime, at a path of the child's own: the loader maps each
+    // copy as a module apart, with a copy of the runtime of its own. Prints why and exits with 2
+    // when it does not load.
+    class RuntimeLibraryCopy
     {
-        return fs::path(testing::TempDir()) / (std::string("ct_runtime_library_") + name + ".dll");
-    }
-
-    // Loads two copies of the DLL that links the runtime, whose copies of the runtime each install
-    // their handler over the one before. Prints why and exits with 2 when a copy does not load.
-    void loadRuntimeLibraryCopies(const fs::path& first, const fs::path& second,
-                                  HMODULE (&libraries)[2])
-    {
-        const fs::path* paths[2] = {&first, &second};
-        for (int index = 0; index < 2; ++index)
+      public:
+        explicit RuntimeLibraryCopy(const char* name)
+            : path_(fs::path(testing::TempDir()) /
+                    (std::string("ct_runtime_library_") + name + "_" +
+                     std::to_string(GetCurrentProcessId()) + ".dll"))
         {
             std::error_code error;
-            fs::copy_file(CT_RUNTIME_LIBRARY, *paths[index], fs::copy_options::overwrite_existing,
-                          error);
-            libraries[index] = error ? nullptr : LoadLibraryW(paths[index]->c_str());
-            if (!libraries[index])
+            fs::copy_file(CT_RUNTIME_LIBRARY, path_, fs::copy_options::overwrite_existing, error);
+            module_ = error ? nullptr : LoadLibraryW(path_.c_str());
+            if (!module_)
             {
-                std::fprintf(stderr, "copy %d of the runtime library did not load\n", index + 1);
+                std::fprintf(stderr, "%s did not load\n", path_.string().c_str());
                 std::exit(2);
             }
         }
-    }
+        RuntimeLibraryCopy(const RuntimeLibraryCopy&) = delete;
+        RuntimeLibraryCopy& operator=(const RuntimeLibraryCopy&) = delete;
 
-    // Loads two copies of the DLL that links the runtime, unloads them in load order or in reverse,
-    // then faults.
-    [[noreturn]] void faultAfterTwoDllsUnloaded(const fs::path& first, const fs::path& second,
-                                                bool in_load_order)
+        // Unloads the copy, then deletes its file.
+        void unload()
+        {
+            unloadRuntimeLibrary(module_);
+            std::error_code ignored;
+            fs::remove(path_, ignored);
+        }
+
+      private:
+        fs::path path_;
+        HMODULE module_ = nullptr;
+    };
+
+    // Loads two copies of the DLL that links the runtime, whose copies of the runtime each install
+    // their handler over the one before, unloads them in load order or in reverse, then faults.
+    [[noreturn]] void faultAfterTwoDllsUnloaded(bool in_load_order)
     {
-        HMODULE libraries[2] = {};
-        loadRuntimeLibraryCopies(first, second, libraries);
-        FreeLibrary(libraries[in_load_order ? 0 : 1]);
-        FreeLibrary(libraries[in_load_order ? 1 : 0]);
+        RuntimeLibraryCopy first("first");
+        RuntimeLibraryCopy second("second");
+        (in_load_order ? first : second).unload();
+        (in_load_order ? second : first).unload();
         faultOnAThread(&raiseUnhandledException);
     }
 
@@ -1376,13 +1404,8 @@ namespace
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
-        const fs::path first = runtimeLibraryCopyPath("reverse_1");
-        const fs::path second = runtimeLibraryCopyPath("reverse_2");
-        EXPECT_EXIT(faultAfterTwoDllsUnloaded(first, second, false), endedByTheFault(),
+        EXPECT_EXIT(faultAfterTwoDllsUnloaded(false), endedByTheFault(),
                     crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
-        std::error_code ignored;
-        fs::remove(first, ignored);
-        fs::remove(second, ignored);
     }
 
     // The first copy unloads while the second's handler, installed over its own, is still there:
@@ -1392,29 +1415,23 @@ namespace
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
-        const fs::path first = runtimeLibraryCopyPath("in_order_1");
-        const fs::path second = runtimeLibraryCopyPath("in_order_2");
-        EXPECT_EXIT(faultAfterTwoDllsUnloaded(first, second, true), endedByTheFault(),
+        EXPECT_EXIT(faultAfterTwoDllsUnloaded(true), endedByTheFault(),
                     crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
-        std::error_code ignored;
-        fs::remove(first, ignored);
-        fs::remove(second, ignored);
     }
 
     // Loads two copies of the DLL that links the runtime. Then, as a scope of the program does,
     // installs the host's filter over the second copy's handler, and puts that handler back
     // afterwards: the first copy unloads meanwhile. Then the second copy unloads, and the child
     // faults.
-    [[noreturn]] void faultAfterTwoDllsUnloadedAroundTheHostsFilter(const fs::path& first,
-                                                                    const fs::path& second)
+    [[noreturn]] void faultAfterTwoDllsUnloadedAroundTheHostsFilter()
     {
-        HMODULE libraries[2] = {};
-        loadRuntimeLibraryCopies(first, second, libraries);
+        RuntimeLibraryCopy first("first");
+        RuntimeLibraryCopy second("second");
         const LPTOP_LEVEL_EXCEPTION_FILTER second_handler =
             SetUnhandledExceptionFilter(&hostFilter);
-        FreeLibrary(libraries[0]);
+        first.unload();
         SetUnhandledExceptionFilter(second_handler);
-        FreeLibrary(libraries[1]);
+        second.unload();
         faultOnAThread(&raiseUnhandledException);
     }
 
@@ -1426,12 +1443,7 @@ namespace
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
-        const fs::path first = runtimeLibraryCopyPath("around_1");
-        const fs::path second = runtimeLibraryCopyPath("around_2");
-        EXPECT_EXIT(faultAfterTwoDllsUnloadedAroundTheHostsFilter(first, second), endedByTheFault(),
+        EXPECT_EXIT(faultAfterTwoDllsUnloadedAroundTheHostsFilter(), endedByTheFault(),
                     crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
-        std::error_code ignored;
-        fs::remove(first, ignored);
-        fs::remove(second, ignored);
     }
 } // namespace
