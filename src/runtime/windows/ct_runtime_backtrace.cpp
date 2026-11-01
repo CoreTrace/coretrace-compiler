@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
+//
+// The crash handler of this copy of the runtime, which CT_BACKTRACE installs for the whole process
+// when the module that holds the copy initializes: the executable, or a DLL that links the runtime,
+// whose copy's handler goes over the filter installed before it. When FreeLibrary unloads the DLL,
+// whose code the process must not call afterwards, its copy puts that filter back (#236).
 #include "ct_runtime_internal.h"
 #include "ct_runtime_helpers.h"
 
@@ -14,9 +19,16 @@
 
 #pragma comment(lib, "Dbghelp.lib")
 
+// The objects of this file are constructed before the program's and destroyed after them: a DLL's
+// copy puts the filter back after the destructors of the DLL's global objects, whose crashes its
+// handler still reports.
+#pragma init_seg(lib)
+
 namespace
 {
     std::atomic<int> ct_backtrace_installed{0};
+    // The filter that this copy's handler went over when the copy installed it.
+    std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> ct_replaced_filter{nullptr};
 
     // Runs inside the unhandled-exception filter, like the POSIX signal handler: only the
     // lock-free writers, and a symbol name only from a session, which the caller passes with the
@@ -80,6 +92,37 @@ namespace
 
         return EXCEPTION_EXECUTE_HANDLER;
     }
+
+    // Puts back the filter that this copy's handler went over when FreeLibrary unloads the DLL that
+    // holds the copy, if the handler is still the process's: a filter installed over it since
+    // stays. Windows has no call that reads the process's filter without setting one: a filter
+    // that another thread installs between the two calls below is replaced. Nothing changes when
+    // the process terminates: the DLL stays mapped until then.
+    struct CtCrashHandlerRelease
+    {
+        // User-provided, so that the object is initialized dynamically, in this file's
+        // init_seg: clang registers the destructor of a constant-initialized object from
+        // .CRT$XCU, with the program's own objects.
+        CT_NOINSTR CtCrashHandlerRelease() {}
+
+        CT_NOINSTR ~CtCrashHandlerRelease()
+        {
+            if (ct_backtrace_installed.load(std::memory_order_acquire) == 0 ||
+                !ct_dll_unloading_dynamically())
+            {
+                return;
+            }
+            const LPTOP_LEVEL_EXCEPTION_FILTER replaced =
+                ct_replaced_filter.load(std::memory_order_acquire);
+            const LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(replaced);
+            if (current != &ct_exception_filter)
+            {
+                SetUnhandledExceptionFilter(current);
+            }
+        }
+    };
+
+    CtCrashHandlerRelease ct_crash_handler_release;
 } // namespace
 
 CT_NOINSTR void ct_maybe_install_backtrace(void)
@@ -107,7 +150,8 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
             (void)ct_dbghelp_sync_modules_locked(process);
         }
     }
-    SetUnhandledExceptionFilter(ct_exception_filter);
+    ct_replaced_filter.store(SetUnhandledExceptionFilter(&ct_exception_filter),
+                             std::memory_order_release);
 
     ct_write_prefix(CTLevel::Info);
     ct_write_cstr("ct: backtrace handler installed\n");
