@@ -7,6 +7,7 @@
 #include "ct_runtime_internal.h"
 #include "ct_runtime_helpers.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -18,6 +19,7 @@
 #endif
 #include <windows.h>
 #include <dbghelp.h>
+#include <psapi.h>
 
 #pragma comment(lib, "Dbghelp.lib")
 
@@ -98,12 +100,11 @@ namespace
 
     // What a copy of the runtime tells the other copies in the process of its crash handler: the
     // filter that the handler went over when the copy installed it. A copy finds another one's
-    // record from the address of its handler alone, in the section .ctcrash of the module that
-    // holds the handler. The magic number reads "ctcrash", then the version of the layout.
+    // record in the section .ctcrash of the module that holds it. The magic number reads
+    // "ctcrash", then the version of the layout.
     struct CtCrashHandlerRecord
     {
         std::uint64_t magic;
-        LPTOP_LEVEL_EXCEPTION_FILTER handler;
         std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> replaced;
     };
 
@@ -112,22 +113,17 @@ namespace
                                                                     'r', 'a', 's', 'h'};
 
     __declspec(allocate(".ctcrash")) constinit CtCrashHandlerRecord ct_crash_handler_record{
-        kCrashHandlerMagic, &ct_exception_filter, nullptr};
+        kCrashHandlerMagic, nullptr};
 
-    // The record of the copy of the runtime whose crash handler `filter` is, or null for any other
-    // filter: one of the program's, or that of a copy that keeps no record. Reads the headers of
-    // the module that holds `filter`, which the loader maps with the image, and the section of the
-    // record, which a copy keeps readable. Called with the loader lock held, as FreeLibrary holds
-    // it while the DLL detaches, so that no module unloads meanwhile.
-    CT_NOINSTR CtCrashHandlerRecord* ct_crash_handler_record_of(LPTOP_LEVEL_EXCEPTION_FILTER filter)
+    // The modules that a copy looks through for the record of the copy whose handler went over its
+    // own: the first ones that the loader lists.
+    constexpr DWORD kModulesLookedThrough = 1024;
+
+    // The record of the copy of the runtime in `module`, or null when the module holds none: it
+    // links no copy, or one that keeps no record. Reads the module's headers, which the loader maps
+    // with the image, and the section of the record, which a copy keeps readable.
+    CT_NOINSTR CtCrashHandlerRecord* ct_crash_handler_record_in(HMODULE module)
     {
-        HMODULE module = nullptr;
-        if (!filter || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                           reinterpret_cast<LPCWSTR>(filter), &module))
-        {
-            return nullptr;
-        }
         auto* image = reinterpret_cast<unsigned char*>(module);
         const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(
             image + reinterpret_cast<const IMAGE_DOS_HEADER*>(image)->e_lfanew);
@@ -144,8 +140,7 @@ namespace
                 return nullptr;
             }
             auto* record = reinterpret_cast<CtCrashHandlerRecord*>(image + section->VirtualAddress);
-            return record->magic == kCrashHandlerMagic && record->handler == filter ? record
-                                                                                    : nullptr;
+            return record->magic == kCrashHandlerMagic ? record : nullptr;
         }
         return nullptr;
     }
@@ -171,27 +166,34 @@ namespace
             {
                 return;
             }
-            CtCrashHandlerRecord& record = ct_crash_handler_record;
             const LPTOP_LEVEL_EXCEPTION_FILTER replaced =
-                record.replaced.load(std::memory_order_acquire);
+                ct_crash_handler_record.replaced.load(std::memory_order_acquire);
             const LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(replaced);
-            if (current == record.handler)
+            if (current == &ct_exception_filter)
             {
                 return;
             }
             SetUnhandledExceptionFilter(current);
-            // Each record holds a filter installed before the handler it describes: the walk goes
-            // back in time, from the process's filter, and ends at the first one that is not the
-            // handler of a copy that keeps a record.
-            for (CtCrashHandlerRecord* above = ct_crash_handler_record_of(current); above;)
+            // The copy whose handler went over this one's may be under a filter of the program,
+            // which keeps the handler it replaced to itself: the copy is looked for among the
+            // modules, which no thread unloads meanwhile, FreeLibrary holding the loader lock.
+            HMODULE modules[kModulesLookedThrough];
+            DWORD size = 0;
+            if (!EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &size))
             {
-                LPTOP_LEVEL_EXCEPTION_FILTER below = record.handler;
-                if (above->replaced.compare_exchange_strong(below, replaced,
-                                                            std::memory_order_acq_rel))
+                return;
+            }
+            const DWORD count =
+                std::min(static_cast<DWORD>(size / sizeof(HMODULE)), kModulesLookedThrough);
+            for (DWORD index = 0; index < count; ++index)
+            {
+                CtCrashHandlerRecord* above = ct_crash_handler_record_in(modules[index]);
+                LPTOP_LEVEL_EXCEPTION_FILTER handler = &ct_exception_filter;
+                if (above && above->replaced.compare_exchange_strong(handler, replaced,
+                                                                     std::memory_order_acq_rel))
                 {
                     return;
                 }
-                above = ct_crash_handler_record_of(below);
             }
         }
     };
