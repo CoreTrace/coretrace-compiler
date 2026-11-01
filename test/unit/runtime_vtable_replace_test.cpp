@@ -1334,12 +1334,10 @@ namespace
     }
 
     // Loads two copies of the DLL that links the runtime, whose copies of the runtime each install
-    // their handler over the one before, unloads them in load order or in reverse, then faults.
-    // Prints why and exits with 2 when a copy does not load.
-    [[noreturn]] void faultAfterTwoDllsUnloaded(const fs::path& first, const fs::path& second,
-                                                bool in_load_order)
+    // their handler over the one before. Prints why and exits with 2 when a copy does not load.
+    void loadRuntimeLibraryCopies(const fs::path& first, const fs::path& second,
+                                  HMODULE (&libraries)[2])
     {
-        HMODULE libraries[2] = {};
         const fs::path* paths[2] = {&first, &second};
         for (int index = 0; index < 2; ++index)
         {
@@ -1353,6 +1351,15 @@ namespace
                 std::exit(2);
             }
         }
+    }
+
+    // Loads two copies of the DLL that links the runtime, unloads them in load order or in reverse,
+    // then faults.
+    [[noreturn]] void faultAfterTwoDllsUnloaded(const fs::path& first, const fs::path& second,
+                                                bool in_load_order)
+    {
+        HMODULE libraries[2] = {};
+        loadRuntimeLibraryCopies(first, second, libraries);
         FreeLibrary(libraries[in_load_order ? 0 : 1]);
         FreeLibrary(libraries[in_load_order ? 1 : 0]);
         faultOnAThread(&raiseUnhandledException);
