@@ -1373,6 +1373,9 @@ namespace
     // allocated, without their records (#227).
     CT_NOINSTR void ct_release_alloc_state()
     {
+        // The table and the quarantine release blocks with ct_alloc_lock held, which may reach the
+        // runtime's entry points (#197).
+        CtRuntimeScope scope;
         if (!ct_alloc_table_built.load(std::memory_order_acquire))
         {
             return;
