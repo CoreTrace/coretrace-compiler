@@ -115,10 +115,6 @@ namespace
     __declspec(allocate(".ctcrash")) constinit CtCrashHandlerRecord ct_crash_handler_record{
         kCrashHandlerMagic, nullptr};
 
-    // The modules that a copy looks through for the record of the copy whose handler went over its
-    // own: the first ones that the loader lists.
-    constexpr DWORD kModulesLookedThrough = 1024;
-
     // The record of the copy of the runtime in `module`, or null when the module holds none: it
     // links no copy, or one that keeps no record. The loader maps a module's headers with its image,
     // but a packer or an anti-tamper check may have erased them, or made them unreadable: each part
@@ -192,24 +188,35 @@ namespace
             SetUnhandledExceptionFilter(current);
             // The copy whose handler went over this one's may be under a filter of the program,
             // which keeps the handler it replaced to itself: the copy is looked for among the
-            // modules, which no thread unloads meanwhile, FreeLibrary holding the loader lock.
-            HMODULE modules[kModulesLookedThrough];
+            // modules that the loader lists, in a block of the process's heap, which DllMain may
+            // allocate. FreeLibrary holds the loader lock meanwhile, so that no thread unloads one;
+            // a DLL that calls exit() runs this without it, and reads only what it finds readable.
+            const HANDLE process = GetCurrentProcess();
+            HMODULE first = nullptr;
             DWORD size = 0;
-            if (!EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &size))
+            if (!EnumProcessModules(process, &first, sizeof(first), &size) || size == 0)
             {
                 return;
             }
-            const DWORD count =
-                std::min(static_cast<DWORD>(size / sizeof(HMODULE)), kModulesLookedThrough);
-            for (DWORD index = 0; index < count; ++index)
+            auto* modules = static_cast<HMODULE*>(HeapAlloc(GetProcessHeap(), 0, size));
+            DWORD listed = 0;
+            if (modules && EnumProcessModules(process, modules, size, &listed))
             {
-                CtCrashHandlerRecord* above = ct_crash_handler_record_in(modules[index]);
-                LPTOP_LEVEL_EXCEPTION_FILTER handler = &ct_exception_filter;
-                if (above && above->replaced.compare_exchange_strong(handler, replaced,
-                                                                     std::memory_order_acq_rel))
+                const DWORD count = static_cast<DWORD>(std::min(size, listed) / sizeof(HMODULE));
+                for (DWORD index = 0; index < count; ++index)
                 {
-                    return;
+                    CtCrashHandlerRecord* above = ct_crash_handler_record_in(modules[index]);
+                    LPTOP_LEVEL_EXCEPTION_FILTER handler = &ct_exception_filter;
+                    if (above && above->replaced.compare_exchange_strong(handler, replaced,
+                                                                         std::memory_order_acq_rel))
+                    {
+                        break;
+                    }
                 }
+            }
+            if (modules)
+            {
+                HeapFree(GetProcessHeap(), 0, modules);
             }
         }
     };
