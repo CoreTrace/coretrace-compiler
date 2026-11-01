@@ -120,26 +120,42 @@ namespace
     constexpr DWORD kModulesLookedThrough = 1024;
 
     // The record of the copy of the runtime in `module`, or null when the module holds none: it
-    // links no copy, or one that keeps no record. Reads the module's headers, which the loader maps
-    // with the image, and the section of the record, which a copy keeps readable.
+    // links no copy, or one that keeps no record. The loader maps a module's headers with its image,
+    // but a packer or an anti-tamper check may have erased them, or made them unreadable: each part
+    // is read once found readable, and must look like what it is.
     CT_NOINSTR CtCrashHandlerRecord* ct_crash_handler_record_in(HMODULE module)
     {
         auto* image = reinterpret_cast<unsigned char*>(module);
-        const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(
-            image + reinterpret_cast<const IMAGE_DOS_HEADER*>(image)->e_lfanew);
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+        if (!ct_is_readable(dos, sizeof(*dos)) || dos->e_magic != IMAGE_DOS_SIGNATURE ||
+            dos->e_lfanew <= 0)
+        {
+            return nullptr;
+        }
+        const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(image + dos->e_lfanew);
+        if (!ct_is_readable(headers, sizeof(*headers)) || headers->Signature != IMAGE_NT_SIGNATURE)
+        {
+            return nullptr;
+        }
         const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(headers);
-        for (WORD index = 0; index < headers->FileHeader.NumberOfSections; ++index, ++section)
+        const WORD sections = headers->FileHeader.NumberOfSections;
+        if (!ct_is_readable(section, sections * sizeof(IMAGE_SECTION_HEADER)))
+        {
+            return nullptr;
+        }
+        for (WORD index = 0; index < sections; ++index, ++section)
         {
             if (std::memcmp(section->Name, kCrashHandlerSection, sizeof(section->Name)) != 0)
             {
                 continue;
             }
-            if ((section->Characteristics & IMAGE_SCN_MEM_READ) == 0 ||
-                section->Misc.VirtualSize < sizeof(CtCrashHandlerRecord))
+            auto* record = reinterpret_cast<CtCrashHandlerRecord*>(image + section->VirtualAddress);
+            if ((section->Characteristics & IMAGE_SCN_MEM_WRITE) == 0 ||
+                section->Misc.VirtualSize < sizeof(CtCrashHandlerRecord) ||
+                !ct_is_readable(record, sizeof(*record)))
             {
                 return nullptr;
             }
-            auto* record = reinterpret_cast<CtCrashHandlerRecord*>(image + section->VirtualAddress);
             return record->magic == kCrashHandlerMagic ? record : nullptr;
         }
         return nullptr;
