@@ -78,6 +78,14 @@ pull request.
   allocated, and each load of the DLL built another one: 488 bytes per load and unload in the
   measurement of #227, whose DLL decoded two names. The copy now frees the cache when `FreeLibrary`
   unloads the DLL, after the DLL's destructors, whose boxes still name types (#227).
+- **The crash handler of an unloaded DLL, on Windows.** With `CT_BACKTRACE`, the copy of the
+  runtime in a DLL that links it installs its crash handler over the filter installed before it,
+  and nothing put that filter back. Once `FreeLibrary` had unloaded the DLL, an exception that
+  nothing handled ended the process without a backtrace: neither the executable's handler nor a
+  filter that the program had installed before the DLL ran. The copy now puts the filter back when
+  `FreeLibrary` unloads the DLL, if its handler is still the process's. A filter installed over it
+  since stays; when that is the handler of another DLL's copy, that copy gets the filter, and puts
+  it back when its own DLL unloads (README, "Crash handler on Windows") (#236).
 
 ### Tests and CI
 
