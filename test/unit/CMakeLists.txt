@@ -181,6 +181,10 @@ if(TARGET ct_instrument_runtime)
     foreach(target ct_leak_dll dll_leak_report_main)
       coretrace_force_msvc_runtime(${target})
     endforeach()
+    # The crash handler tests load that DLL too: it runs no code of its own when FreeLibrary unloads
+    # it, and it can end the process with its own C runtime's exit() (#236).
+    target_compile_definitions(runtime_unit_tests PRIVATE CT_LEAK_DLL="$<TARGET_FILE:ct_leak_dll>")
+    add_dependencies(runtime_unit_tests ct_leak_dll)
   endif()
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
