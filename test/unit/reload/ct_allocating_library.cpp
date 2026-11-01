@@ -32,3 +32,32 @@ extern "C" __declspec(dllexport) void* ct_allocating_library_keep(size_t size)
 {
     return __ct_malloc(size, "allocating:kept");
 }
+
+namespace
+{
+    int churn_at_unload_count = 0;
+    size_t churn_at_unload_size = 0;
+
+    void churnAtUnload()
+    {
+        if (churn_at_unload_count > 0)
+        {
+            ct_allocating_library_churn(churn_at_unload_count, churn_at_unload_size);
+        }
+    }
+} // namespace
+
+// Has the DLL allocate `count` blocks of `size` bytes through the copy of the runtime and free them
+// when it unloads, after the terminator of the copy: as code that runs after it would.
+extern "C" __declspec(dllexport) void ct_allocating_library_churn_at_unload(int count, size_t size)
+{
+    churn_at_unload_count = count;
+    churn_at_unload_size = size;
+}
+
+// .CRT$XTYZ comes after .CRT$XTY, where the copy places its terminator, and before .CRT$XTZ, which
+// ends the terminators.
+#pragma comment(linker, "/INCLUDE:ct_allocating_library_late_terminator")
+#pragma section(".CRT$XTYZ", read)
+extern "C" __declspec(allocate(".CRT$XTYZ"))
+__attribute__((used)) void (*const ct_allocating_library_late_terminator)() = churnAtUnload;
