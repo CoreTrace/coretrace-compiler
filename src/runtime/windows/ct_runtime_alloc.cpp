@@ -58,25 +58,26 @@ namespace
     // CRT runs after the destructors of every static object, may still release blocks, and
     // the leak report runs among them (#159). The lock needs no constructor nor destructor;
     // the table is built on first use, in storage that only the terminator of a DLL's copy
-    // destroys, when FreeLibrary unloads the DLL (#227).
+    // destroys, when FreeLibrary unloads the DLL, and built again for the code of the DLL that
+    // uses it after that terminator (#227).
     SRWLOCK ct_alloc_lock = SRWLOCK_INIT;
 
     using CtAllocTable = std::unordered_map<void*, CtAllocEntry>;
 
-    // Set once the table is built. A copy of the runtime that never built it has nothing to
+    // Set while the table is built. A copy of the runtime that never built it has nothing to
     // report, and building it at process exit would allocate with the loader lock held (#232).
     std::atomic<bool> ct_alloc_table_built{false};
 
+    // ct_alloc_lock held, as for every use of the table.
     CT_NOINSTR CtAllocTable& ct_alloc_table()
     {
         alignas(CtAllocTable) static unsigned char storage[sizeof(CtAllocTable)];
-        static CtAllocTable* const table = []
+        if (!ct_alloc_table_built.load(std::memory_order_relaxed))
         {
-            CtAllocTable* built = new (storage) CtAllocTable();
+            new (storage) CtAllocTable();
             ct_alloc_table_built.store(true, std::memory_order_release);
-            return built;
-        }();
-        return *table;
+        }
+        return *std::launder(reinterpret_cast<CtAllocTable*>(storage));
     }
 
     constexpr size_t kIndexInitialCapacity = size_t{1} << 12;
