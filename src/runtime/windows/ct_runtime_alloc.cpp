@@ -80,6 +80,12 @@ namespace
 
     constexpr size_t kIndexInitialCapacity = size_t{1} << 12;
 
+    // The index below, and the storage it starts with, in the module's image.
+    alignas(uintptr_t) unsigned char ct_index_storage[ct_block_index_storage_size(
+        kIndexInitialCapacity)];
+    ct_block_index ct_index;
+    bool ct_index_ready = false;
+
 } // namespace
 
 // The index of the blocks the table records, live or freed, by address, for
@@ -87,16 +93,12 @@ namespace
 // and changes with the record, under ct_alloc_lock.
 CT_NODISCARD CT_NOINSTR ct_block_index* ct_alloc_index()
 {
-    alignas(
-        uintptr_t) static unsigned char storage[ct_block_index_storage_size(kIndexInitialCapacity)];
-    static ct_block_index index;
-    static bool ready = false;
-    if (!ready)
+    if (!ct_index_ready)
     {
-        ct_block_index_init(&index, storage, kIndexInitialCapacity);
-        ready = true;
+        ct_block_index_init(&ct_index, ct_index_storage, kIndexInitialCapacity);
+        ct_index_ready = true;
     }
-    return &index;
+    return &ct_index;
 }
 
 namespace
