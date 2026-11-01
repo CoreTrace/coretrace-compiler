@@ -575,6 +575,89 @@ namespace
         EXPECT_TRUE(heapsHold(block));
     }
 
+    // Loads the DLL that allocates through its copy of the runtime, has it allocate `count` blocks
+    // of `size` bytes and free them, then unloads it.
+    bool loadChurnAndUnload(int count, size_t size)
+    {
+        HMODULE library = LoadLibraryA(CT_ALLOCATING_LIBRARY);
+        if (!library)
+        {
+            return false;
+        }
+        auto* churn = reinterpret_cast<void (*)(int, size_t)>(
+            GetProcAddress(library, "ct_allocating_library_churn"));
+        if (churn)
+        {
+            churn(count, size);
+        }
+        FreeLibrary(library);
+        return churn != nullptr;
+    }
+
+    // The blocks of the process's heaps that `cycles` loads of that DLL leave allocated, each
+    // freeing `count` blocks of `size` bytes, after two to warm up, into `kept`.
+    bool blocksKeptAcrossChurns(int cycles, int count, size_t size, std::vector<HeapBlock>& kept)
+    {
+        std::vector<HeapBlock> before;
+        std::vector<HeapBlock> after;
+        before.reserve(1 << 20);
+        after.reserve(1 << 20);
+        if (!loadChurnAndUnload(count, size) || !loadChurnAndUnload(count, size) ||
+            !listBusyBlocks(before))
+        {
+            return false;
+        }
+        for (int cycle = 0; cycle < cycles; ++cycle)
+        {
+            if (!loadChurnAndUnload(count, size))
+            {
+                return false;
+            }
+        }
+        if (!listBusyBlocks(after))
+        {
+            return false;
+        }
+        kept.clear();
+        std::set_difference(after.begin(), after.end(), before.begin(), before.end(),
+                            std::back_inserter(kept));
+        return true;
+    }
+
+    // How many blocks of each size `blocks` holds, without what they contain.
+    std::string sizesOf(const std::vector<HeapBlock>& blocks)
+    {
+        std::map<size_t, size_t> sizes;
+        size_t bytes = 0;
+        for (const HeapBlock& block : blocks)
+        {
+            ++sizes[block.size];
+            bytes += block.size;
+        }
+        std::ostringstream out;
+        out << blocks.size() << " blocks, " << bytes << " bytes:";
+        for (const auto& [size, count] : sizes)
+        {
+            out << " " << count << " of " << size << " bytes;";
+        }
+        return out.str();
+    }
+
+    // A DLL that allocates through its copy of the runtime, and frees what it allocates, keeps no
+    // heap block at each load once FreeLibrary has unloaded it, beyond what a DLL without the
+    // runtime keeps: its copy releases the blocks in its quarantine and the quarantine's queue, and
+    // destroys its allocation table (#227).
+    TEST(DllAllocState, ADllThatAllocatesThroughItsCopyKeepsNoHeapBlockAtEachLoad)
+    {
+        std::vector<HeapBlock> control;
+        ASSERT_TRUE(blocksKeptAcrossLoads(CT_RELOAD_LIBRARY_A, control)) << CT_RELOAD_LIBRARY_A;
+        std::vector<HeapBlock> kept;
+        ASSERT_TRUE(blocksKeptAcrossChurns(kLoadCycles, 64, 64, kept)) << CT_ALLOCATING_LIBRARY;
+        // A block kept at each load would add kLoadCycles of them.
+        EXPECT_LT(kept.size(), control.size() + kLoadCycles / 2)
+            << sizesOf(kept) << "\nwithout the runtime: " << sizesOf(control);
+    }
+
     // The line `label` of the first box of `site`, empty without one.
     std::string lineOf(const std::string& boxes, const char* site, const char* label)
     {
