@@ -1266,12 +1266,52 @@ namespace
         }
     }
 
+    // A crash backtrace that names RaiseException, printed by the handler of the module whose image
+    // the child printed after `mark`: the first frame, which the handler takes in itself, lies in
+    // that image.
+    class CrashBacktraceFrom : public testing::MatcherInterface<const std::string&>
+    {
+      public:
+        explicit CrashBacktraceFrom(const char* mark) : mark_(mark) {}
+
+        bool MatchAndExplain(const std::string& output,
+                             testing::MatchResultListener* listener) const override
+        {
+            if (!CrashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong)
+                     .MatchAndExplain(output, listener))
+            {
+                return false;
+            }
+            if (!imageAfter(output, mark_).holds(crashFramesOf(output).front().address))
+            {
+                *listener << "the first frame is not in the image after " << mark_;
+                return false;
+            }
+            return true;
+        }
+
+        void DescribeTo(std::ostream* os) const override
+        {
+            *os << "is a crash backtrace that names RaiseException, printed by the handler in the "
+                   "image after "
+                << mark_;
+        }
+
+      private:
+        const char* mark_;
+    };
+
+    testing::Matcher<const std::string&> crashBacktraceFrom(const char* mark)
+    {
+        return testing::MakeMatcher(new CrashBacktraceFrom(mark));
+    }
+
     // Removes the executable's handler, as for a program that does not link the runtime, loads the
     // DLL that links it, then faults.
     [[noreturn]] void faultWhileADllThatLinksTheRuntimeIsLoaded()
     {
         SetUnhandledExceptionFilter(nullptr);
-        loadRuntimeLibrary();
+        printImage("handler:2", loadRuntimeLibrary());
         faultOnAThread(&raiseUnhandledException);
     }
 
@@ -1281,12 +1321,13 @@ namespace
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
         EXPECT_EXIT(faultWhileADllThatLinksTheRuntimeIsLoaded(), endedByTheFault(),
-                    crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
+                    crashBacktraceFrom("handler:2 "));
     }
 
     [[noreturn]] void faultAfterADllThatLinksTheRuntimeUnloaded()
     {
         unloadRuntimeLibrary(loadRuntimeLibrary());
+        printImage("handler:2", GetModuleHandleW(nullptr));
         faultOnAThread(&raiseUnhandledException);
     }
 
@@ -1297,7 +1338,7 @@ namespace
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
         EXPECT_EXIT(faultAfterADllThatLinksTheRuntimeUnloaded(), endedByTheFault(),
-                    crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
+                    crashBacktraceFrom("handler:2 "));
     }
 
     // A filter that the program installs for the exceptions that nothing handles, as a crash
@@ -1395,6 +1436,7 @@ namespace
         RuntimeLibraryCopy second("second");
         (in_load_order ? first : second).unload();
         (in_load_order ? second : first).unload();
+        printImage("handler:2", GetModuleHandleW(nullptr));
         faultOnAThread(&raiseUnhandledException);
     }
 
@@ -1405,7 +1447,7 @@ namespace
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
         EXPECT_EXIT(faultAfterTwoDllsUnloaded(false), endedByTheFault(),
-                    crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
+                    crashBacktraceFrom("handler:2 "));
     }
 
     // The first copy unloads while the second's handler, installed over its own, is still there:
@@ -1416,7 +1458,7 @@ namespace
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
         EXPECT_EXIT(faultAfterTwoDllsUnloaded(true), endedByTheFault(),
-                    crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
+                    crashBacktraceFrom("handler:2 "));
     }
 
     // Loads two copies of the DLL that links the runtime. Then, as a scope of the program does,
@@ -1432,6 +1474,7 @@ namespace
         first.unload();
         SetUnhandledExceptionFilter(second_handler);
         second.unload();
+        printImage("handler:2", GetModuleHandleW(nullptr));
         faultOnAThread(&raiseUnhandledException);
     }
 
@@ -1444,6 +1487,6 @@ namespace
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
         EXPECT_EXIT(faultAfterTwoDllsUnloadedAroundTheHostsFilter(), endedByTheFault(),
-                    crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
+                    crashBacktraceFrom("handler:2 "));
     }
 } // namespace
