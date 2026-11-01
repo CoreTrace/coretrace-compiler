@@ -36,6 +36,11 @@ CT_NOINSTR void ct_quarantine_push(const ct_quarantine_item& item);
 CT_NOINSTR void ct_quarantine_set_limit(size_t bytes);
 CT_NODISCARD CT_NOINSTR size_t ct_quarantine_bytes(void);
 
+// Releases every block, as a limit of 0 does, then frees the queue: for a copy of the runtime
+// whose module unloads (#227). The blocks released afterwards go to the allocator at once.
+// ct_alloc_lock not held.
+CT_NOINSTR void ct_quarantine_release_all(void);
+
 // Takes the oldest block out of the quarantine, its freed record dropped, when the allocation
 // table needs the room. False when the quarantine is empty. The caller releases the block, with
 // ct_quarantine_release, once it no longer holds the lock: the block is in no queue and has no
