@@ -301,9 +301,14 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
     }
     CtCrashHandlerRecord& record = ct_crash_handler_record;
     record.replaced = SetUnhandledExceptionFilter(record.handler);
-    if (reinterpret_cast<HMODULE>(&__ImageBase) != GetModuleHandleW(nullptr))
+    // A DLL's copy links its record to the copy below while the DLL initializes, with the loader
+    // lock held, which keeps the links of every copy. It does only where its release runs when
+    // FreeLibrary unloads the DLL, which needs ct_process_shutdown() to tell that apart from the
+    // process's termination, from Windows 10 on: otherwise its record would stay linked once its
+    // module is unmapped.
+    if (reinterpret_cast<HMODULE>(&__ImageBase) != GetModuleHandleW(nullptr) &&
+        ct_process_shutdown() != CtProcessShutdown::Unknown)
     {
-        // A DLL initializes with the loader lock held, which keeps the links of every copy.
         bool readable = true;
         record.below = ct_crash_handler_record_of(record.replaced, readable);
         if (!readable)
