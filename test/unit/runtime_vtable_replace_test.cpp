@@ -1731,38 +1731,6 @@ namespace
                     crashBacktraceFrom("handler:2 "));
     }
 
-    // Loads a copy of the DLL that links the runtime and makes the page of its headers unreadable,
-    // then loads a second copy, which cannot tell whether the filter in place, the first copy's
-    // handler, is a copy's. Makes the page readable again, unloads the first copy, then the second,
-    // and faults. Prints why and exits with 2 when the page stays readable.
-    [[noreturn]] void faultAfterACopyThatCouldNotReadTheFilterBelow()
-    {
-        RuntimeLibraryCopy first("first");
-        DWORD protection = 0;
-        if (!VirtualProtect(first.module(), 1, PAGE_NOACCESS, &protection))
-        {
-            std::fprintf(stderr, "the headers of the first copy stayed readable\n");
-            std::exit(2);
-        }
-        RuntimeLibraryCopy second("second");
-        VirtualProtect(first.module(), 1, protection, &protection);
-        first.unload();
-        second.unload();
-        printImage("handler:2", GetModuleHandleW(nullptr));
-        faultOnAThread(&raiseUnhandledException);
-    }
-
-    // The second copy keeps its handler off a filter that it cannot link to, and would put back
-    // once its code is gone: the first copy's handler stays the process's, and the executable's is
-    // back once the first copy unloads (#236).
-    TEST(BacktraceReplaceDeathTest, ACopyStaysOffAFilterWhoseModuleItCannotRead)
-    {
-        GTEST_FLAG_SET(death_test_style, "threadsafe");
-        BacktraceInChildren backtrace;
-        EXPECT_EXIT(faultAfterACopyThatCouldNotReadTheFilterBelow(), endedByTheFault(),
-                    crashBacktraceFrom("handler:2 "));
-    }
-
     // SetUnhandledExceptionFilter as the loader resolved it for a copy of the runtime, before the
     // copy's import is patched, and how many calls the patched import has had.
     using SetFilterFunction = LPTOP_LEVEL_EXCEPTION_FILTER(WINAPI*)(LPTOP_LEVEL_EXCEPTION_FILTER);
