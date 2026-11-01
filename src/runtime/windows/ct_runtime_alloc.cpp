@@ -1395,7 +1395,11 @@ namespace
         ct_lock_acquire();
         ct_block_index_destroy(&ct_index);
         ct_block_index_init(&ct_index, ct_index_storage, kIndexInitialCapacity);
-        ct_alloc_table().~CtAllocTable();
+        CtAllocTable* destroyed = &ct_alloc_table();
+        destroyed->~CtAllocTable();
+        // Probe only: what a debug heap does to the memory of a destroyed object, so that a use of
+        // the table after its destruction faults instead of going unnoticed.
+        std::memset(static_cast<void*>(destroyed), 0xA5, sizeof(CtAllocTable));
         ct_alloc_table_built.store(false, std::memory_order_release);
         ct_lock_release();
     }
