@@ -674,6 +674,50 @@ namespace
             << sizesOf(kept) << "\nwithout the runtime: " << sizesOf(control);
     }
 
+    // Loads `library`, has it allocate 64 blocks of 64 bytes through its copy of the runtime and
+    // free them, and `late` blocks of 16 bytes after its copy's terminator, then unloads it. Exits
+    // with 0 once FreeLibrary has returned, 2 when the DLL or its functions are missing, and 7 when
+    // FreeLibrary has not returned within 20 seconds, as when it waits on a lock that its own
+    // thread holds.
+    [[noreturn]] void churnAndUnload(const char* library, int late)
+    {
+        std::thread(
+            []
+            {
+                Sleep(20000);
+                TerminateProcess(GetCurrentProcess(), 7);
+            })
+            .detach();
+        using Churn = void (*)(int, size_t);
+        HMODULE module = LoadLibraryA(library);
+        if (!module)
+        {
+            std::exit(2);
+        }
+        auto churn = reinterpret_cast<Churn>(GetProcAddress(module, "ct_allocating_library_churn"));
+        auto churn_at_unload = reinterpret_cast<Churn>(
+            GetProcAddress(module, "ct_allocating_library_churn_at_unload"));
+        if (!churn || !churn_at_unload)
+        {
+            std::exit(2);
+        }
+        churn(64, 64);
+        churn_at_unload(late, 16);
+        FreeLibrary(module);
+        std::exit(0);
+    }
+
+    // The copy of an instrumented DLL may see the blocks it releases for itself come back to its
+    // entry points, through the copies of the library's inline functions that the DLL compiled
+    // (#197), as through this DLL's operator delete: it frees its table and releases its quarantine
+    // at FreeLibrary as its own work, without waiting on its own lock (#227).
+    TEST(DllAllocStateDeathTest, ADllWhoseOperatorDeleteFreesThroughItsCopyUnloads)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(churnAndUnload(CT_DELETE_THROUGH_RUNTIME_LIBRARY, 0),
+                    testing::ExitedWithCode(0), "");
+    }
+
     // The line `label` of the first box of `site`, empty without one.
     std::string lineOf(const std::string& boxes, const char* site, const char* label)
     {
