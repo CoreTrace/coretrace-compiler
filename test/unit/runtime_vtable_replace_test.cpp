@@ -545,6 +545,223 @@ namespace
             << describe(kept) << "\nwithout the runtime: " << describe(control);
     }
 
+    // Whether a busy block of the process's heaps holds `address`.
+    bool heapsHold(const void* address)
+    {
+        std::vector<HeapBlock> blocks;
+        blocks.reserve(1 << 18);
+        if (!listBusyBlocks(blocks))
+        {
+            return false;
+        }
+        const auto* byte = static_cast<const unsigned char*>(address);
+        return std::any_of(blocks.begin(), blocks.end(), [&](const HeapBlock& block)
+                           { return byte >= block.address && byte < block.address + block.size; });
+    }
+
+    // A block that a DLL allocated through its copy of the runtime and still holds stays allocated
+    // once FreeLibrary has unloaded the DLL: its copy frees its record of the block, not the block,
+    // which the program may still use (#227).
+    TEST(DllAllocState, ABlockADllKeepsStaysAllocatedOnceItUnloads)
+    {
+        HMODULE library = LoadLibraryA(CT_ALLOCATING_LIBRARY);
+        ASSERT_NE(library, nullptr) << CT_ALLOCATING_LIBRARY;
+        auto* keep = reinterpret_cast<void* (*)(size_t)>(
+            GetProcAddress(library, "ct_allocating_library_keep"));
+        ASSERT_NE(keep, nullptr);
+        void* block = keep(48);
+        ASSERT_NE(block, nullptr);
+        FreeLibrary(library);
+        EXPECT_TRUE(heapsHold(block));
+    }
+
+    // Loads the DLL that allocates through its copy of the runtime, has it allocate `count` blocks
+    // of `size` bytes and free them, then unloads it.
+    bool loadChurnAndUnload(int count, size_t size)
+    {
+        HMODULE library = LoadLibraryA(CT_ALLOCATING_LIBRARY);
+        if (!library)
+        {
+            return false;
+        }
+        auto* churn = reinterpret_cast<void (*)(int, size_t)>(
+            GetProcAddress(library, "ct_allocating_library_churn"));
+        if (churn)
+        {
+            churn(count, size);
+        }
+        FreeLibrary(library);
+        return churn != nullptr;
+    }
+
+    // The blocks of the process's heaps that `cycles` loads of that DLL leave allocated, each
+    // freeing `count` blocks of `size` bytes, after two to warm up, into `kept`.
+    bool blocksKeptAcrossChurns(int cycles, int count, size_t size, std::vector<HeapBlock>& kept)
+    {
+        std::vector<HeapBlock> before;
+        std::vector<HeapBlock> after;
+        before.reserve(1 << 20);
+        after.reserve(1 << 20);
+        if (!loadChurnAndUnload(count, size) || !loadChurnAndUnload(count, size) ||
+            !listBusyBlocks(before))
+        {
+            return false;
+        }
+        for (int cycle = 0; cycle < cycles; ++cycle)
+        {
+            if (!loadChurnAndUnload(count, size))
+            {
+                return false;
+            }
+        }
+        if (!listBusyBlocks(after))
+        {
+            return false;
+        }
+        kept.clear();
+        std::set_difference(after.begin(), after.end(), before.begin(), before.end(),
+                            std::back_inserter(kept));
+        return true;
+    }
+
+    // How many blocks of each size `blocks` holds, without what they contain.
+    std::string sizesOf(const std::vector<HeapBlock>& blocks)
+    {
+        std::map<size_t, size_t> sizes;
+        size_t bytes = 0;
+        for (const HeapBlock& block : blocks)
+        {
+            ++sizes[block.size];
+            bytes += block.size;
+        }
+        std::ostringstream out;
+        out << blocks.size() << " blocks, " << bytes << " bytes:";
+        for (const auto& [size, count] : sizes)
+        {
+            out << " " << count << " of " << size << " bytes;";
+        }
+        return out.str();
+    }
+
+    // A DLL that allocates through its copy of the runtime, and frees what it allocates, keeps no
+    // heap block at each load once FreeLibrary has unloaded it, beyond what a DLL without the
+    // runtime keeps: its copy releases the blocks in its quarantine and the quarantine's queue, and
+    // destroys its allocation table (#227).
+    TEST(DllAllocState, ADllThatAllocatesThroughItsCopyKeepsNoHeapBlockAtEachLoad)
+    {
+        std::vector<HeapBlock> control;
+        ASSERT_TRUE(blocksKeptAcrossLoads(CT_RELOAD_LIBRARY_A, control)) << CT_RELOAD_LIBRARY_A;
+        std::vector<HeapBlock> kept;
+        ASSERT_TRUE(blocksKeptAcrossChurns(kLoadCycles, 64, 64, kept)) << CT_ALLOCATING_LIBRARY;
+        // A block kept at each load would add kLoadCycles of them.
+        EXPECT_LT(kept.size(), control.size() + kLoadCycles / 2)
+            << sizesOf(kept) << "\nwithout the runtime: " << sizesOf(control);
+    }
+
+    // Nor when its copy's block index grew past the storage it starts with, which holds 4096
+    // blocks: the copy frees what the index grew into (#227).
+    TEST(DllAllocState, ADllWhoseBlockIndexGrewKeepsNoHeapBlockAtEachLoad)
+    {
+        constexpr int kBlocks = 5000;
+        std::vector<HeapBlock> control;
+        ASSERT_TRUE(blocksKeptAcrossLoads(CT_RELOAD_LIBRARY_A, control)) << CT_RELOAD_LIBRARY_A;
+        std::vector<HeapBlock> kept;
+        ASSERT_TRUE(blocksKeptAcrossChurns(kLoadCycles, kBlocks, 16, kept))
+            << CT_ALLOCATING_LIBRARY;
+        // A block kept at each load, such as what the index grew into, would add kLoadCycles of
+        // them, whatever the few blocks that the DLL without the runtime leaves.
+        EXPECT_LT(kept.size(), control.size() + kLoadCycles / 2)
+            << sizesOf(kept) << "\nwithout the runtime: " << sizesOf(control);
+    }
+
+    // Set by the DLL at the end of its late terminator.
+    std::atomic<bool> late_terminator_returned{false};
+
+    // Loads `library`, has it allocate 64 blocks of 64 bytes through its copy of the runtime and
+    // free them, then, after its copy's terminator, check an access through the copy when `check`
+    // and allocate and free `late` blocks of 16 bytes, and unloads it. Exits with 0 once FreeLibrary
+    // and the DLL's late terminator have returned, 2 when the DLL, its functions or the watchdog are
+    // missing, 6 when FreeLibrary returned but the late terminator did not, as when the loader
+    // swallowed a fault there or in the copy's terminator, and 7 when FreeLibrary has not returned
+    // within 20 seconds, as when it waits on a lock that its own thread holds.
+    [[noreturn]] void churnAndUnload(const char* library, int late, bool check)
+    {
+        // The watchdog runs before the DLL loads: a thread takes the loader lock to start, and
+        // would wait for it behind a FreeLibrary that waits with that lock held.
+        HANDLE watching = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!watching)
+        {
+            std::exit(2);
+        }
+        std::thread(
+            [watching]
+            {
+                SetEvent(watching);
+                Sleep(20000);
+                TerminateProcess(GetCurrentProcess(), 7);
+            })
+            .detach();
+        WaitForSingleObject(watching, INFINITE);
+        using Churn = void (*)(int, size_t);
+        HMODULE module = LoadLibraryA(library);
+        if (!module)
+        {
+            std::exit(2);
+        }
+        auto churn = reinterpret_cast<Churn>(GetProcAddress(module, "ct_allocating_library_churn"));
+        auto churn_at_unload = reinterpret_cast<Churn>(
+            GetProcAddress(module, "ct_allocating_library_churn_at_unload"));
+        auto check_at_unload = reinterpret_cast<void (*)()>(
+            GetProcAddress(module, "ct_allocating_library_check_at_unload"));
+        auto report_unload = reinterpret_cast<void (*)(void (*)())>(
+            GetProcAddress(module, "ct_allocating_library_report_unload"));
+        if (!churn || !churn_at_unload || !check_at_unload || !report_unload)
+        {
+            std::exit(2);
+        }
+        churn(64, 64);
+        churn_at_unload(late, 16);
+        if (check)
+        {
+            check_at_unload();
+        }
+        report_unload([] { late_terminator_returned.store(true); });
+        FreeLibrary(module);
+        std::exit(late_terminator_returned.load() ? 0 : 6);
+    }
+
+    // The copy of an instrumented DLL may see the blocks it releases for itself come back to its
+    // entry points, through the copies of the library's inline functions that the DLL compiled
+    // (#197), as through this DLL's operator delete: it frees its table and releases its quarantine
+    // at FreeLibrary as its own work, without waiting on its own lock (#227).
+    TEST(DllAllocStateDeathTest, ADllWhoseOperatorDeleteFreesThroughItsCopyUnloads)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(churnAndUnload(CT_NEW_DELETE_THROUGH_RUNTIME_LIBRARY, 0, false),
+                    testing::ExitedWithCode(0), "");
+    }
+
+    // Code of the DLL that runs after its copy's terminator, a terminator of a library that the DLL
+    // links for instance, and allocates and frees through the copy, finds a table: the copy builds
+    // a new one, which stays allocated (#227).
+    TEST(DllAllocStateDeathTest, ADllThatAllocatesAfterItsCopyFreedItsStateUnloads)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(churnAndUnload(CT_ALLOCATING_LIBRARY, 4, false), testing::ExitedWithCode(0),
+                    "");
+    }
+
+    // A bounds check that comes after the copy's terminator is the first use of the copy's table
+    // since the terminator freed it, and builds a new one with the table's lock held. The blocks of
+    // the new table come back to the copy's entry points through the DLL's operator new: the copy
+    // builds the table as its own work, so that they do not wait on that lock (#197, #227).
+    TEST(DllAllocStateDeathTest, ADllThatChecksAnAccessAfterItsCopyFreedItsStateUnloads)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(churnAndUnload(CT_NEW_DELETE_THROUGH_RUNTIME_LIBRARY, 0, true),
+                    testing::ExitedWithCode(0), "");
+    }
+
     // The line `label` of the first box of `site`, empty without one.
     std::string lineOf(const std::string& boxes, const char* site, const char* label)
     {

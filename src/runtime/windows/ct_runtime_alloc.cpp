@@ -57,28 +57,39 @@ namespace
     // The table and its lock live until the process ends: .CRT$XT terminators, which the
     // CRT runs after the destructors of every static object, may still release blocks, and
     // the leak report runs among them (#159). The lock needs no constructor nor destructor;
-    // the table is built on first use, in storage nothing destroys.
+    // the table is built on first use, in storage that only the terminator of a DLL's copy
+    // destroys, when FreeLibrary unloads the DLL, and built again for the code of the DLL that
+    // uses it after that terminator (#227).
     SRWLOCK ct_alloc_lock = SRWLOCK_INIT;
 
     using CtAllocTable = std::unordered_map<void*, CtAllocEntry>;
 
-    // Set once the table is built. A copy of the runtime that never built it has nothing to
+    // Set while the table is built. A copy of the runtime that never built it has nothing to
     // report, and building it at process exit would allocate with the loader lock held (#232).
     std::atomic<bool> ct_alloc_table_built{false};
 
+    // ct_alloc_lock held, as for every use of the table. Building the table allocates, which may
+    // reach the runtime's entry points (#197): it is the runtime's own work, whichever use builds
+    // it, a bounds check for one, which holds the lock outside a runtime scope.
     CT_NOINSTR CtAllocTable& ct_alloc_table()
     {
         alignas(CtAllocTable) static unsigned char storage[sizeof(CtAllocTable)];
-        static CtAllocTable* const table = []
+        if (!ct_alloc_table_built.load(std::memory_order_relaxed))
         {
-            CtAllocTable* built = new (storage) CtAllocTable();
+            CtRuntimeScope scope;
+            new (storage) CtAllocTable();
             ct_alloc_table_built.store(true, std::memory_order_release);
-            return built;
-        }();
-        return *table;
+        }
+        return *std::launder(reinterpret_cast<CtAllocTable*>(storage));
     }
 
     constexpr size_t kIndexInitialCapacity = size_t{1} << 12;
+
+    // The index below, and the storage it starts with, in the module's image.
+    alignas(uintptr_t) unsigned char ct_index_storage[ct_block_index_storage_size(
+        kIndexInitialCapacity)];
+    ct_block_index ct_index;
+    bool ct_index_ready = false;
 
 } // namespace
 
@@ -87,16 +98,12 @@ namespace
 // and changes with the record, under ct_alloc_lock.
 CT_NODISCARD CT_NOINSTR ct_block_index* ct_alloc_index()
 {
-    alignas(
-        uintptr_t) static unsigned char storage[ct_block_index_storage_size(kIndexInitialCapacity)];
-    static ct_block_index index;
-    static bool ready = false;
-    if (!ready)
+    if (!ct_index_ready)
     {
-        ct_block_index_init(&index, storage, kIndexInitialCapacity);
-        ready = true;
+        ct_block_index_init(&ct_index, ct_index_storage, kIndexInitialCapacity);
+        ct_index_ready = true;
     }
-    return &index;
+    return &ct_index;
 }
 
 namespace
@@ -1361,9 +1368,42 @@ namespace
         }
     }
 
+    // Frees what this copy of the runtime holds for the blocks of its DLL when FreeLibrary unloads
+    // the DLL, from the terminator below: the blocks in its quarantine, which the program had
+    // released, the quarantine's queue, what its block index grew into, and its allocation table.
+    // The DLL's atexit handlers, the destructors of its global objects, its destructor functions
+    // and the terminators of its code, in .CRT$XTU, have run by then. The terminators of later
+    // sections, which a library that the DLL links may add, run after it, then the C runtime's
+    // teardown, which calls no function of the runtime. Code there that goes through the copy
+    // finds a new table (ct_alloc_table), and what that code leaves stays allocated once the DLL
+    // is gone: the new table, a record for each block it allocated and still holds, buckets for
+    // the most blocks it held at once and, when it held more than the 4096 that the block index
+    // holds in the module's image, the storage the index grew into. A block that code releases
+    // leaves no record: the quarantine's limit stays 0, so the block goes to the allocator at once
+    // (ct_quarantine_release_all). The blocks that the DLL still holds stay allocated, without
+    // their records (#227).
+    CT_NOINSTR void ct_release_alloc_state()
+    {
+        // The table and the quarantine release blocks with ct_alloc_lock held, which may reach the
+        // runtime's entry points (#197).
+        CtRuntimeScope scope;
+        if (!ct_alloc_table_built.load(std::memory_order_acquire))
+        {
+            return;
+        }
+        ct_quarantine_release_all();
+        ct_lock_acquire();
+        ct_block_index_destroy(&ct_index);
+        ct_block_index_init(&ct_index, ct_index_storage, kIndexInitialCapacity);
+        ct_alloc_table().~CtAllocTable();
+        ct_alloc_table_built.store(false, std::memory_order_release);
+        ct_lock_release();
+    }
+
     // A DLL's C runtime runs its .CRT$XTY terminators after its atexit handlers, the destructors
     // of its global objects and its destructor functions, when FreeLibrary unloads it and when the
-    // process exits.
+    // process exits. When FreeLibrary unloads it, the copy then frees its allocation state; it
+    // keeps it when the process exits, for the leak report, and while the DLL's own exit() runs.
     CT_NOINSTR void ct_report_dll_leaks_at_exit()
     {
         if (!ct_dll_detaching.load(std::memory_order_acquire))
@@ -1372,6 +1412,10 @@ namespace
             return;
         }
         ct_report_dll_leaks_once();
+        if (ct_dll_unloading_dynamically())
+        {
+            ct_release_alloc_state();
+        }
     }
 } // namespace
 

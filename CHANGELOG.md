@@ -78,6 +78,13 @@ pull request.
   allocated, and each load of the DLL built another one: 488 bytes per load and unload in the
   measurement of #227, whose DLL decoded two names. The copy now frees the cache when `FreeLibrary`
   unloads the DLL, after the DLL's destructors, whose boxes still name types (#227).
+- **Memory kept by a DLL that allocates, after it unloaded, on Windows.** The copy of the runtime in
+  a DLL that links it never destroyed its allocation table, nor freed what its block index grew
+  into, its quarantine's queue or the blocks that its quarantine held. A DLL that allocated and
+  freed through its copy left them allocated at each load and unload: about 42 KB per cycle for 64
+  blocks of 64 bytes freed, and 957 KB for 5000 blocks of 16 bytes, in a probe of #227. The copy now
+  frees them when `FreeLibrary` unloads the DLL, after the DLL's exit-time code, and keeps them when
+  the process exits, for the leak report (#227).
 
 ### Tests and CI
 
