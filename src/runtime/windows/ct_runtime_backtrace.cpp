@@ -306,6 +306,16 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
         // A DLL initializes with the loader lock held, which keeps the links of every copy.
         bool readable = true;
         record.below = ct_crash_handler_record_of(record.replaced, readable);
+        if (!readable)
+        {
+            // The filter may be the handler of a copy that this one cannot link to, and would put
+            // back once its code is gone: it goes back in place, without this copy's handler.
+            ct_crash_handler_put_back(record.handler, record.replaced);
+            ct_write_prefix(CTLevel::Info);
+            ct_write_cstr("ct: backtrace handler not installed: the headers of the module of the "
+                          "filter in place cannot be read\n");
+            return;
+        }
         if (record.below)
         {
             record.next = record.below->above;
