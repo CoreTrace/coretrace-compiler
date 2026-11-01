@@ -1392,19 +1392,19 @@ namespace
                     "host filter e0000225");
     }
 
-    // A copy of the DLL that links the runtime, at a path of the child's own: the loader maps each
-    // copy as a module apart, with a copy of the runtime of its own. Prints why and exits with 2
-    // when it does not load.
+    // A copy of a DLL that links the runtime, by default the one of reload/ct_runtime_library.cpp,
+    // at a path of the child's own: the loader maps each copy as a module apart, with a copy of the
+    // runtime of its own. Prints why and exits with 2 when it does not load.
     class RuntimeLibraryCopy
     {
       public:
-        explicit RuntimeLibraryCopy(const char* name)
+        explicit RuntimeLibraryCopy(const char* name, const char* source = CT_RUNTIME_LIBRARY)
             : path_(fs::path(testing::TempDir()) /
-                    (std::string("ct_runtime_library_") + name + "_" +
+                    (fs::path(source).stem().string() + "_" + name + "_" +
                      std::to_string(GetCurrentProcessId()) + ".dll"))
         {
             std::error_code error;
-            fs::copy_file(CT_RUNTIME_LIBRARY, path_, fs::copy_options::overwrite_existing, error);
+            fs::copy_file(source, path_, fs::copy_options::overwrite_existing, error);
             module_ = error ? nullptr : LoadLibraryW(path_.c_str());
             if (!module_)
             {
@@ -1414,6 +1414,11 @@ namespace
         }
         RuntimeLibraryCopy(const RuntimeLibraryCopy&) = delete;
         RuntimeLibraryCopy& operator=(const RuntimeLibraryCopy&) = delete;
+
+        HMODULE module() const
+        {
+            return module_;
+        }
 
         // Unloads the copy, then deletes its file.
         void unload()
@@ -1682,5 +1687,47 @@ namespace
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
         EXPECT_EXIT(endTheProcessFromADll(), testing::ExitedWithCode(0), "");
+    }
+
+    // Stand-ins for what kernel32.dll does in a copy of the runtime that unloads: every allocation
+    // from a heap and every listing of the modules fails.
+    LPVOID WINAPI failingHeapAlloc(HANDLE, DWORD, SIZE_T)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return nullptr;
+    }
+
+    BOOL WINAPI failingEnumProcessModules(HANDLE, HMODULE*, DWORD, LPDWORD)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+
+    // Loads a copy of the DLL of reload/ct_leak_dll.cpp, which links the runtime and runs no code of
+    // its own when it unloads, then a copy of the DLL that links the runtime, whose handler goes
+    // over the first copy's. Has every allocation from a heap and every listing of the modules fail
+    // in the first copy, unloads it, then the second copy, and faults.
+    [[noreturn]] void faultAfterAHandOverThatNothingCouldBeAllocatedFor()
+    {
+        RuntimeLibraryCopy first("first", CT_LEAK_DLL);
+        RuntimeLibraryCopy second("second");
+        patchImport(first.module(), "HeapAlloc", reinterpret_cast<void*>(&failingHeapAlloc));
+        patchImport(first.module(), "K32EnumProcessModules",
+                    reinterpret_cast<void*>(&failingEnumProcessModules));
+        first.unload();
+        second.unload();
+        printImage("handler:2", GetModuleHandleW(nullptr));
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // The first copy hands the filter it replaced over to the second without allocating anything
+    // or listing the modules: once the second unloads too, the executable's handler reports the
+    // crash, not the first copy's, whose code is gone (#236).
+    TEST(BacktraceReplaceDeathTest, ACopyHandsOverEvenWhenItCanNeitherAllocateNorListModules)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultAfterAHandOverThatNothingCouldBeAllocatedFor(), endedByTheFault(),
+                    crashBacktraceFrom("handler:2 "));
     }
 } // namespace
