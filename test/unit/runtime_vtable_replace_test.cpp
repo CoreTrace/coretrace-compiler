@@ -675,11 +675,11 @@ namespace
     }
 
     // Loads `library`, has it allocate 64 blocks of 64 bytes through its copy of the runtime and
-    // free them, and `late` blocks of 16 bytes after its copy's terminator, then unloads it. Exits
-    // with 0 once FreeLibrary has returned, 2 when the DLL or its functions are missing, and 7 when
-    // FreeLibrary has not returned within 20 seconds, as when it waits on a lock that its own
-    // thread holds.
-    [[noreturn]] void churnAndUnload(const char* library, int late)
+    // free them, then, after its copy's terminator, check an access through the copy when `check`
+    // and allocate and free `late` blocks of 16 bytes, and unloads it. Exits with 0 once FreeLibrary
+    // has returned, 2 when the DLL or its functions are missing, and 7 when FreeLibrary has not
+    // returned within 20 seconds, as when it waits on a lock that its own thread holds.
+    [[noreturn]] void churnAndUnload(const char* library, int late, bool check)
     {
         std::thread(
             []
@@ -697,12 +697,18 @@ namespace
         auto churn = reinterpret_cast<Churn>(GetProcAddress(module, "ct_allocating_library_churn"));
         auto churn_at_unload = reinterpret_cast<Churn>(
             GetProcAddress(module, "ct_allocating_library_churn_at_unload"));
-        if (!churn || !churn_at_unload)
+        auto check_at_unload = reinterpret_cast<void (*)()>(
+            GetProcAddress(module, "ct_allocating_library_check_at_unload"));
+        if (!churn || !churn_at_unload || !check_at_unload)
         {
             std::exit(2);
         }
         churn(64, 64);
         churn_at_unload(late, 16);
+        if (check)
+        {
+            check_at_unload();
+        }
         FreeLibrary(module);
         std::exit(0);
     }
@@ -714,7 +720,7 @@ namespace
     TEST(DllAllocStateDeathTest, ADllWhoseOperatorDeleteFreesThroughItsCopyUnloads)
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
-        EXPECT_EXIT(churnAndUnload(CT_NEW_DELETE_THROUGH_RUNTIME_LIBRARY, 0),
+        EXPECT_EXIT(churnAndUnload(CT_NEW_DELETE_THROUGH_RUNTIME_LIBRARY, 0, false),
                     testing::ExitedWithCode(0), "");
     }
 
@@ -724,7 +730,8 @@ namespace
     TEST(DllAllocStateDeathTest, ADllThatAllocatesAfterItsCopyFreedItsStateUnloads)
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
-        EXPECT_EXIT(churnAndUnload(CT_ALLOCATING_LIBRARY, 4), testing::ExitedWithCode(0), "");
+        EXPECT_EXIT(churnAndUnload(CT_ALLOCATING_LIBRARY, 4, false), testing::ExitedWithCode(0),
+                    "");
     }
 
     // The line `label` of the first box of `site`, empty without one.
