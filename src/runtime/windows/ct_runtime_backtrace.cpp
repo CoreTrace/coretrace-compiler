@@ -14,6 +14,9 @@
 
 #pragma comment(lib, "Dbghelp.lib")
 
+// The module that holds this copy of the runtime.
+extern "C" IMAGE_DOS_HEADER __ImageBase;
+
 namespace
 {
     std::atomic<int> ct_backtrace_installed{0};
@@ -84,7 +87,9 @@ namespace
 
 CT_NOINSTR void ct_maybe_install_backtrace(void)
 {
-    if (std::getenv("CT_BACKTRACE") == nullptr)
+    // Probe of #236: only the executable's copy installs the handler.
+    if (std::getenv("CT_BACKTRACE") == nullptr ||
+        reinterpret_cast<HMODULE>(&__ImageBase) != GetModuleHandleW(nullptr))
     {
         return;
     }
