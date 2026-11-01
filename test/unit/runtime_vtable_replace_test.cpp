@@ -1229,3 +1229,96 @@ namespace
                     crashBacktrace(Backtrace::NamesTheExecutableOnly));
     }
 } // namespace
+
+// Probe of #227, not to merge: what a DLL whose copy of the runtime records allocations keeps in
+// the process's heaps across loads and unloads.
+#include <psapi.h>
+
+namespace
+{
+    // Loads `library`, has it allocate `count` blocks of `size` bytes through its copy of the
+    // runtime and free them, then unloads it.
+    bool loadChurnAndUnload(const char* library, int count, size_t size)
+    {
+        HMODULE module = LoadLibraryA(library);
+        if (!module)
+        {
+            return false;
+        }
+        auto* churn =
+            reinterpret_cast<void (*)(int, size_t)>(GetProcAddress(module, "ct_alloc_state_churn"));
+        if (churn && count > 0)
+        {
+            churn(count, size);
+        }
+        FreeLibrary(module);
+        return true;
+    }
+
+    size_t privateBytes()
+    {
+        PROCESS_MEMORY_COUNTERS_EX counters{};
+        counters.cb = sizeof(counters);
+        GetProcessMemoryInfo(GetCurrentProcess(),
+                             reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                             sizeof(counters));
+        return counters.PrivateUsage;
+    }
+
+    size_t bytesOf(const std::vector<HeapBlock>& blocks)
+    {
+        size_t bytes = 0;
+        for (const HeapBlock& block : blocks)
+        {
+            bytes += block.size;
+        }
+        return bytes;
+    }
+
+    TEST(DllAllocStateProbe, BlocksKeptPerLoadAndUnload)
+    {
+        DllStandardError output(fs::path(testing::TempDir()) / "ct_alloc_state_probe.txt");
+        struct Variant
+        {
+            const char* name;
+            const char* library;
+            int cycles;
+            int count;
+            size_t size;
+        };
+        const Variant variants[] = {
+            {"control, no runtime", CT_RELOAD_LIBRARY_A, 20, 0, 0},
+            {"runtime, nothing allocated", CT_RUNTIME_LIBRARY, 20, 0, 0},
+            {"alloc state, loaded only", CT_ALLOC_STATE_LIBRARY, 20, 0, 0},
+            {"alloc state, 64 blocks of 64 B freed", CT_ALLOC_STATE_LIBRARY, 20, 64, 64},
+            {"alloc state, 5000 blocks of 16 B freed", CT_ALLOC_STATE_LIBRARY, 4, 5000, 16},
+        };
+        for (const Variant& variant : variants)
+        {
+            std::vector<HeapBlock> before;
+            std::vector<HeapBlock> after;
+            before.reserve(1 << 20);
+            after.reserve(1 << 20);
+            ASSERT_TRUE(loadChurnAndUnload(variant.library, variant.count, variant.size) &&
+                        loadChurnAndUnload(variant.library, variant.count, variant.size))
+                << variant.name;
+            const size_t private_before = privateBytes();
+            ASSERT_TRUE(listBusyBlocks(before)) << variant.name;
+            for (int cycle = 0; cycle < variant.cycles; ++cycle)
+            {
+                ASSERT_TRUE(loadChurnAndUnload(variant.library, variant.count, variant.size))
+                    << variant.name;
+            }
+            ASSERT_TRUE(listBusyBlocks(after)) << variant.name;
+            const size_t private_after = privateBytes();
+            std::vector<HeapBlock> kept;
+            std::set_difference(after.begin(), after.end(), before.begin(), before.end(),
+                                std::back_inserter(kept));
+            ADD_FAILURE() << "probe-227 " << variant.name << ": " << variant.cycles << " cycles, "
+                          << bytesOf(kept) << " bytes in " << kept.size()
+                          << " blocks kept, private bytes " << private_before << " -> "
+                          << private_after << "\n"
+                          << describe(kept);
+        }
+    }
+} // namespace
