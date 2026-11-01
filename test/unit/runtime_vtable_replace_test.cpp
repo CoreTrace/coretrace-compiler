@@ -1281,12 +1281,14 @@ namespace
     }
 
     // A filter that the program installs for the exceptions that nothing handles, as a crash
-    // reporter does: it says so, then ends the process with an exit code of its own.
+    // reporter does: it prints the code of the exception, then ends the process with an exit code
+    // of its own.
     constexpr UINT kHostFilterExit = 9;
 
-    LONG WINAPI hostFilter(EXCEPTION_POINTERS*)
+    LONG WINAPI hostFilter(EXCEPTION_POINTERS* exception_info)
     {
-        std::fputs("host filter\n", stderr);
+        std::fprintf(stderr, "host filter %lx\n",
+                     static_cast<unsigned long>(exception_info->ExceptionRecord->ExceptionCode));
         std::fflush(stderr);
         TerminateProcess(GetCurrentProcess(), kHostFilterExit);
         return EXCEPTION_CONTINUE_SEARCH;
@@ -1306,7 +1308,8 @@ namespace
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
         EXPECT_EXIT(faultWithTheHostsFilterInstalledBeforeADll(),
-                    testing::ExitedWithCode(static_cast<int>(kHostFilterExit)), "host filter");
+                    testing::ExitedWithCode(static_cast<int>(kHostFilterExit)),
+                    "host filter e0000225");
     }
 
     [[noreturn]] void faultWithTheHostsFilterInstalledAfterADll()
@@ -1324,7 +1327,8 @@ namespace
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
         EXPECT_EXIT(faultWithTheHostsFilterInstalledAfterADll(),
-                    testing::ExitedWithCode(static_cast<int>(kHostFilterExit)), "host filter");
+                    testing::ExitedWithCode(static_cast<int>(kHostFilterExit)),
+                    "host filter e0000225");
     }
 
     // A copy of the DLL that links the runtime, at a path of its own: the loader maps each copy as
