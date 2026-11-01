@@ -745,6 +745,49 @@ namespace
                     testing::ExitedWithCode(0), "");
     }
 
+    // Probe only. Loads `library` and has it map a page through its copy of the runtime and unmap
+    // it. Exits with 0 once unmapped, 2 when the DLL or its function is missing, 3 when the mapping
+    // failed, and 7 when the unmapping has not returned within 20 seconds.
+    [[noreturn]] void mapAndUnmap(const char* library)
+    {
+        std::thread(
+            []
+            {
+                Sleep(20000);
+                TerminateProcess(GetCurrentProcess(), 7);
+            })
+            .detach();
+        HMODULE module = LoadLibraryA(library);
+        if (!module)
+        {
+            std::exit(2);
+        }
+        auto map_and_unmap = reinterpret_cast<int (*)()>(
+            GetProcAddress(module, "ct_allocating_library_map_and_unmap"));
+        if (!map_and_unmap)
+        {
+            std::exit(2);
+        }
+        std::exit(map_and_unmap() == 0 ? 0 : 3);
+    }
+
+    // Probe only, the control: the same DLL without its own operators new and delete.
+    TEST(DllAllocStateDeathTest, ProbeADllThatAllocatesThroughItsCopyUnmapsAPage)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(mapAndUnmap(CT_ALLOCATING_LIBRARY), testing::ExitedWithCode(0), "");
+    }
+
+    // Probe only: __ct_munmap drops the freed record of the page with the table's lock held,
+    // outside a runtime scope. The node it frees comes back to the copy's entry points through the
+    // DLL's operator delete, as through an instrumented DLL (#197).
+    TEST(DllAllocStateDeathTest, ProbeADllWhoseOperatorDeleteFreesThroughItsCopyUnmapsAPage)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(mapAndUnmap(CT_NEW_DELETE_THROUGH_RUNTIME_LIBRARY), testing::ExitedWithCode(0),
+                    "");
+    }
+
     // The line `label` of the first box of `site`, empty without one.
     std::string lineOf(const std::string& boxes, const char* site, const char* label)
     {

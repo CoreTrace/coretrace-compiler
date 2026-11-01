@@ -11,6 +11,9 @@ extern "C" void* __ct_malloc(size_t size, const char* site);
 extern "C" void __ct_free(void* ptr, const char* site);
 extern "C" void __ct_check_bounds(const void* base, const void* ptr, size_t access_size,
                                   const char* site, int is_write);
+extern "C" void* __ct_mmap(void* addr, size_t len, int prot, int flags, int fd, size_t offset,
+                           const char* site);
+extern "C" int __ct_munmap(void* addr, size_t len, const char* site);
 
 extern "C" int __ct_config_disable_alloc_trace = 1;
 
@@ -27,6 +30,17 @@ extern "C" __declspec(dllexport) void ct_allocating_library_churn(int count, siz
         __ct_free(blocks[index], "allocating:block");
     }
     __ct_free(blocks, "allocating:array");
+}
+
+// Probe only: maps a page through the copy of the runtime and unmaps it. 0 once unmapped.
+extern "C" __declspec(dllexport) int ct_allocating_library_map_and_unmap()
+{
+    void* page = __ct_mmap(nullptr, 4096, 0x1 | 0x2, 0, -1, 0, "allocating:map");
+    if (page == reinterpret_cast<void*>(-1))
+    {
+        return 1;
+    }
+    return __ct_munmap(page, 4096, "allocating:unmap");
 }
 
 // A block of `size` bytes allocated through the copy of the runtime, which the DLL never frees.
