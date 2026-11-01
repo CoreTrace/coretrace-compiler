@@ -16,7 +16,10 @@
 // DLL reports the process's crashes while the DLL is loaded. Once it unloads, the handler installed
 // before the copy's reports them again, the executable's or the program's own filter, and a filter
 // installed over the copy's stays, whatever the order in which two such DLLs unload, around a
-// filter of the program or not (#236).
+// filter of the program or not. A DLL that ends the process with exit() leaves its handler in
+// place. A copy hands its filter over even when nothing can be allocated, keeps its handler off a
+// filter whose module it cannot read, and puts back a filter that another thread installs while it
+// puts its own back (#236).
 #include <gtest/gtest.h>
 
 #include <algorithm>
