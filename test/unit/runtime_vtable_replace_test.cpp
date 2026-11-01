@@ -1325,4 +1325,51 @@ namespace
         EXPECT_EXIT(faultWithTheHostsFilterInstalledAfterADll(),
                     testing::ExitedWithCode(static_cast<int>(kHostFilterExit)), "host filter");
     }
+
+    // A copy of the DLL that links the runtime, at a path of its own: the loader maps each copy as
+    // a module apart, with a copy of the runtime of its own.
+    fs::path runtimeLibraryCopyPath(const char* name)
+    {
+        return fs::path(testing::TempDir()) / (std::string("ct_runtime_library_") + name + ".dll");
+    }
+
+    // Loads two copies of the DLL that links the runtime, whose copies of the runtime each install
+    // their handler over the one before, unloads them in load order or in reverse, then faults.
+    // Prints why and exits with 2 when a copy does not load.
+    [[noreturn]] void faultAfterTwoDllsUnloaded(const fs::path& first, const fs::path& second,
+                                                bool in_load_order)
+    {
+        HMODULE libraries[2] = {};
+        const fs::path* paths[2] = {&first, &second};
+        for (int index = 0; index < 2; ++index)
+        {
+            std::error_code error;
+            fs::copy_file(CT_RUNTIME_LIBRARY, *paths[index], fs::copy_options::overwrite_existing,
+                          error);
+            libraries[index] = error ? nullptr : LoadLibraryW(paths[index]->c_str());
+            if (!libraries[index])
+            {
+                std::fprintf(stderr, "copy %d of the runtime library did not load\n", index + 1);
+                std::exit(2);
+            }
+        }
+        FreeLibrary(libraries[in_load_order ? 0 : 1]);
+        FreeLibrary(libraries[in_load_order ? 1 : 0]);
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // The second copy's handler was installed over the first's: unloaded first, it leaves the
+    // first copy's handler, which leaves the executable's (#236).
+    TEST(BacktraceReplaceDeathTest, OnceTwoDllsUnloadInReverseOrderTheExecutableReportsCrashes)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        const fs::path first = runtimeLibraryCopyPath("reverse_1");
+        const fs::path second = runtimeLibraryCopyPath("reverse_2");
+        EXPECT_EXIT(faultAfterTwoDllsUnloaded(first, second, false), endedByTheFault(),
+                    crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
+        std::error_code ignored;
+        fs::remove(first, ignored);
+        fs::remove(second, ignored);
+    }
 } // namespace
