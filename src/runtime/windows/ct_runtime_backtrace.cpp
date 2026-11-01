@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <iterator>
 
 #ifndef NOMINMAX
@@ -107,15 +108,55 @@ namespace
     };
 
     constexpr std::uint64_t kCrashHandlerMagic = 0x0168736172637463;
+    constexpr char kCrashHandlerSection[IMAGE_SIZEOF_SHORT_NAME] = {'.', 'c', 't', 'c',
+                                                                    'r', 'a', 's', 'h'};
 
     __declspec(allocate(".ctcrash")) constinit CtCrashHandlerRecord ct_crash_handler_record{
         kCrashHandlerMagic, &ct_exception_filter, nullptr};
 
+    // The record of the copy of the runtime whose crash handler `filter` is, or null for any other
+    // filter: one of the program's, or that of a copy that keeps no record. Reads the headers of
+    // the module that holds `filter`, which the loader maps with the image, and the section of the
+    // record, which a copy keeps readable. Called with the loader lock held, as FreeLibrary holds
+    // it while the DLL detaches, so that no module unloads meanwhile.
+    CT_NOINSTR CtCrashHandlerRecord* ct_crash_handler_record_of(LPTOP_LEVEL_EXCEPTION_FILTER filter)
+    {
+        HMODULE module = nullptr;
+        if (!filter || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                           reinterpret_cast<LPCWSTR>(filter), &module))
+        {
+            return nullptr;
+        }
+        auto* image = reinterpret_cast<unsigned char*>(module);
+        const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+            image + reinterpret_cast<const IMAGE_DOS_HEADER*>(image)->e_lfanew);
+        const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(headers);
+        for (WORD index = 0; index < headers->FileHeader.NumberOfSections; ++index, ++section)
+        {
+            if (std::memcmp(section->Name, kCrashHandlerSection, sizeof(section->Name)) != 0)
+            {
+                continue;
+            }
+            if ((section->Characteristics & IMAGE_SCN_MEM_READ) == 0 ||
+                section->Misc.VirtualSize < sizeof(CtCrashHandlerRecord))
+            {
+                return nullptr;
+            }
+            auto* record = reinterpret_cast<CtCrashHandlerRecord*>(image + section->VirtualAddress);
+            return record->magic == kCrashHandlerMagic && record->handler == filter ? record
+                                                                                    : nullptr;
+        }
+        return nullptr;
+    }
+
     // Puts back the filter that this copy's handler went over when FreeLibrary unloads the DLL that
-    // holds the copy, if the handler is still the process's: a filter installed over it since
-    // stays. Windows has no call that reads the process's filter without setting one: a filter
-    // that another thread installs between the two calls below is replaced. Nothing changes when
-    // the process terminates: the DLL stays mapped until then.
+    // holds the copy, if the handler is still the process's. A filter installed over it since stays:
+    // the program's, or the handler of another DLL's copy, which gets the filter put back instead,
+    // so as not to put back a handler whose code is gone when it unloads in turn. Windows has no
+    // call that reads the process's filter without setting one: a filter that another thread
+    // installs between the two calls below is replaced. Nothing changes when the process
+    // terminates: the DLL stays mapped until then.
     struct CtCrashHandlerRelease
     {
         // User-provided, so that the object is initialized dynamically, in this file's
@@ -134,9 +175,23 @@ namespace
             const LPTOP_LEVEL_EXCEPTION_FILTER replaced =
                 record.replaced.load(std::memory_order_acquire);
             const LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(replaced);
-            if (current != record.handler)
+            if (current == record.handler)
             {
-                SetUnhandledExceptionFilter(current);
+                return;
+            }
+            SetUnhandledExceptionFilter(current);
+            // Each record holds a filter installed before the handler it describes: the walk goes
+            // back in time, from the process's filter, and ends at the first one that is not the
+            // handler of a copy that keeps a record.
+            for (CtCrashHandlerRecord* above = ct_crash_handler_record_of(current); above;)
+            {
+                LPTOP_LEVEL_EXCEPTION_FILTER below = record.handler;
+                if (above->replaced.compare_exchange_strong(below, replaced,
+                                                            std::memory_order_acq_rel))
+                {
+                    return;
+                }
+                above = ct_crash_handler_record_of(below);
             }
         }
     };
