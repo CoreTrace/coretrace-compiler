@@ -14,9 +14,13 @@
 
 #pragma comment(lib, "Dbghelp.lib")
 
+// Probe of #236: the restore below runs after the DLL's own destructors.
+#pragma init_seg(lib)
+
 namespace
 {
     std::atomic<int> ct_backtrace_installed{0};
+    LPTOP_LEVEL_EXCEPTION_FILTER ct_previous_filter = nullptr;
 
     // Runs inside the unhandled-exception filter, like the POSIX signal handler: only the
     // lock-free writers, and a symbol name only from a session, which the caller passes with the
@@ -80,6 +84,27 @@ namespace
 
         return EXCEPTION_EXECUTE_HANDLER;
     }
+
+    // Probe of #236: restores the filter replaced at installation when FreeLibrary unloads the
+    // DLL, if this copy's is still the current one.
+    struct CtCrashFilterRestore
+    {
+        CT_NOINSTR CtCrashFilterRestore() {}
+        CT_NOINSTR ~CtCrashFilterRestore()
+        {
+            if (!ct_backtrace_installed.load() || !ct_dll_unloading_dynamically())
+            {
+                return;
+            }
+            LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(ct_previous_filter);
+            if (current != &ct_exception_filter)
+            {
+                SetUnhandledExceptionFilter(current);
+            }
+        }
+    };
+
+    CtCrashFilterRestore ct_crash_filter_restore;
 } // namespace
 
 CT_NOINSTR void ct_maybe_install_backtrace(void)
@@ -107,7 +132,7 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
             (void)ct_dbghelp_sync_modules_locked(process);
         }
     }
-    SetUnhandledExceptionFilter(ct_exception_filter);
+    ct_previous_filter = SetUnhandledExceptionFilter(ct_exception_filter);
 
     ct_write_prefix(CTLevel::Info);
     ct_write_cstr("ct: backtrace handler installed\n");
