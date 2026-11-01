@@ -4,7 +4,8 @@
 // while the module detaches: the leak report of a DLL's copy, and the release of its DbgHelp
 // session and of its names. That code cannot tell from lpvReserved: only DllMain receives it
 // non-null at process termination, the TLS callbacks receive it null then too (#226, #232).
-// ct_dll_unloading_dynamically tells whether that code frees what the copy holds.
+// ct_dll_unloading_dynamically tells whether that code frees what the copy holds, and
+// ct_loader_detaching_module whether the loader runs it, rather than a DLL's own exit() (#236).
 #include "ct_runtime_internal.h"
 
 #include <atomic>
@@ -21,6 +22,10 @@ namespace
     using CtShutdownInProgress = BOOLEAN(NTAPI*)();
     std::atomic<CtShutdownInProgress> ct_shutdown_in_progress{nullptr};
 
+    // Set when the loader detaches the module: its TLS callbacks receive DLL_PROCESS_DETACH before
+    // its entry point, from which the C runtime runs the module's destructors (#232).
+    std::atomic<bool> ct_loader_detaching{false};
+
     CT_NOINSTR void NTAPI ct_shutdown_tls(PVOID, DWORD reason, PVOID)
     {
         if (reason == DLL_PROCESS_ATTACH)
@@ -29,6 +34,10 @@ namespace
                 reinterpret_cast<CtShutdownInProgress>(
                     GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlDllShutdownInProgress")),
                 std::memory_order_release);
+        }
+        else if (reason == DLL_PROCESS_DETACH)
+        {
+            ct_loader_detaching.store(true, std::memory_order_release);
         }
     }
 } // namespace
@@ -49,6 +58,11 @@ CT_NODISCARD CT_NOINSTR bool ct_dll_unloading_dynamically(void)
 {
     return reinterpret_cast<HMODULE>(&__ImageBase) != GetModuleHandleW(nullptr) &&
            ct_process_shutdown() == CtProcessShutdown::NotInProgress;
+}
+
+CT_NODISCARD CT_NOINSTR bool ct_loader_detaching_module(void)
+{
+    return ct_loader_detaching.load(std::memory_order_acquire);
 }
 
 // The TLS callback that looks RtlDllShutdownInProgress up, in the file of ct_process_shutdown, so

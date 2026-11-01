@@ -163,8 +163,7 @@ namespace
     // of copies loaded since, a filter it had read earlier. A filter of the program installed over
     // such a copy's handler hides it from the process's filter: the copies are looked for among
     // the modules that the loader lists, in a block of the process's heap, which DllMain may
-    // allocate. FreeLibrary holds the loader lock meanwhile, so that no thread unloads one; a DLL
-    // that calls exit() runs this without it, and reads only what it finds readable.
+    // allocate. FreeLibrary holds the loader lock meanwhile, so that no thread unloads one.
     CT_NOINSTR void ct_crash_handler_hand_over(LPTOP_LEVEL_EXCEPTION_FILTER replaced)
     {
         const HANDLE process = GetCurrentProcess();
@@ -201,7 +200,8 @@ namespace
     // stays. The copies whose handlers went over this one's get that filter instead. Windows has no
     // call that reads the process's filter without setting one: a filter that another thread
     // installs between the two calls below is replaced. Nothing changes when the process
-    // terminates: the DLL stays mapped until then.
+    // terminates, nor while a DLL's own exit() runs this destructor, before the loader detaches the
+    // DLL and without the loader lock: the DLL stays mapped until the process ends.
     struct CtCrashHandlerRelease
     {
         // User-provided, so that the object is initialized dynamically, in this file's
@@ -212,7 +212,7 @@ namespace
         CT_NOINSTR ~CtCrashHandlerRelease()
         {
             if (ct_backtrace_installed.load(std::memory_order_acquire) == 0 ||
-                !ct_dll_unloading_dynamically())
+                !ct_dll_unloading_dynamically() || !ct_loader_detaching_module())
             {
                 return;
             }
