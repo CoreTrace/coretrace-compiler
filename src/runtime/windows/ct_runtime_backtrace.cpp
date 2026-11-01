@@ -8,6 +8,7 @@
 #include "ct_runtime_helpers.h"
 
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
 #include <iterator>
 
@@ -24,11 +25,12 @@
 // handler still reports.
 #pragma init_seg(lib)
 
+// The section of the record below, in the module that holds this copy of the runtime.
+#pragma section(".ctcrash", read, write)
+
 namespace
 {
     std::atomic<int> ct_backtrace_installed{0};
-    // The filter that this copy's handler went over when the copy installed it.
-    std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> ct_replaced_filter{nullptr};
 
     // Runs inside the unhandled-exception filter, like the POSIX signal handler: only the
     // lock-free writers, and a symbol name only from a session, which the caller passes with the
@@ -93,6 +95,22 @@ namespace
         return EXCEPTION_EXECUTE_HANDLER;
     }
 
+    // What a copy of the runtime tells the other copies in the process of its crash handler: the
+    // filter that the handler went over when the copy installed it. A copy finds another one's
+    // record from the address of its handler alone, in the section .ctcrash of the module that
+    // holds the handler. The magic number reads "ctcrash", then the version of the layout.
+    struct CtCrashHandlerRecord
+    {
+        std::uint64_t magic;
+        LPTOP_LEVEL_EXCEPTION_FILTER handler;
+        std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> replaced;
+    };
+
+    constexpr std::uint64_t kCrashHandlerMagic = 0x0168736172637463;
+
+    __declspec(allocate(".ctcrash")) constinit CtCrashHandlerRecord ct_crash_handler_record{
+        kCrashHandlerMagic, &ct_exception_filter, nullptr};
+
     // Puts back the filter that this copy's handler went over when FreeLibrary unloads the DLL that
     // holds the copy, if the handler is still the process's: a filter installed over it since
     // stays. Windows has no call that reads the process's filter without setting one: a filter
@@ -112,10 +130,11 @@ namespace
             {
                 return;
             }
+            CtCrashHandlerRecord& record = ct_crash_handler_record;
             const LPTOP_LEVEL_EXCEPTION_FILTER replaced =
-                ct_replaced_filter.load(std::memory_order_acquire);
+                record.replaced.load(std::memory_order_acquire);
             const LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(replaced);
-            if (current != &ct_exception_filter)
+            if (current != record.handler)
             {
                 SetUnhandledExceptionFilter(current);
             }
@@ -150,8 +169,8 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
             (void)ct_dbghelp_sync_modules_locked(process);
         }
     }
-    ct_replaced_filter.store(SetUnhandledExceptionFilter(&ct_exception_filter),
-                             std::memory_order_release);
+    ct_crash_handler_record.replaced.store(SetUnhandledExceptionFilter(&ct_exception_filter),
+                                           std::memory_order_release);
 
     ct_write_prefix(CTLevel::Info);
     ct_write_cstr("ct: backtrace handler installed\n");
