@@ -718,6 +718,15 @@ namespace
                     testing::ExitedWithCode(0), "");
     }
 
+    // Code of the DLL that runs after its copy's terminator, a terminator of a library that the DLL
+    // links for instance, and allocates and frees through the copy, finds a table: the copy builds
+    // a new one, which stays allocated (#227).
+    TEST(DllAllocStateDeathTest, ADllThatAllocatesAfterItsCopyFreedItsStateUnloads)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(churnAndUnload(CT_ALLOCATING_LIBRARY, 4), testing::ExitedWithCode(0), "");
+    }
+
     // The line `label` of the first box of `site`, empty without one.
     std::string lineOf(const std::string& boxes, const char* site, const char* label)
     {
