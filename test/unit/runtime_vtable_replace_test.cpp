@@ -714,7 +714,7 @@ namespace
     TEST(DllAllocStateDeathTest, ADllWhoseOperatorDeleteFreesThroughItsCopyUnloads)
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
-        EXPECT_EXIT(churnAndUnload(CT_DELETE_THROUGH_RUNTIME_LIBRARY, 0),
+        EXPECT_EXIT(churnAndUnload(CT_NEW_DELETE_THROUGH_RUNTIME_LIBRARY, 0),
                     testing::ExitedWithCode(0), "");
     }
 
