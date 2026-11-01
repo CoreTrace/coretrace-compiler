@@ -1371,10 +1371,17 @@ namespace
     // Frees what this copy of the runtime holds for the blocks of its DLL when FreeLibrary unloads
     // the DLL, from the terminator below: the blocks in its quarantine, which the program had
     // released, the quarantine's queue, what its block index grew into, and its allocation table.
-    // The DLL's code has all run by then: its atexit handlers, the destructors of its global
-    // objects, its destructor functions and its own terminators. Only the C runtime's teardown
-    // comes after, which calls no function of the runtime. The blocks that the DLL still holds stay
-    // allocated, without their records (#227).
+    // The DLL's atexit handlers, the destructors of its global objects, its destructor functions
+    // and the terminators of its code, in .CRT$XTU, have run by then. The terminators of later
+    // sections, which a library that the DLL links may add, run after it, then the C runtime's
+    // teardown, which calls no function of the runtime. Code there that goes through the copy
+    // finds a new table (ct_alloc_table), and what that code leaves stays allocated once the DLL
+    // is gone: the new table, a record for each block it allocated and still holds, buckets for
+    // the most blocks it held at once and, when it held more than the 4096 that the block index
+    // holds in the module's image, the storage the index grew into. A block that code releases
+    // leaves no record: the quarantine's limit stays 0, so the block goes to the allocator at once
+    // (ct_quarantine_release_all). The blocks that the DLL still holds stay allocated, without
+    // their records (#227).
     CT_NOINSTR void ct_release_alloc_state()
     {
         // The table and the quarantine release blocks with ct_alloc_lock held, which may reach the
