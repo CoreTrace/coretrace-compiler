@@ -1490,23 +1490,53 @@ namespace
                     crashBacktraceFrom("handler:2 "));
     }
 
+    // The page that a test made unreadable, and whether an access violation in it has been raised
+    // since, handled or not: a vectored handler sees every exception before any other handler.
+    std::atomic<ULONG_PTR> unreadable_page{0};
+    std::atomic<ULONG_PTR> unreadable_page_size{0};
+    std::atomic<bool> unreadable_page_read{false};
+
+    LONG CALLBACK watchTheUnreadablePage(EXCEPTION_POINTERS* exception_info)
+    {
+        const EXCEPTION_RECORD* exception = exception_info->ExceptionRecord;
+        if (exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+            exception->NumberParameters >= 2 &&
+            exception->ExceptionInformation[1] - unreadable_page.load() <
+                unreadable_page_size.load())
+        {
+            unreadable_page_read.store(true);
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
     // Loads a DLL without the runtime and the DLL that links it, installs the host's filter over the
     // copy's handler, then makes the page of the other DLL's headers unreadable, as a packer or an
     // anti-tamper check can. Unloads the DLL that links the runtime on a thread of its own, where
     // nothing but the host's filter would catch a fault, then faults. Prints why and exits with 2
-    // when the page stays readable.
+    // when the page stays readable, with 4 when the unload read it, whoever handled the fault.
     [[noreturn]] void faultAfterUnloadingPastUnreadableHeaders()
     {
         HMODULE other = LoadLibraryA(CT_RELOAD_LIBRARY_A);
         HMODULE runtime = loadRuntimeLibrary();
         SetUnhandledExceptionFilter(&hostFilter);
+        SYSTEM_INFO system = {};
+        GetSystemInfo(&system);
+        unreadable_page_size.store(system.dwPageSize);
+        unreadable_page.store(reinterpret_cast<ULONG_PTR>(other));
         DWORD protection = 0;
         if (!other || !VirtualProtect(other, 1, PAGE_NOACCESS, &protection))
         {
             std::fprintf(stderr, "the headers of the other library stayed readable\n");
             std::exit(2);
         }
+        PVOID watch = AddVectoredExceptionHandler(1, &watchTheUnreadablePage);
         std::thread(unloadRuntimeLibrary, runtime).join();
+        RemoveVectoredExceptionHandler(watch);
+        if (unreadable_page_read.load())
+        {
+            std::fprintf(stderr, "the unload read the unreadable headers\n");
+            std::exit(4);
+        }
         faultOnAThread(&raiseUnhandledException);
     }
 
