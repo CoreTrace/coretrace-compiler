@@ -284,6 +284,38 @@ runtime as follows:
   have unloaded. Once that copy has stopped following the loader, when the module that holds it
   detaches, the handler prints every frame bare.
 
+## Crash handler on Windows
+
+With `CT_BACKTRACE` set, each copy of the runtime, the executable's and that of each DLL that links
+the runtime, installs its crash handler for the whole process with `SetUnhandledExceptionFilter`
+when its module initializes, over the filter installed before it: the handler of another copy, or a
+filter of the program. When `FreeLibrary` unloads a DLL, its copy puts that filter back if its
+handler is still the process's. A filter installed over the handler since stays:
+
+- a filter of the program stays the process's. Once the DLL is unloaded, it must not call the
+  handler it replaced, whose code is gone;
+- the handler of another DLL's copy gets the filter that the unloaded copy had replaced, and puts it
+  back when its own DLL unloads.
+
+Each copy keeps the filter it replaced in a section `.ctcrash` of its module. A DLL's copy links
+that record to the one of the copy whose handler it replaced when it installs its own, so that
+`FreeLibrary` hands the filter over without allocating anything or listing the modules. When the
+copy cannot read the headers of the module that holds the filter in place, as a packer or an
+anti-tamper check can leave them, it cannot tell whether that filter is another copy's handler: it
+leaves its own handler out then, and says so.
+
+Windows has no call that reads the process's filter without setting one. The copy that unloads
+finds out by setting the filter it replaced, and puts back at once the filter that this call
+returns when that is not its handler. A filter that another thread installs between two of those
+calls is put back in turn. That thread got from `SetUnhandledExceptionFilter`, as the filter it
+replaced, the one that the copy had set for that moment.
+
+Nothing changes when the process terminates, nor when a DLL ends the process with its own C
+runtime's `exit()`, which runs the DLL's exit-time code before the loader detaches it, nor in the
+executable's copy. Before Windows 10, a DLL's copy cannot tell `FreeLibrary` apart from the
+process's termination: it puts nothing back, and links its record to none, so that its handler
+stays the process's filter once `FreeLibrary` has unloaded the DLL (#236).
+
 ## LLVM versions
 
 CoreTrace Compiler builds and instruments with LLVM 16 to 23. Most behaviour is the same on

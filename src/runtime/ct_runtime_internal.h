@@ -461,6 +461,12 @@ CT_NODISCARD CT_NOINSTR CtProcessShutdown ct_process_shutdown(void);
 // its C runtime runs that code before the loader reports the termination, so its copy frees what
 // it holds then too.
 CT_NODISCARD CT_NOINSTR bool ct_dll_unloading_dynamically(void);
+
+// Whether the loader has started to detach the module that holds this copy of the runtime, as when
+// FreeLibrary unloads a DLL, with the loader lock held. False while a DLL's own exit() runs the
+// destructors that the C runtime otherwise runs from the loader's detach, before the loader
+// detaches the DLL and without its lock (#236).
+CT_NODISCARD CT_NOINSTR bool ct_loader_detaching_module(void);
 #endif
 
 CT_NOINSTR void ct_log_alloc_details(const char* label, const char* status, size_t req_size,

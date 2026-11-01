@@ -78,6 +78,10 @@ CT_NODISCARD bool ct_dbghelp_sync_modules_locked(HANDLE process);
 // held.
 CT_NODISCARD bool ct_dbghelp_module_current_locked(HANDLE process, DWORD64 address);
 
+// Whether the `size` bytes at `addr` are committed memory of a single region, neither inaccessible
+// nor a guard page (windows/ct_runtime_vtable.cpp).
+CT_NODISCARD bool ct_is_readable(const void* addr, size_t size);
+
 // UnDecorateSymbolName, with the DbgHelp lock: Unavailable when the lock was not free in time.
 inline CtDemangleOutcome ct_demangle_outcome(const char* name, std::string& out)
 {

@@ -12,7 +12,13 @@
 // one forever. The crash handler's backtraces, which name frames through the same session, name
 // none after a DLL unloaded since (#225). The copy in a DLL frees the names it decoded when the DLL
 // unloads: the DLL keeps no heap block at each load, as one without the runtime. The boxes of the
-// DLL's destructors still name types then, as they do when the process exits (#227).
+// DLL's destructors still name types then, as they do when the process exits (#227). The copy in a
+// DLL reports the process's crashes while the DLL is loaded. Once it unloads, the handler installed
+// before the copy's reports them again, the executable's or the program's own filter, and a filter
+// installed over the copy's stays, whatever the order in which two such DLLs unload, around a
+// filter of the program or not. A DLL that ends the process with exit() leaves its handler in
+// place. A copy hands its filter over even when nothing can be allocated, and puts back a filter
+// that another thread installs while it puts its own back (#236).
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -1227,5 +1233,566 @@ namespace
         BacktraceInChildren backtrace;
         EXPECT_EXIT(faultAfterManyUnloads(), endedByTheFault(),
                     crashBacktrace(Backtrace::NamesTheExecutableOnly));
+    }
+
+    // Loads the DLL that links the runtime, whose copy installs its handler over the executable's.
+    // Prints why and exits with 2 when it does not load.
+    HMODULE loadRuntimeLibrary()
+    {
+        HMODULE runtime = LoadLibraryA(CT_RUNTIME_LIBRARY);
+        if (!runtime)
+        {
+            std::fprintf(stderr, "the runtime library did not load\n");
+            std::exit(2);
+        }
+        return runtime;
+    }
+
+    // Whether a module that FreeLibrary freed is still mapped: the loader unmaps it once nothing
+    // holds it.
+    bool stillMapped(HMODULE module)
+    {
+        MEMORY_BASIC_INFORMATION region = {};
+        return VirtualQuery(module, &region, sizeof(region)) != 0 && region.State != MEM_FREE;
+    }
+
+    // Frees a DLL that links the runtime. Prints why and exits with 2 when the DLL stays mapped:
+    // its copy's handler would still have its code.
+    void unloadRuntimeLibrary(HMODULE module)
+    {
+        FreeLibrary(module);
+        if (stillMapped(module))
+        {
+            std::fprintf(stderr, "a runtime library stayed mapped\n");
+            std::exit(2);
+        }
+    }
+
+    // A crash backtrace that names RaiseException, printed by the handler of the module whose image
+    // the child printed after `mark`: the first frame, which the handler takes in itself, lies in
+    // that image.
+    class CrashBacktraceFrom : public testing::MatcherInterface<const std::string&>
+    {
+      public:
+        explicit CrashBacktraceFrom(const char* mark) : mark_(mark) {}
+
+        bool MatchAndExplain(const std::string& output,
+                             testing::MatchResultListener* listener) const override
+        {
+            if (!CrashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong)
+                     .MatchAndExplain(output, listener))
+            {
+                return false;
+            }
+            if (!imageAfter(output, mark_).holds(crashFramesOf(output).front().address))
+            {
+                *listener << "the first frame is not in the image after " << mark_;
+                return false;
+            }
+            return true;
+        }
+
+        void DescribeTo(std::ostream* os) const override
+        {
+            *os << "is a crash backtrace that names RaiseException, printed by the handler in the "
+                   "image after "
+                << mark_;
+        }
+
+      private:
+        const char* mark_;
+    };
+
+    testing::Matcher<const std::string&> crashBacktraceFrom(const char* mark)
+    {
+        return testing::MakeMatcher(new CrashBacktraceFrom(mark));
+    }
+
+    // Removes the executable's handler, as for a program that does not link the runtime, loads the
+    // DLL that links it, then faults.
+    [[noreturn]] void faultWhileADllThatLinksTheRuntimeIsLoaded()
+    {
+        SetUnhandledExceptionFilter(nullptr);
+        printImage("handler:2", loadRuntimeLibrary());
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // While the DLL is loaded, its copy's handler reports the crashes of the process (#236).
+    TEST(BacktraceReplaceDeathTest, ADllThatLinksTheRuntimeReportsTheCrashesWhileItIsLoaded)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultWhileADllThatLinksTheRuntimeIsLoaded(), endedByTheFault(),
+                    crashBacktraceFrom("handler:2 "));
+    }
+
+    [[noreturn]] void faultAfterADllThatLinksTheRuntimeUnloaded()
+    {
+        unloadRuntimeLibrary(loadRuntimeLibrary());
+        printImage("handler:2", GetModuleHandleW(nullptr));
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // Once FreeLibrary has unloaded the DLL, whose code is gone, the executable's handler reports
+    // the crash (#236).
+    TEST(BacktraceReplaceDeathTest, OnceADllThatLinksTheRuntimeUnloadsTheExecutableReportsCrashes)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultAfterADllThatLinksTheRuntimeUnloaded(), endedByTheFault(),
+                    crashBacktraceFrom("handler:2 "));
+    }
+
+    // A filter that the program installs for the exceptions that nothing handles, as a crash
+    // reporter does: it prints the code of the exception, then ends the process with an exit code
+    // of its own.
+    constexpr UINT kHostFilterExit = 9;
+
+    LONG WINAPI hostFilter(EXCEPTION_POINTERS* exception_info)
+    {
+        std::fprintf(stderr, "host filter %lx\n",
+                     static_cast<unsigned long>(exception_info->ExceptionRecord->ExceptionCode));
+        std::fflush(stderr);
+        TerminateProcess(GetCurrentProcess(), kHostFilterExit);
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    [[noreturn]] void faultWithTheHostsFilterInstalledBeforeADll()
+    {
+        SetUnhandledExceptionFilter(&hostFilter);
+        unloadRuntimeLibrary(loadRuntimeLibrary());
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // The filter that the program installed before the DLL's copy installed its handler is back
+    // once FreeLibrary has unloaded the DLL (#236).
+    TEST(BacktraceReplaceDeathTest, TheHostsFilterInstalledBeforeADllIsBackOnceItUnloads)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultWithTheHostsFilterInstalledBeforeADll(),
+                    testing::ExitedWithCode(static_cast<int>(kHostFilterExit)),
+                    "host filter e0000225");
+    }
+
+    [[noreturn]] void faultWithTheHostsFilterInstalledAfterADll()
+    {
+        HMODULE runtime = loadRuntimeLibrary();
+        SetUnhandledExceptionFilter(&hostFilter);
+        unloadRuntimeLibrary(runtime);
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // Unloading the DLL leaves the filter that the program installed over its copy's handler
+    // (#236).
+    TEST(BacktraceReplaceDeathTest, ADllUnloadedLeavesTheHostsFilterInstalledAfterIt)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultWithTheHostsFilterInstalledAfterADll(),
+                    testing::ExitedWithCode(static_cast<int>(kHostFilterExit)),
+                    "host filter e0000225");
+    }
+
+    // A copy of a DLL that links the runtime, by default the one of reload/ct_runtime_library.cpp,
+    // at a path of the child's own: the loader maps each copy as a module apart, with a copy of the
+    // runtime of its own. Prints why and exits with 2 when it does not load.
+    class RuntimeLibraryCopy
+    {
+      public:
+        explicit RuntimeLibraryCopy(const char* name, const char* source = CT_RUNTIME_LIBRARY)
+            : path_(fs::path(testing::TempDir()) /
+                    (fs::path(source).stem().string() + "_" + name + "_" +
+                     std::to_string(GetCurrentProcessId()) + ".dll"))
+        {
+            std::error_code error;
+            fs::copy_file(source, path_, fs::copy_options::overwrite_existing, error);
+            module_ = error ? nullptr : LoadLibraryW(path_.c_str());
+            if (!module_)
+            {
+                std::fprintf(stderr, "%s did not load\n", path_.string().c_str());
+                std::exit(2);
+            }
+        }
+        RuntimeLibraryCopy(const RuntimeLibraryCopy&) = delete;
+        RuntimeLibraryCopy& operator=(const RuntimeLibraryCopy&) = delete;
+
+        HMODULE module() const
+        {
+            return module_;
+        }
+
+        // Unloads the copy, then deletes its file.
+        void unload()
+        {
+            unloadRuntimeLibrary(module_);
+            std::error_code ignored;
+            fs::remove(path_, ignored);
+        }
+
+      private:
+        fs::path path_;
+        HMODULE module_ = nullptr;
+    };
+
+    // Loads two copies of the DLL that links the runtime, whose copies of the runtime each install
+    // their handler over the one before, unloads them in load order or in reverse, then faults.
+    [[noreturn]] void faultAfterTwoDllsUnloaded(bool in_load_order)
+    {
+        RuntimeLibraryCopy first("first");
+        RuntimeLibraryCopy second("second");
+        (in_load_order ? first : second).unload();
+        (in_load_order ? second : first).unload();
+        printImage("handler:2", GetModuleHandleW(nullptr));
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // The second copy's handler was installed over the first's: unloaded first, it leaves the
+    // first copy's handler, which leaves the executable's (#236).
+    TEST(BacktraceReplaceDeathTest, OnceTwoDllsUnloadInReverseOrderTheExecutableReportsCrashes)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultAfterTwoDllsUnloaded(false), endedByTheFault(),
+                    crashBacktraceFrom("handler:2 "));
+    }
+
+    // The first copy unloads while the second's handler, installed over its own, is still there:
+    // once the second copy unloads too, the executable's handler reports the crash, not the first
+    // copy's, whose code is gone (#236).
+    TEST(BacktraceReplaceDeathTest, OnceTwoDllsUnloadInLoadOrderTheExecutableReportsCrashes)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultAfterTwoDllsUnloaded(true), endedByTheFault(),
+                    crashBacktraceFrom("handler:2 "));
+    }
+
+    // Loads two copies of the DLL that links the runtime. Then, as a scope of the program does,
+    // installs the host's filter over the second copy's handler, and puts that handler back
+    // afterwards: the first copy unloads meanwhile. Then the second copy unloads, and the child
+    // faults.
+    [[noreturn]] void faultAfterTwoDllsUnloadedAroundTheHostsFilter()
+    {
+        RuntimeLibraryCopy first("first");
+        RuntimeLibraryCopy second("second");
+        const LPTOP_LEVEL_EXCEPTION_FILTER second_handler =
+            SetUnhandledExceptionFilter(&hostFilter);
+        first.unload();
+        SetUnhandledExceptionFilter(second_handler);
+        second.unload();
+        printImage("handler:2", GetModuleHandleW(nullptr));
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // The second copy's handler went over the first's, and the host's filter was over it when the
+    // first copy unloaded. Once the host has put the second copy's handler back and that copy has
+    // unloaded too, the executable's handler reports the crash, not the first copy's, whose code
+    // is gone (#236).
+    TEST(BacktraceReplaceDeathTest, TwoDllsUnloadedAroundTheHostsFilterLeaveTheExecutablesHandler)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultAfterTwoDllsUnloadedAroundTheHostsFilter(), endedByTheFault(),
+                    crashBacktraceFrom("handler:2 "));
+    }
+
+    // The page that a test made unreadable, and whether an access violation in it has been raised
+    // since, handled or not: a vectored handler sees every exception before any other handler.
+    std::atomic<ULONG_PTR> unreadable_page{0};
+    std::atomic<ULONG_PTR> unreadable_page_size{0};
+    std::atomic<bool> unreadable_page_read{false};
+
+    LONG CALLBACK watchTheUnreadablePage(EXCEPTION_POINTERS* exception_info)
+    {
+        const EXCEPTION_RECORD* exception = exception_info->ExceptionRecord;
+        if (exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+            exception->NumberParameters >= 2 &&
+            exception->ExceptionInformation[1] - unreadable_page.load() <
+                unreadable_page_size.load())
+        {
+            unreadable_page_read.store(true);
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    // Loads a DLL without the runtime and the DLL that links it, installs the host's filter over the
+    // copy's handler, then makes the page of the other DLL's headers unreadable, as a packer or an
+    // anti-tamper check can. Unloads the DLL that links the runtime on a thread of its own, where
+    // nothing but the host's filter would catch a fault, then faults. Prints why and exits with 2
+    // when the page stays readable, with 4 when the unload read it, whoever handled the fault.
+    [[noreturn]] void faultAfterUnloadingPastUnreadableHeaders()
+    {
+        HMODULE other = LoadLibraryA(CT_RELOAD_LIBRARY_A);
+        HMODULE runtime = loadRuntimeLibrary();
+        SetUnhandledExceptionFilter(&hostFilter);
+        SYSTEM_INFO system = {};
+        GetSystemInfo(&system);
+        unreadable_page_size.store(system.dwPageSize);
+        unreadable_page.store(reinterpret_cast<ULONG_PTR>(other));
+        DWORD protection = 0;
+        if (!other || !VirtualProtect(other, 1, PAGE_NOACCESS, &protection))
+        {
+            std::fprintf(stderr, "the headers of the other library stayed readable\n");
+            std::exit(2);
+        }
+        PVOID watch = AddVectoredExceptionHandler(1, &watchTheUnreadablePage);
+        std::thread(unloadRuntimeLibrary, runtime).join();
+        RemoveVectoredExceptionHandler(watch);
+        if (unreadable_page_read.load())
+        {
+            std::fprintf(stderr, "the unload read the unreadable headers\n");
+            std::exit(4);
+        }
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // The copy, whose handler is no longer the process's, looks through the modules for the copy
+    // whose handler went over its own: it skips one whose headers it cannot read, rather than fault
+    // while FreeLibrary unloads its DLL, and the host's filter gets the fault's exception (#236).
+    TEST(BacktraceReplaceDeathTest, ADllUnloadsPastAModuleWhoseHeadersAreUnreadable)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultAfterUnloadingPastUnreadableHeaders(),
+                    testing::ExitedWithCode(static_cast<int>(kHostFilterExit)),
+                    "host filter e0000225");
+    }
+
+    // The process's filter, read the only way Windows allows: by setting another one, then putting
+    // it back.
+    LPTOP_LEVEL_EXCEPTION_FILTER currentFilter()
+    {
+        const LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(&hostFilter);
+        SetUnhandledExceptionFilter(current);
+        return current;
+    }
+
+    // Loads a copy of the DLL that links the runtime, then a second one. The program puts the first
+    // copy's handler back over the second's, as one that restores a filter it read earlier does,
+    // and a third copy loads: the handlers of the second and the third copies both went over the
+    // first one's. The first copy unloads, then the third, then the second, once the program has
+    // put its handler back too. Exits with 3 when the process's filter is not then the one that
+    // the first copy's handler went over, with 0 otherwise.
+    [[noreturn]] void unloadTwoCopiesThatReplacedOneHandler()
+    {
+        const LPTOP_LEVEL_EXCEPTION_FILTER executable = currentFilter();
+        RuntimeLibraryCopy first("first");
+        const LPTOP_LEVEL_EXCEPTION_FILTER first_handler = currentFilter();
+        RuntimeLibraryCopy second("second");
+        const LPTOP_LEVEL_EXCEPTION_FILTER second_handler = currentFilter();
+        SetUnhandledExceptionFilter(first_handler);
+        RuntimeLibraryCopy third("third");
+        first.unload();
+        third.unload();
+        const bool after_the_third = currentFilter() == executable;
+        SetUnhandledExceptionFilter(second_handler);
+        second.unload();
+        if (!after_the_third || currentFilter() != executable)
+        {
+            std::fprintf(stderr, "a copy put back the handler of the first, unloaded\n");
+            std::exit(3);
+        }
+        std::exit(0);
+    }
+
+    // Every copy whose handler went over the handler of a copy that unloads gets the filter that
+    // the latter went over, whatever the order in which the loader lists their modules (#236).
+    TEST(BacktraceReplaceDeathTest, TwoCopiesThatReplacedOneHandlerGetWhatItReplaced)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(unloadTwoCopiesThatReplacedOneHandler(), testing::ExitedWithCode(0), "");
+    }
+
+    // Points the import of `function` from kernel32.dll by the loaded `module` at `replacement`, and
+    // returns what it pointed at, as the loader resolved it: null when `module` does not import it.
+    void* patchImport(HMODULE module, const char* function, void* replacement)
+    {
+        auto* image = reinterpret_cast<unsigned char*>(module);
+        const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+            image + reinterpret_cast<const IMAGE_DOS_HEADER*>(image)->e_lfanew);
+        const IMAGE_DATA_DIRECTORY& imports =
+            headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        if (imports.VirtualAddress == 0)
+        {
+            return nullptr;
+        }
+        for (auto* library =
+                 reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(image + imports.VirtualAddress);
+             library->Name != 0; ++library)
+        {
+            if (_stricmp(reinterpret_cast<const char*>(image + library->Name), "kernel32.dll") != 0)
+            {
+                continue;
+            }
+            const auto* name =
+                reinterpret_cast<const IMAGE_THUNK_DATA*>(image + library->OriginalFirstThunk);
+            auto* slot = reinterpret_cast<IMAGE_THUNK_DATA*>(image + library->FirstThunk);
+            for (; name->u1.AddressOfData != 0; ++name, ++slot)
+            {
+                if (IMAGE_SNAP_BY_ORDINAL(name->u1.Ordinal) ||
+                    std::strcmp(reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(
+                                    image + name->u1.AddressOfData)
+                                    ->Name,
+                                function) != 0)
+                {
+                    continue;
+                }
+                DWORD protection = 0;
+                VirtualProtect(&slot->u1.Function, sizeof(slot->u1.Function), PAGE_READWRITE,
+                               &protection);
+                void* resolved = reinterpret_cast<void*>(slot->u1.Function);
+                slot->u1.Function = reinterpret_cast<ULONG_PTR>(replacement);
+                VirtualProtect(&slot->u1.Function, sizeof(slot->u1.Function), protection,
+                               &protection);
+                return resolved;
+            }
+        }
+        return nullptr;
+    }
+
+    // A stand-in for SetUnhandledExceptionFilter in a copy of the runtime that must not call it:
+    // it ends the process with 5.
+    LPTOP_LEVEL_EXCEPTION_FILTER WINAPI setFilterEndsTheProcess(LPTOP_LEVEL_EXCEPTION_FILTER)
+    {
+        std::fputs("a copy set the process's filter\n", stderr);
+        std::fflush(stderr);
+        TerminateProcess(GetCurrentProcess(), 5);
+        return nullptr;
+    }
+
+    // Loads the DLL of reload/ct_leak_dll.cpp, which links the runtime, then has it end the process
+    // with its own C runtime's exit(), which runs the DLL's destructors before the loader detaches
+    // it, without the loader lock. Its copy's SetUnhandledExceptionFilter ends the process with 5
+    // if the release calls it then. Prints why and exits with 2 when that cannot be set up.
+    [[noreturn]] void endTheProcessFromADll()
+    {
+        HMODULE dll = LoadLibraryA(CT_LEAK_DLL);
+        auto* dll_exit =
+            dll ? reinterpret_cast<void (*)()>(GetProcAddress(dll, "ct_leak_dll_exit")) : nullptr;
+        if (!dll_exit || !patchImport(dll, "SetUnhandledExceptionFilter",
+                                      reinterpret_cast<void*>(&setFilterEndsTheProcess)))
+        {
+            std::fprintf(stderr, "the leak DLL could not be set up\n");
+            std::exit(2);
+        }
+        dll_exit();
+        std::exit(8);
+    }
+
+    // A DLL that ends the process with exit() stays mapped until then: its copy leaves its handler
+    // in place, rather than release it without the loader lock, while other threads may still
+    // unload modules (#236).
+    TEST(BacktraceReplaceDeathTest, ADllThatCallsExitLeavesItsHandlerInPlace)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(endTheProcessFromADll(), testing::ExitedWithCode(0), "");
+    }
+
+    // Stand-ins for what kernel32.dll does in a copy of the runtime that unloads: every allocation
+    // from a heap and every listing of the modules fails.
+    LPVOID WINAPI failingHeapAlloc(HANDLE, DWORD, SIZE_T)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return nullptr;
+    }
+
+    BOOL WINAPI failingEnumProcessModules(HANDLE, HMODULE*, DWORD, LPDWORD)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+
+    // Loads a copy of the DLL of reload/ct_leak_dll.cpp, which links the runtime and runs no code of
+    // its own when it unloads, then a copy of the DLL that links the runtime, whose handler goes
+    // over the first copy's. Has every allocation from a heap and every listing of the modules fail
+    // in the first copy, unloads it, then the second copy, and faults.
+    [[noreturn]] void faultAfterAHandOverThatNothingCouldBeAllocatedFor()
+    {
+        RuntimeLibraryCopy first("first", CT_LEAK_DLL);
+        RuntimeLibraryCopy second("second");
+        patchImport(first.module(), "HeapAlloc", reinterpret_cast<void*>(&failingHeapAlloc));
+        patchImport(first.module(), "K32EnumProcessModules",
+                    reinterpret_cast<void*>(&failingEnumProcessModules));
+        first.unload();
+        second.unload();
+        printImage("handler:2", GetModuleHandleW(nullptr));
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // The first copy hands the filter it replaced over to the second without allocating anything
+    // or listing the modules: once the second unloads too, the executable's handler reports the
+    // crash, not the first copy's, whose code is gone (#236).
+    TEST(BacktraceReplaceDeathTest, ACopyHandsOverEvenWhenItCanNeitherAllocateNorListModules)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultAfterAHandOverThatNothingCouldBeAllocatedFor(), endedByTheFault(),
+                    crashBacktraceFrom("handler:2 "));
+    }
+
+    // SetUnhandledExceptionFilter as the loader resolved it for a copy of the runtime, before the
+    // copy's import is patched, and how many calls the patched import has had.
+    using SetFilterFunction = LPTOP_LEVEL_EXCEPTION_FILTER(WINAPI*)(LPTOP_LEVEL_EXCEPTION_FILTER);
+    SetFilterFunction resolvedSetFilter = nullptr;
+    std::atomic<int> patchedSetFilterCalls{0};
+
+    // A filter that another thread installs: it prints the code of the exception, then ends the
+    // process with an exit code of its own.
+    constexpr UINT kConcurrentFilterExit = 10;
+
+    LONG WINAPI concurrentFilter(EXCEPTION_POINTERS* exception_info)
+    {
+        std::fprintf(stderr, "concurrent filter %lx\n",
+                     static_cast<unsigned long>(exception_info->ExceptionRecord->ExceptionCode));
+        std::fflush(stderr);
+        TerminateProcess(GetCurrentProcess(), kConcurrentFilterExit);
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    // A stand-in for SetUnhandledExceptionFilter that installs concurrentFilter right after its
+    // first call, as another thread would between the first two.
+    LPTOP_LEVEL_EXCEPTION_FILTER WINAPI
+    setFilterWithAnotherThread(LPTOP_LEVEL_EXCEPTION_FILTER filter)
+    {
+        const LPTOP_LEVEL_EXCEPTION_FILTER replaced = resolvedSetFilter(filter);
+        if (patchedSetFilterCalls.fetch_add(1) == 0)
+        {
+            resolvedSetFilter(&concurrentFilter);
+        }
+        return replaced;
+    }
+
+    // Loads the DLL that links the runtime and installs the host's filter over its copy's handler.
+    // While FreeLibrary unloads the DLL, another thread installs a filter of its own between the
+    // copy's first two calls to SetUnhandledExceptionFilter, as the stand-in does. Then faults.
+    // Prints why and exits with 2 when the DLL does not import SetUnhandledExceptionFilter.
+    [[noreturn]] void faultAfterAFilterInstalledDuringTheRelease()
+    {
+        HMODULE runtime = loadRuntimeLibrary();
+        SetUnhandledExceptionFilter(&hostFilter);
+        resolvedSetFilter = reinterpret_cast<SetFilterFunction>(
+            patchImport(runtime, "SetUnhandledExceptionFilter",
+                        reinterpret_cast<void*>(&setFilterWithAnotherThread)));
+        if (!resolvedSetFilter)
+        {
+            std::fprintf(stderr, "the runtime library imports no SetUnhandledExceptionFilter\n");
+            std::exit(2);
+        }
+        unloadRuntimeLibrary(runtime);
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // The copy, whose handler is no longer the process's, puts the host's filter back, then the
+    // filter that another thread installed meanwhile, which stays the process's (#236).
+    TEST(BacktraceReplaceDeathTest, AFilterAnotherThreadInstallsDuringTheReleaseStays)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultAfterAFilterInstalledDuringTheRelease(),
+                    testing::ExitedWithCode(static_cast<int>(kConcurrentFilterExit)),
+                    "concurrent filter e0000225");
     }
 } // namespace

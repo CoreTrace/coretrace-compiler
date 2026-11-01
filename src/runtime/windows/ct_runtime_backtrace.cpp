@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
+//
+// The crash handler of this copy of the runtime, which CT_BACKTRACE installs for the whole process
+// when the module that holds the copy initializes: the executable, or a DLL that links the runtime,
+// whose copy's handler goes over the filter installed before it. When FreeLibrary unloads the DLL,
+// whose code the process must not call afterwards, its copy puts that filter back (#236).
 #include "ct_runtime_internal.h"
 #include "ct_runtime_helpers.h"
 
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <iterator>
 
 #ifndef NOMINMAX
@@ -13,6 +20,17 @@
 #include <dbghelp.h>
 
 #pragma comment(lib, "Dbghelp.lib")
+
+// The module that holds this copy of the runtime.
+extern "C" IMAGE_DOS_HEADER __ImageBase;
+
+// The objects of this file are constructed before the program's and destroyed after them: a DLL's
+// copy puts the filter back after the destructors of the DLL's global objects, whose crashes its
+// handler still reports.
+#pragma init_seg(lib)
+
+// The section of the record below, in the module that holds this copy of the runtime.
+#pragma section(".ctcrash", read, write)
 
 namespace
 {
@@ -80,6 +98,180 @@ namespace
 
         return EXCEPTION_EXECUTE_HANDLER;
     }
+
+    // What a copy of the runtime tells the other copies in the process of its crash handler, in the
+    // section .ctcrash of its module, where a copy finds another one's record from the address of
+    // its handler. `replaced` is the filter that the handler went over when the copy installed it,
+    // and `below` the record of the copy whose handler that filter is, if any. `above` is the first
+    // of the copies whose handlers went over this one's, and `next` the following one over the same
+    // copy. A DLL's copy makes its links when it installs its handler and undoes them when
+    // FreeLibrary unloads the DLL, both with the loader lock held: a record is linked only while its
+    // module is loaded, and the release follows the links without allocating or listing the
+    // modules. The executable's copy, which installs its handler without the loader lock and keeps
+    // it as long as the process, links to none. The magic number reads "ctcrash", then the version
+    // of the layout.
+    struct CtCrashHandlerRecord
+    {
+        std::uint64_t magic;
+        LPTOP_LEVEL_EXCEPTION_FILTER handler;
+        LPTOP_LEVEL_EXCEPTION_FILTER replaced;
+        CtCrashHandlerRecord* below;
+        CtCrashHandlerRecord* above;
+        CtCrashHandlerRecord* next;
+    };
+
+    constexpr std::uint64_t kCrashHandlerMagic = 0x0268736172637463;
+    constexpr char kCrashHandlerSection[IMAGE_SIZEOF_SHORT_NAME] = {'.', 'c', 't', 'c',
+                                                                    'r', 'a', 's', 'h'};
+
+    __declspec(allocate(".ctcrash")) constinit CtCrashHandlerRecord ct_crash_handler_record{
+        kCrashHandlerMagic, &ct_exception_filter, nullptr, nullptr, nullptr, nullptr};
+
+    // Whether this copy's handler is installed, with its record: set once, when the module
+    // initializes, and read when it detaches.
+    bool ct_crash_handler_in_place = false;
+
+    // The record of the copy of the runtime whose handler `filter` is, if any. `readable` is false
+    // when the headers of the module that holds `filter` cannot be read, so that whether it is a
+    // copy's handler cannot be told: a packer or an anti-tamper check may have erased them, or made
+    // them unreadable. Each part is read once found readable, and must look like what it is.
+    CT_NOINSTR CtCrashHandlerRecord* ct_crash_handler_record_of(LPTOP_LEVEL_EXCEPTION_FILTER filter,
+                                                                bool& readable)
+    {
+        readable = true;
+        HMODULE module = nullptr;
+        if (!filter || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                           reinterpret_cast<LPCWSTR>(filter), &module))
+        {
+            return nullptr;
+        }
+        readable = false;
+        auto* image = reinterpret_cast<unsigned char*>(module);
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+        if (!ct_is_readable(dos, sizeof(*dos)) || dos->e_magic != IMAGE_DOS_SIGNATURE ||
+            dos->e_lfanew <= 0)
+        {
+            return nullptr;
+        }
+        const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(image + dos->e_lfanew);
+        if (!ct_is_readable(headers, sizeof(*headers)) || headers->Signature != IMAGE_NT_SIGNATURE)
+        {
+            return nullptr;
+        }
+        const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(headers);
+        const WORD sections = headers->FileHeader.NumberOfSections;
+        if (!ct_is_readable(section, sections * sizeof(IMAGE_SECTION_HEADER)))
+        {
+            return nullptr;
+        }
+        for (WORD index = 0; index < sections; ++index, ++section)
+        {
+            if (std::memcmp(section->Name, kCrashHandlerSection, sizeof(section->Name)) != 0)
+            {
+                continue;
+            }
+            auto* record = reinterpret_cast<CtCrashHandlerRecord*>(image + section->VirtualAddress);
+            if ((section->Characteristics & IMAGE_SCN_MEM_WRITE) == 0 ||
+                section->Misc.VirtualSize < sizeof(CtCrashHandlerRecord) ||
+                !ct_is_readable(record, sizeof(*record)))
+            {
+                return nullptr;
+            }
+            readable = true;
+            return record->magic == kCrashHandlerMagic && record->handler == filter ? record
+                                                                                    : nullptr;
+        }
+        readable = true;
+        return nullptr;
+    }
+
+    // Takes `record` out of the links when FreeLibrary unloads the DLL that holds its copy: out of
+    // the list of the copy below, and the copies above get the filter that its handler replaced,
+    // and that copy below as theirs, so that none puts back the unloading copy's handler, whose
+    // code is gone, when its own DLL unloads. FreeLibrary holds the loader lock meanwhile: every
+    // record linked is in a module still loaded.
+    CT_NOINSTR void ct_crash_handler_unlink(CtCrashHandlerRecord& record)
+    {
+        if (record.below)
+        {
+            for (CtCrashHandlerRecord** link = &record.below->above; *link; link = &(*link)->next)
+            {
+                if (*link == &record)
+                {
+                    *link = record.next;
+                    break;
+                }
+            }
+        }
+        for (CtCrashHandlerRecord* above = record.above; above;)
+        {
+            CtCrashHandlerRecord* const next = above->next;
+            above->replaced = record.replaced;
+            above->below = record.below;
+            above->next = record.below ? record.below->above : nullptr;
+            if (record.below)
+            {
+                record.below->above = above;
+            }
+            above = next;
+        }
+        record.below = nullptr;
+        record.above = nullptr;
+        record.next = nullptr;
+    }
+
+    // Makes `replaced` the process's filter if `handler` still is, and leaves the filter otherwise.
+    // Windows has no call that reads the process's filter, or sets it only if it is the one
+    // expected: this sets `replaced`, then puts the filter it replaced back at once when that is not
+    // `handler`. A filter that another thread installs between two of these calls is what the
+    // second returns instead of the filter set by the first: it is put back in turn, and so on.
+    // That thread got from SetUnhandledExceptionFilter, as the filter it replaced, the one set here
+    // for that moment.
+    CT_NOINSTR void ct_crash_handler_put_back(LPTOP_LEVEL_EXCEPTION_FILTER handler,
+                                              LPTOP_LEVEL_EXCEPTION_FILTER replaced)
+    {
+        LPTOP_LEVEL_EXCEPTION_FILTER set = replaced;
+        LPTOP_LEVEL_EXCEPTION_FILTER found = SetUnhandledExceptionFilter(replaced);
+        while (found != handler)
+        {
+            const LPTOP_LEVEL_EXCEPTION_FILTER installed_meanwhile =
+                SetUnhandledExceptionFilter(found);
+            if (installed_meanwhile == set)
+            {
+                return;
+            }
+            set = found;
+            found = installed_meanwhile;
+        }
+    }
+
+    // Puts back the filter that this copy's handler went over when FreeLibrary unloads the DLL that
+    // holds the copy, if the handler is still the process's: a filter installed over it since
+    // stays. Then takes the copy's record out of the links. Nothing changes when the process
+    // terminates, nor while a DLL's own exit() runs this destructor, before the loader detaches the
+    // DLL and without the loader lock: the DLL stays mapped until the process ends.
+    struct CtCrashHandlerRelease
+    {
+        // User-provided, so that the object is initialized dynamically, in this file's
+        // init_seg: clang registers the destructor of a constant-initialized object from
+        // .CRT$XCU, with the program's own objects.
+        CT_NOINSTR CtCrashHandlerRelease() {}
+
+        CT_NOINSTR ~CtCrashHandlerRelease()
+        {
+            if (!ct_crash_handler_in_place || !ct_dll_unloading_dynamically() ||
+                !ct_loader_detaching_module())
+            {
+                return;
+            }
+            CtCrashHandlerRecord& record = ct_crash_handler_record;
+            ct_crash_handler_put_back(record.handler, record.replaced);
+            ct_crash_handler_unlink(record);
+        }
+    };
+
+    CtCrashHandlerRelease ct_crash_handler_release;
 } // namespace
 
 CT_NOINSTR void ct_maybe_install_backtrace(void)
@@ -107,7 +299,38 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
             (void)ct_dbghelp_sync_modules_locked(process);
         }
     }
-    SetUnhandledExceptionFilter(ct_exception_filter);
+    CtCrashHandlerRecord& record = ct_crash_handler_record;
+    record.replaced = SetUnhandledExceptionFilter(record.handler);
+    // A DLL's copy links its record to the copy below while the DLL initializes, with the loader
+    // lock held, which keeps the links of every copy. It does only where its release runs when
+    // FreeLibrary unloads the DLL, which needs ct_process_shutdown() to tell that apart from the
+    // process's termination, from Windows 10 on: otherwise its record would stay linked once its
+    // module is unmapped.
+    if (reinterpret_cast<HMODULE>(&__ImageBase) != GetModuleHandleW(nullptr) &&
+        ct_process_shutdown() != CtProcessShutdown::Unknown)
+    {
+        bool readable = true;
+        record.below = ct_crash_handler_record_of(record.replaced, readable);
+        if (!readable)
+        {
+            // The filter may be the handler of a copy that this one cannot link to, and would put
+            // back once its code is gone: it goes back in place, without this copy's handler. No
+            // unit test exercises this: a copy's module whose headers cannot be read is loaded by
+            // making its header page PAGE_NOACCESS, and loading the next module then hangs the
+            // loader, which reads that header under its lock.
+            ct_crash_handler_put_back(record.handler, record.replaced);
+            ct_write_prefix(CTLevel::Info);
+            ct_write_cstr("ct: backtrace handler not installed: the headers of the module of the "
+                          "filter in place cannot be read\n");
+            return;
+        }
+        if (record.below)
+        {
+            record.next = record.below->above;
+            record.below->above = &record;
+        }
+    }
+    ct_crash_handler_in_place = true;
 
     ct_write_prefix(CTLevel::Info);
     ct_write_cstr("ct: backtrace handler installed\n");
