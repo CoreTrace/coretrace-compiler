@@ -57,7 +57,8 @@ namespace
     // The table and its lock live until the process ends: .CRT$XT terminators, which the
     // CRT runs after the destructors of every static object, may still release blocks, and
     // the leak report runs among them (#159). The lock needs no constructor nor destructor;
-    // the table is built on first use, in storage nothing destroys.
+    // the table is built on first use, in storage that only the terminator of a DLL's copy
+    // destroys, when FreeLibrary unloads the DLL (#227).
     SRWLOCK ct_alloc_lock = SRWLOCK_INIT;
 
     using CtAllocTable = std::unordered_map<void*, CtAllocEntry>;
@@ -1363,9 +1364,32 @@ namespace
         }
     }
 
+    // Frees what this copy of the runtime holds for the blocks of its DLL when FreeLibrary unloads
+    // the DLL, from the terminator below: the blocks in its quarantine, which the program had
+    // released, the quarantine's queue, what its block index grew into, and its allocation table.
+    // The DLL's code has all run by then: its atexit handlers, the destructors of its global
+    // objects, its destructor functions and its own terminators. Only the C runtime's teardown
+    // comes after, which calls no function of the runtime. The blocks that the DLL still holds stay
+    // allocated, without their records (#227).
+    CT_NOINSTR void ct_release_alloc_state()
+    {
+        if (!ct_alloc_table_built.load(std::memory_order_acquire))
+        {
+            return;
+        }
+        ct_quarantine_release_all();
+        ct_lock_acquire();
+        ct_block_index_destroy(&ct_index);
+        ct_block_index_init(&ct_index, ct_index_storage, kIndexInitialCapacity);
+        ct_alloc_table().~CtAllocTable();
+        ct_alloc_table_built.store(false, std::memory_order_release);
+        ct_lock_release();
+    }
+
     // A DLL's C runtime runs its .CRT$XTY terminators after its atexit handlers, the destructors
     // of its global objects and its destructor functions, when FreeLibrary unloads it and when the
-    // process exits.
+    // process exits. When FreeLibrary unloads it, the copy then frees its allocation state; it
+    // keeps it when the process exits, for the leak report, and while the DLL's own exit() runs.
     CT_NOINSTR void ct_report_dll_leaks_at_exit()
     {
         if (!ct_dll_detaching.load(std::memory_order_acquire))
@@ -1374,6 +1398,10 @@ namespace
             return;
         }
         ct_report_dll_leaks_once();
+        if (ct_dll_unloading_dynamically())
+        {
+            ct_release_alloc_state();
+        }
     }
 } // namespace
 
