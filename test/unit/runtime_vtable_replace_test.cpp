@@ -1259,4 +1259,34 @@ namespace
         EXPECT_EXIT(faultWhileADllThatLinksTheRuntimeIsLoaded(), endedByTheFault(),
                     crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
     }
+
+    // A filter that the program installs for the exceptions that nothing handles, as a crash
+    // reporter does: it says so, then ends the process with an exit code of its own.
+    constexpr UINT kHostFilterExit = 9;
+
+    LONG WINAPI hostFilter(EXCEPTION_POINTERS*)
+    {
+        std::fputs("host filter\n", stderr);
+        std::fflush(stderr);
+        TerminateProcess(GetCurrentProcess(), kHostFilterExit);
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    [[noreturn]] void faultWithTheHostsFilterInstalledAfterADll()
+    {
+        HMODULE runtime = loadRuntimeLibrary();
+        SetUnhandledExceptionFilter(&hostFilter);
+        FreeLibrary(runtime);
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // Unloading the DLL leaves the filter that the program installed over its copy's handler
+    // (#236).
+    TEST(BacktraceReplaceDeathTest, ADllUnloadedLeavesTheHostsFilterInstalledAfterIt)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultWithTheHostsFilterInstalledAfterADll(),
+                    testing::ExitedWithCode(static_cast<int>(kHostFilterExit)), "host filter");
+    }
 } // namespace
