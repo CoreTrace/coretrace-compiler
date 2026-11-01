@@ -1762,4 +1762,67 @@ namespace
         EXPECT_EXIT(faultAfterACopyThatCouldNotReadTheFilterBelow(), endedByTheFault(),
                     crashBacktraceFrom("handler:2 "));
     }
+
+    // SetUnhandledExceptionFilter as the loader resolved it for a copy of the runtime, before the
+    // copy's import is patched, and how many calls the patched import has had.
+    using SetFilterFunction = LPTOP_LEVEL_EXCEPTION_FILTER(WINAPI*)(LPTOP_LEVEL_EXCEPTION_FILTER);
+    SetFilterFunction resolvedSetFilter = nullptr;
+    std::atomic<int> patchedSetFilterCalls{0};
+
+    // A filter that another thread installs: it prints the code of the exception, then ends the
+    // process with an exit code of its own.
+    constexpr UINT kConcurrentFilterExit = 10;
+
+    LONG WINAPI concurrentFilter(EXCEPTION_POINTERS* exception_info)
+    {
+        std::fprintf(stderr, "concurrent filter %lx\n",
+                     static_cast<unsigned long>(exception_info->ExceptionRecord->ExceptionCode));
+        std::fflush(stderr);
+        TerminateProcess(GetCurrentProcess(), kConcurrentFilterExit);
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    // A stand-in for SetUnhandledExceptionFilter that installs concurrentFilter right after its
+    // first call, as another thread would between the first two.
+    LPTOP_LEVEL_EXCEPTION_FILTER WINAPI
+    setFilterWithAnotherThread(LPTOP_LEVEL_EXCEPTION_FILTER filter)
+    {
+        const LPTOP_LEVEL_EXCEPTION_FILTER replaced = resolvedSetFilter(filter);
+        if (patchedSetFilterCalls.fetch_add(1) == 0)
+        {
+            resolvedSetFilter(&concurrentFilter);
+        }
+        return replaced;
+    }
+
+    // Loads the DLL that links the runtime and installs the host's filter over its copy's handler.
+    // While FreeLibrary unloads the DLL, another thread installs a filter of its own between the
+    // copy's first two calls to SetUnhandledExceptionFilter, as the stand-in does. Then faults.
+    // Prints why and exits with 2 when the DLL does not import SetUnhandledExceptionFilter.
+    [[noreturn]] void faultAfterAFilterInstalledDuringTheRelease()
+    {
+        HMODULE runtime = loadRuntimeLibrary();
+        SetUnhandledExceptionFilter(&hostFilter);
+        resolvedSetFilter = reinterpret_cast<SetFilterFunction>(
+            patchImport(runtime, "SetUnhandledExceptionFilter",
+                        reinterpret_cast<void*>(&setFilterWithAnotherThread)));
+        if (!resolvedSetFilter)
+        {
+            std::fprintf(stderr, "the runtime library imports no SetUnhandledExceptionFilter\n");
+            std::exit(2);
+        }
+        unloadRuntimeLibrary(runtime);
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // The copy, whose handler is no longer the process's, puts the host's filter back, then the
+    // filter that another thread installed meanwhile, which stays the process's (#236).
+    TEST(BacktraceReplaceDeathTest, AFilterAnotherThreadInstallsDuringTheReleaseStays)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultAfterAFilterInstalledDuringTheRelease(),
+                    testing::ExitedWithCode(static_cast<int>(kConcurrentFilterExit)),
+                    "concurrent filter e0000225");
+    }
 } // namespace
