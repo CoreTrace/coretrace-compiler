@@ -169,6 +169,14 @@ if(TARGET ct_instrument_runtime)
     target_compile_definitions(runtime_unit_tests PRIVATE
       CT_RUNTIME_LIBRARY="$<TARGET_FILE:ct_runtime_library>"
       CT_DLLMAIN_LIBRARY="$<TARGET_FILE:ct_dllmain_library>")
+    # A DLL that allocates through its copy of the runtime, which records the blocks and keeps
+    # those it frees in its quarantine (#227).
+    add_library(ct_allocating_library MODULE reload/ct_allocating_library.cpp)
+    target_link_libraries(ct_allocating_library PRIVATE ct_instrument_runtime coretrace_logger)
+    coretrace_force_msvc_runtime(ct_allocating_library)
+    add_dependencies(runtime_unit_tests ct_allocating_library)
+    target_compile_definitions(runtime_unit_tests PRIVATE
+      CT_ALLOCATING_LIBRARY="$<TARGET_FILE:ct_allocating_library>")
     # A DLL's copy of the runtime reports its leaks when the process exits, after the DLL's
     # exit-time code, and says nothing when FreeLibrary unloads the DLL (#232). The program links
     # no runtime, so the report it prints is the DLL's copy's.

@@ -545,6 +545,36 @@ namespace
             << describe(kept) << "\nwithout the runtime: " << describe(control);
     }
 
+    // Whether a busy block of the process's heaps holds `address`.
+    bool heapsHold(const void* address)
+    {
+        std::vector<HeapBlock> blocks;
+        blocks.reserve(1 << 18);
+        if (!listBusyBlocks(blocks))
+        {
+            return false;
+        }
+        const auto* byte = static_cast<const unsigned char*>(address);
+        return std::any_of(blocks.begin(), blocks.end(), [&](const HeapBlock& block)
+                           { return byte >= block.address && byte < block.address + block.size; });
+    }
+
+    // A block that a DLL allocated through its copy of the runtime and still holds stays allocated
+    // once FreeLibrary has unloaded the DLL: its copy frees its record of the block, not the block,
+    // which the program may still use (#227).
+    TEST(DllAllocState, ABlockADllKeepsStaysAllocatedOnceItUnloads)
+    {
+        HMODULE library = LoadLibraryA(CT_ALLOCATING_LIBRARY);
+        ASSERT_NE(library, nullptr) << CT_ALLOCATING_LIBRARY;
+        auto* keep = reinterpret_cast<void* (*)(size_t)>(
+            GetProcAddress(library, "ct_allocating_library_keep"));
+        ASSERT_NE(keep, nullptr);
+        void* block = keep(48);
+        ASSERT_NE(block, nullptr);
+        FreeLibrary(library);
+        EXPECT_TRUE(heapsHold(block));
+    }
+
     // The line `label` of the first box of `site`, empty without one.
     std::string lineOf(const std::string& boxes, const char* site, const char* label)
     {
