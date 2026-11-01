@@ -312,7 +312,9 @@ replaced, the one that the copy had set for that moment.
 
 Nothing changes when the process terminates, nor when a DLL ends the process with its own C
 runtime's `exit()`, which runs the DLL's exit-time code before the loader detaches it, nor in the
-executable's copy (#236).
+executable's copy. Before Windows 10, a DLL's copy cannot tell `FreeLibrary` apart from the
+process's termination: it puts nothing back, and links its record to none, so that its handler
+stays the process's filter once `FreeLibrary` has unloaded the DLL (#236).
 
 ## LLVM versions
 
