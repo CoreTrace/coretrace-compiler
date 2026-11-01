@@ -734,6 +734,17 @@ namespace
                     "");
     }
 
+    // A bounds check that comes after the copy's terminator is the first use of the copy's table
+    // since the terminator freed it, and builds a new one with the table's lock held. The blocks of
+    // the new table come back to the copy's entry points through the DLL's operator new: the copy
+    // builds the table as its own work, so that they do not wait on that lock (#197, #227).
+    TEST(DllAllocStateDeathTest, ADllThatChecksAnAccessAfterItsCopyFreedItsStateUnloads)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(churnAndUnload(CT_NEW_DELETE_THROUGH_RUNTIME_LIBRARY, 0, true),
+                    testing::ExitedWithCode(0), "");
+    }
+
     // The line `label` of the first box of `site`, empty without one.
     std::string lineOf(const std::string& boxes, const char* site, const char* label)
     {
