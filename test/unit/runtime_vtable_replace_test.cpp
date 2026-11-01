@@ -1372,4 +1372,20 @@ namespace
         fs::remove(first, ignored);
         fs::remove(second, ignored);
     }
+
+    // The first copy unloads while the second's handler, installed over its own, is still there:
+    // once the second copy unloads too, the executable's handler reports the crash, not the first
+    // copy's, whose code is gone (#236).
+    TEST(BacktraceReplaceDeathTest, OnceTwoDllsUnloadInLoadOrderTheExecutableReportsCrashes)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        const fs::path first = runtimeLibraryCopyPath("in_order_1");
+        const fs::path second = runtimeLibraryCopyPath("in_order_2");
+        EXPECT_EXIT(faultAfterTwoDllsUnloaded(first, second, true), endedByTheFault(),
+                    crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
+        std::error_code ignored;
+        fs::remove(first, ignored);
+        fs::remove(second, ignored);
+    }
 } // namespace
