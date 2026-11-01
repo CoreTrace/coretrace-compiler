@@ -297,8 +297,22 @@ handler is still the process's. A filter installed over the handler since stays:
 - the handler of another DLL's copy gets the filter that the unloaded copy had replaced, and puts it
   back when its own DLL unloads.
 
-Each copy keeps the filter it replaced in a section `.ctcrash` of its module, where the other copies
-find it. Nothing changes when the process terminates, nor in the executable's copy (#236).
+Each copy keeps the filter it replaced in a section `.ctcrash` of its module. A DLL's copy links
+that record to the one of the copy whose handler it replaced when it installs its own, so that
+`FreeLibrary` hands the filter over without allocating anything or listing the modules. When the
+copy cannot read the headers of the module that holds the filter in place, as a packer or an
+anti-tamper check can leave them, it cannot tell whether that filter is another copy's handler: it
+leaves its own handler out then, and says so.
+
+Windows has no call that reads the process's filter without setting one. The copy that unloads
+finds out by setting the filter it replaced, and puts back at once the filter that this call
+returns when that is not its handler. A filter that another thread installs between two of those
+calls is put back in turn. That thread got from `SetUnhandledExceptionFilter`, as the filter it
+replaced, the one that the copy had set for that moment.
+
+Nothing changes when the process terminates, nor when a DLL ends the process with its own C
+runtime's `exit()`, which runs the DLL's exit-time code before the loader detaches it, nor in the
+executable's copy (#236).
 
 ## LLVM versions
 
