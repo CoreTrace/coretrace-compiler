@@ -1228,4 +1228,35 @@ namespace
         EXPECT_EXIT(faultAfterManyUnloads(), endedByTheFault(),
                     crashBacktrace(Backtrace::NamesTheExecutableOnly));
     }
+
+    // Loads the DLL that links the runtime, whose copy installs its handler over the executable's.
+    // Prints why and exits with 2 when it does not load.
+    HMODULE loadRuntimeLibrary()
+    {
+        HMODULE runtime = LoadLibraryA(CT_RUNTIME_LIBRARY);
+        if (!runtime)
+        {
+            std::fprintf(stderr, "the runtime library did not load\n");
+            std::exit(2);
+        }
+        return runtime;
+    }
+
+    // Removes the executable's handler, as for a program that does not link the runtime, loads the
+    // DLL that links it, then faults.
+    [[noreturn]] void faultWhileADllThatLinksTheRuntimeIsLoaded()
+    {
+        SetUnhandledExceptionFilter(nullptr);
+        loadRuntimeLibrary();
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // While the DLL is loaded, its copy's handler reports the crashes of the process (#236).
+    TEST(BacktraceReplaceDeathTest, ADllThatLinksTheRuntimeReportsTheCrashesWhileItIsLoaded)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultWhileADllThatLinksTheRuntimeIsLoaded(), endedByTheFault(),
+                    crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
+    }
 } // namespace
