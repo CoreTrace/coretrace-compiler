@@ -662,14 +662,15 @@ namespace
     // blocks: the copy frees what the index grew into (#227).
     TEST(DllAllocState, ADllWhoseBlockIndexGrewKeepsNoHeapBlockAtEachLoad)
     {
-        constexpr int kCycles = 4;
         constexpr int kBlocks = 5000;
         std::vector<HeapBlock> control;
         ASSERT_TRUE(blocksKeptAcrossLoads(CT_RELOAD_LIBRARY_A, control)) << CT_RELOAD_LIBRARY_A;
         std::vector<HeapBlock> kept;
-        ASSERT_TRUE(blocksKeptAcrossChurns(kCycles, kBlocks, 16, kept)) << CT_ALLOCATING_LIBRARY;
-        // A block kept at each load would add kCycles of them.
-        EXPECT_LT(kept.size(), control.size() + kCycles)
+        ASSERT_TRUE(blocksKeptAcrossChurns(kLoadCycles, kBlocks, 16, kept))
+            << CT_ALLOCATING_LIBRARY;
+        // A block kept at each load, such as what the index grew into, would add kLoadCycles of
+        // them, whatever the few blocks that the DLL without the runtime leaves.
+        EXPECT_LT(kept.size(), control.size() + kLoadCycles / 2)
             << sizesOf(kept) << "\nwithout the runtime: " << sizesOf(control);
     }
 
