@@ -1291,6 +1291,23 @@ namespace
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
+    [[noreturn]] void faultWithTheHostsFilterInstalledBeforeADll()
+    {
+        SetUnhandledExceptionFilter(&hostFilter);
+        FreeLibrary(loadRuntimeLibrary());
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // The filter that the program installed before the DLL's copy installed its handler is back
+    // once FreeLibrary has unloaded the DLL (#236).
+    TEST(BacktraceReplaceDeathTest, TheHostsFilterInstalledBeforeADllIsBackOnceItUnloads)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultWithTheHostsFilterInstalledBeforeADll(),
+                    testing::ExitedWithCode(static_cast<int>(kHostFilterExit)), "host filter");
+    }
+
     [[noreturn]] void faultWithTheHostsFilterInstalledAfterADll()
     {
         HMODULE runtime = loadRuntimeLibrary();
