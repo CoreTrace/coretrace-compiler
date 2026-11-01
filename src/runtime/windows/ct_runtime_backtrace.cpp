@@ -221,13 +221,36 @@ namespace
         record.next = nullptr;
     }
 
+    // Makes `replaced` the process's filter if `handler` still is, and leaves the filter otherwise.
+    // Windows has no call that reads the process's filter, or sets it only if it is the one
+    // expected: this sets `replaced`, then puts the filter it replaced back at once when that is not
+    // `handler`. A filter that another thread installs between two of these calls is what the
+    // second returns instead of the filter set by the first: it is put back in turn, and so on.
+    // That thread got from SetUnhandledExceptionFilter, as the filter it replaced, the one set here
+    // for that moment.
+    CT_NOINSTR void ct_crash_handler_put_back(LPTOP_LEVEL_EXCEPTION_FILTER handler,
+                                              LPTOP_LEVEL_EXCEPTION_FILTER replaced)
+    {
+        LPTOP_LEVEL_EXCEPTION_FILTER set = replaced;
+        LPTOP_LEVEL_EXCEPTION_FILTER found = SetUnhandledExceptionFilter(replaced);
+        while (found != handler)
+        {
+            const LPTOP_LEVEL_EXCEPTION_FILTER installed_meanwhile =
+                SetUnhandledExceptionFilter(found);
+            if (installed_meanwhile == set)
+            {
+                return;
+            }
+            set = found;
+            found = installed_meanwhile;
+        }
+    }
+
     // Puts back the filter that this copy's handler went over when FreeLibrary unloads the DLL that
     // holds the copy, if the handler is still the process's: a filter installed over it since
-    // stays. Then takes the copy's record out of the links. Windows has no call that reads the
-    // process's filter without setting one: a filter that another thread installs between the two
-    // calls below is replaced. Nothing changes when the process terminates, nor while a DLL's own
-    // exit() runs this destructor, before the loader detaches the DLL and without the loader lock:
-    // the DLL stays mapped until the process ends.
+    // stays. Then takes the copy's record out of the links. Nothing changes when the process
+    // terminates, nor while a DLL's own exit() runs this destructor, before the loader detaches the
+    // DLL and without the loader lock: the DLL stays mapped until the process ends.
     struct CtCrashHandlerRelease
     {
         // User-provided, so that the object is initialized dynamically, in this file's
@@ -243,12 +266,7 @@ namespace
                 return;
             }
             CtCrashHandlerRecord& record = ct_crash_handler_record;
-            const LPTOP_LEVEL_EXCEPTION_FILTER current =
-                SetUnhandledExceptionFilter(record.replaced);
-            if (current != record.handler)
-            {
-                SetUnhandledExceptionFilter(current);
-            }
+            ct_crash_handler_put_back(record.handler, record.replaced);
             ct_crash_handler_unlink(record);
         }
     };
