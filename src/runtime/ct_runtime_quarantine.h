@@ -32,12 +32,16 @@ struct ct_quarantine_item
 CT_NOINSTR void ct_quarantine_push(const ct_quarantine_item& item);
 
 // The byte limit, read from CT_QUARANTINE_MB until set. Lowering it releases the oldest
-// blocks down to the new limit; 0 releases every block at once. ct_alloc_lock not held.
+// blocks down to the new limit; 0 releases every block at once. Besides tests, only
+// ct_quarantine_release_all sets it, to 0 for good. ct_alloc_lock not held.
 CT_NOINSTR void ct_quarantine_set_limit(size_t bytes);
 CT_NODISCARD CT_NOINSTR size_t ct_quarantine_bytes(void);
 
 // Releases every block, as a limit of 0 does, then frees the queue: for a copy of the runtime
-// whose module unloads (#227). The blocks released afterwards go to the allocator at once.
+// whose module unloads (#227). The limit stays 0: CT_QUARANTINE_MB is read only while no limit is
+// set, and nothing in the runtime sets a limit but this function, only tests do. From then on,
+// every block released, whatever the thread, goes to the allocator at once without its freed
+// record: the queue is empty when this function frees it and is not allocated again.
 // ct_alloc_lock not held.
 CT_NOINSTR void ct_quarantine_release_all(void);
 
