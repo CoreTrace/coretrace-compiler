@@ -68,12 +68,15 @@ namespace
     // report, and building it at process exit would allocate with the loader lock held (#232).
     std::atomic<bool> ct_alloc_table_built{false};
 
-    // ct_alloc_lock held, as for every use of the table.
+    // ct_alloc_lock held, as for every use of the table. Building the table allocates, which may
+    // reach the runtime's entry points (#197): it is the runtime's own work, whichever use builds
+    // it, a bounds check for one, which holds the lock outside a runtime scope.
     CT_NOINSTR CtAllocTable& ct_alloc_table()
     {
         alignas(CtAllocTable) static unsigned char storage[sizeof(CtAllocTable)];
         if (!ct_alloc_table_built.load(std::memory_order_relaxed))
         {
+            CtRuntimeScope scope;
             new (storage) CtAllocTable();
             ct_alloc_table_built.store(true, std::memory_order_release);
         }
