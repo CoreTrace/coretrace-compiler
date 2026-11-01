@@ -85,7 +85,8 @@ pull request.
   filter that the program had installed before the DLL ran. The copy now puts the filter back when
   `FreeLibrary` unloads the DLL, if its handler is still the process's. A filter installed over it
   since stays; when that is the handler of another DLL's copy, that copy gets the filter, and puts
-  it back when its own DLL unloads (README, "Crash handler on Windows") (#236).
+  it back when its own DLL unloads. A DLL's copy that cannot read the headers of the module of the
+  filter in place leaves its own handler out (README, "Crash handler on Windows") (#236).
 
 ### Tests and CI
 
