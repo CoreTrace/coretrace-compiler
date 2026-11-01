@@ -1597,4 +1597,90 @@ namespace
         BacktraceInChildren backtrace;
         EXPECT_EXIT(unloadTwoCopiesThatReplacedOneHandler(), testing::ExitedWithCode(0), "");
     }
+
+    // Points the import of `function` from kernel32.dll by the loaded `module` at `replacement`, and
+    // returns what it pointed at, as the loader resolved it: null when `module` does not import it.
+    void* patchImport(HMODULE module, const char* function, void* replacement)
+    {
+        auto* image = reinterpret_cast<unsigned char*>(module);
+        const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+            image + reinterpret_cast<const IMAGE_DOS_HEADER*>(image)->e_lfanew);
+        const IMAGE_DATA_DIRECTORY& imports =
+            headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        if (imports.VirtualAddress == 0)
+        {
+            return nullptr;
+        }
+        for (auto* library =
+                 reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(image + imports.VirtualAddress);
+             library->Name != 0; ++library)
+        {
+            if (_stricmp(reinterpret_cast<const char*>(image + library->Name), "kernel32.dll") != 0)
+            {
+                continue;
+            }
+            const auto* name =
+                reinterpret_cast<const IMAGE_THUNK_DATA*>(image + library->OriginalFirstThunk);
+            auto* slot = reinterpret_cast<IMAGE_THUNK_DATA*>(image + library->FirstThunk);
+            for (; name->u1.AddressOfData != 0; ++name, ++slot)
+            {
+                if (IMAGE_SNAP_BY_ORDINAL(name->u1.Ordinal) ||
+                    std::strcmp(reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(
+                                    image + name->u1.AddressOfData)
+                                    ->Name,
+                                function) != 0)
+                {
+                    continue;
+                }
+                DWORD protection = 0;
+                VirtualProtect(&slot->u1.Function, sizeof(slot->u1.Function), PAGE_READWRITE,
+                               &protection);
+                void* resolved = reinterpret_cast<void*>(slot->u1.Function);
+                slot->u1.Function = reinterpret_cast<ULONG_PTR>(replacement);
+                VirtualProtect(&slot->u1.Function, sizeof(slot->u1.Function), protection,
+                               &protection);
+                return resolved;
+            }
+        }
+        return nullptr;
+    }
+
+    // A stand-in for SetUnhandledExceptionFilter in a copy of the runtime that must not call it:
+    // it ends the process with 5.
+    LPTOP_LEVEL_EXCEPTION_FILTER WINAPI setFilterEndsTheProcess(LPTOP_LEVEL_EXCEPTION_FILTER)
+    {
+        std::fputs("a copy set the process's filter\n", stderr);
+        std::fflush(stderr);
+        TerminateProcess(GetCurrentProcess(), 5);
+        return nullptr;
+    }
+
+    // Loads the DLL of reload/ct_leak_dll.cpp, which links the runtime, then has it end the process
+    // with its own C runtime's exit(), which runs the DLL's destructors before the loader detaches
+    // it, without the loader lock. Its copy's SetUnhandledExceptionFilter ends the process with 5
+    // if the release calls it then. Prints why and exits with 2 when that cannot be set up.
+    [[noreturn]] void endTheProcessFromADll()
+    {
+        HMODULE dll = LoadLibraryA(CT_LEAK_DLL);
+        auto* dll_exit =
+            dll ? reinterpret_cast<void (*)()>(GetProcAddress(dll, "ct_leak_dll_exit")) : nullptr;
+        if (!dll_exit || !patchImport(dll, "SetUnhandledExceptionFilter",
+                                      reinterpret_cast<void*>(&setFilterEndsTheProcess)))
+        {
+            std::fprintf(stderr, "the leak DLL could not be set up\n");
+            std::exit(2);
+        }
+        dll_exit();
+        std::exit(8);
+    }
+
+    // A DLL that ends the process with exit() stays mapped until then: its copy leaves its handler
+    // in place, rather than release it without the loader lock, while other threads may still
+    // unload modules (#236).
+    TEST(BacktraceReplaceDeathTest, ADllThatCallsExitLeavesItsHandlerInPlace)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(endTheProcessFromADll(), testing::ExitedWithCode(0), "");
+    }
 } // namespace
