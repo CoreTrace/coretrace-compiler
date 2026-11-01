@@ -1521,4 +1521,50 @@ namespace
                     testing::ExitedWithCode(static_cast<int>(kHostFilterExit)),
                     "host filter e0000225");
     }
+
+    // The process's filter, read the only way Windows allows: by setting another one, then putting
+    // it back.
+    LPTOP_LEVEL_EXCEPTION_FILTER currentFilter()
+    {
+        const LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(&hostFilter);
+        SetUnhandledExceptionFilter(current);
+        return current;
+    }
+
+    // Loads a copy of the DLL that links the runtime, then a second one. The program puts the first
+    // copy's handler back over the second's, as one that restores a filter it read earlier does,
+    // and a third copy loads: the handlers of the second and the third copies both went over the
+    // first one's. The first copy unloads, then the third, then the second, once the program has
+    // put its handler back too. Exits with 3 when the process's filter is not then the one that
+    // the first copy's handler went over, with 0 otherwise.
+    [[noreturn]] void unloadTwoCopiesThatReplacedOneHandler()
+    {
+        const LPTOP_LEVEL_EXCEPTION_FILTER executable = currentFilter();
+        RuntimeLibraryCopy first("first");
+        const LPTOP_LEVEL_EXCEPTION_FILTER first_handler = currentFilter();
+        RuntimeLibraryCopy second("second");
+        const LPTOP_LEVEL_EXCEPTION_FILTER second_handler = currentFilter();
+        SetUnhandledExceptionFilter(first_handler);
+        RuntimeLibraryCopy third("third");
+        first.unload();
+        third.unload();
+        const bool after_the_third = currentFilter() == executable;
+        SetUnhandledExceptionFilter(second_handler);
+        second.unload();
+        if (!after_the_third || currentFilter() != executable)
+        {
+            std::fprintf(stderr, "a copy put back the handler of the first, unloaded\n");
+            std::exit(3);
+        }
+        std::exit(0);
+    }
+
+    // Every copy whose handler went over the handler of a copy that unloads gets the filter that
+    // the latter went over, whatever the order in which the loader lists their modules (#236).
+    TEST(BacktraceReplaceDeathTest, TwoCopiesThatReplacedOneHandlerGetWhatItReplaced)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(unloadTwoCopiesThatReplacedOneHandler(), testing::ExitedWithCode(0), "");
+    }
 } // namespace
