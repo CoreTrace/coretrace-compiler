@@ -1379,8 +1379,6 @@ namespace
         }
         ct_quarantine_release_all();
         ct_lock_acquire();
-        ct_block_index_destroy(&ct_index);
-        ct_block_index_init(&ct_index, ct_index_storage, kIndexInitialCapacity);
         ct_alloc_table().~CtAllocTable();
         ct_alloc_table_built.store(false, std::memory_order_release);
         ct_lock_release();
