@@ -157,10 +157,48 @@ namespace
         return nullptr;
     }
 
+    // Gives `replaced`, the filter that this copy's handler went over, to every copy of the runtime
+    // whose handler went over this one's, so that none puts back a handler whose code is gone when
+    // its own DLL unloads. That is one copy at most, unless the program put back, over the handlers
+    // of copies loaded since, a filter it had read earlier. A filter of the program installed over
+    // such a copy's handler hides it from the process's filter: the copies are looked for among
+    // the modules that the loader lists, in a block of the process's heap, which DllMain may
+    // allocate. FreeLibrary holds the loader lock meanwhile, so that no thread unloads one; a DLL
+    // that calls exit() runs this without it, and reads only what it finds readable.
+    CT_NOINSTR void ct_crash_handler_hand_over(LPTOP_LEVEL_EXCEPTION_FILTER replaced)
+    {
+        const HANDLE process = GetCurrentProcess();
+        HMODULE first = nullptr;
+        DWORD size = 0;
+        if (!EnumProcessModules(process, &first, sizeof(first), &size) || size == 0)
+        {
+            return;
+        }
+        auto* modules = static_cast<HMODULE*>(HeapAlloc(GetProcessHeap(), 0, size));
+        DWORD listed = 0;
+        if (modules && EnumProcessModules(process, modules, size, &listed))
+        {
+            const DWORD count = static_cast<DWORD>(std::min(size, listed) / sizeof(HMODULE));
+            for (DWORD index = 0; index < count; ++index)
+            {
+                CtCrashHandlerRecord* above = ct_crash_handler_record_in(modules[index]);
+                LPTOP_LEVEL_EXCEPTION_FILTER handler = &ct_exception_filter;
+                if (above)
+                {
+                    (void)above->replaced.compare_exchange_strong(handler, replaced,
+                                                                  std::memory_order_acq_rel);
+                }
+            }
+        }
+        if (modules)
+        {
+            HeapFree(GetProcessHeap(), 0, modules);
+        }
+    }
+
     // Puts back the filter that this copy's handler went over when FreeLibrary unloads the DLL that
-    // holds the copy, if the handler is still the process's. A filter installed over it since stays:
-    // the program's, or the handler of another DLL's copy, which gets the filter put back instead,
-    // so as not to put back a handler whose code is gone when it unloads in turn. Windows has no
+    // holds the copy, if the handler is still the process's: a filter installed over it since
+    // stays. The copies whose handlers went over this one's get that filter instead. Windows has no
     // call that reads the process's filter without setting one: a filter that another thread
     // installs between the two calls below is replaced. Nothing changes when the process
     // terminates: the DLL stays mapped until then.
@@ -181,43 +219,11 @@ namespace
             const LPTOP_LEVEL_EXCEPTION_FILTER replaced =
                 ct_crash_handler_record.replaced.load(std::memory_order_acquire);
             const LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(replaced);
-            if (current == &ct_exception_filter)
+            if (current != &ct_exception_filter)
             {
-                return;
+                SetUnhandledExceptionFilter(current);
             }
-            SetUnhandledExceptionFilter(current);
-            // The copy whose handler went over this one's may be under a filter of the program,
-            // which keeps the handler it replaced to itself: the copy is looked for among the
-            // modules that the loader lists, in a block of the process's heap, which DllMain may
-            // allocate. FreeLibrary holds the loader lock meanwhile, so that no thread unloads one;
-            // a DLL that calls exit() runs this without it, and reads only what it finds readable.
-            const HANDLE process = GetCurrentProcess();
-            HMODULE first = nullptr;
-            DWORD size = 0;
-            if (!EnumProcessModules(process, &first, sizeof(first), &size) || size == 0)
-            {
-                return;
-            }
-            auto* modules = static_cast<HMODULE*>(HeapAlloc(GetProcessHeap(), 0, size));
-            DWORD listed = 0;
-            if (modules && EnumProcessModules(process, modules, size, &listed))
-            {
-                const DWORD count = static_cast<DWORD>(std::min(size, listed) / sizeof(HMODULE));
-                for (DWORD index = 0; index < count; ++index)
-                {
-                    CtCrashHandlerRecord* above = ct_crash_handler_record_in(modules[index]);
-                    LPTOP_LEVEL_EXCEPTION_FILTER handler = &ct_exception_filter;
-                    if (above && above->replaced.compare_exchange_strong(handler, replaced,
-                                                                         std::memory_order_acq_rel))
-                    {
-                        break;
-                    }
-                }
-            }
-            if (modules)
-            {
-                HeapFree(GetProcessHeap(), 0, modules);
-            }
+            ct_crash_handler_hand_over(replaced);
         }
     };
 
