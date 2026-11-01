@@ -40,6 +40,7 @@ namespace
     int churn_at_unload_count = 0;
     size_t churn_at_unload_size = 0;
     bool check_at_unload = false;
+    void (*unload_returned)() = nullptr;
 
     void atUnload()
     {
@@ -51,6 +52,10 @@ namespace
         if (churn_at_unload_count > 0)
         {
             ct_allocating_library_churn(churn_at_unload_count, churn_at_unload_size);
+        }
+        if (unload_returned)
+        {
+            unload_returned();
         }
     }
 } // namespace
@@ -69,6 +74,14 @@ extern "C" __declspec(dllexport) void ct_allocating_library_churn_at_unload(int 
 extern "C" __declspec(dllexport) void ct_allocating_library_check_at_unload()
 {
     check_at_unload = true;
+}
+
+// Has the DLL call `returned`, a function of the program, at the end of its late terminator. The
+// loader swallows an exception raised while it unloads a DLL: without the call, FreeLibrary returns
+// as if that terminator, or the copy's before it, had not faulted.
+extern "C" __declspec(dllexport) void ct_allocating_library_report_unload(void (*returned)())
+{
+    unload_returned = returned;
 }
 
 // .CRT$XTYZ comes after .CRT$XTY, where the copy places its terminator, and before .CRT$XTZ, which
