@@ -674,12 +674,16 @@ namespace
             << sizesOf(kept) << "\nwithout the runtime: " << sizesOf(control);
     }
 
+    // Set by the DLL at the end of its late terminator.
+    std::atomic<bool> late_terminator_returned{false};
+
     // Loads `library`, has it allocate 64 blocks of 64 bytes through its copy of the runtime and
     // free them, then, after its copy's terminator, check an access through the copy when `check`
     // and allocate and free `late` blocks of 16 bytes, and unloads it. Exits with 0 once FreeLibrary
-    // has returned, 2 when the DLL, its functions or the watchdog are missing, and 7 when
-    // FreeLibrary has not returned within 20 seconds, as when it waits on a lock that its own
-    // thread holds.
+    // and the DLL's late terminator have returned, 2 when the DLL, its functions or the watchdog are
+    // missing, 6 when FreeLibrary returned but the late terminator did not, as when the loader
+    // swallowed a fault there or in the copy's terminator, and 7 when FreeLibrary has not returned
+    // within 20 seconds, as when it waits on a lock that its own thread holds.
     [[noreturn]] void churnAndUnload(const char* library, int late, bool check)
     {
         // The watchdog runs before the DLL loads: a thread takes the loader lock to start, and
@@ -709,7 +713,9 @@ namespace
             GetProcAddress(module, "ct_allocating_library_churn_at_unload"));
         auto check_at_unload = reinterpret_cast<void (*)()>(
             GetProcAddress(module, "ct_allocating_library_check_at_unload"));
-        if (!churn || !churn_at_unload || !check_at_unload)
+        auto report_unload = reinterpret_cast<void (*)(void (*)())>(
+            GetProcAddress(module, "ct_allocating_library_report_unload"));
+        if (!churn || !churn_at_unload || !check_at_unload || !report_unload)
         {
             std::exit(2);
         }
@@ -719,8 +725,9 @@ namespace
         {
             check_at_unload();
         }
+        report_unload([] { late_terminator_returned.store(true); });
         FreeLibrary(module);
-        std::exit(0);
+        std::exit(late_terminator_returned.load() ? 0 : 6);
     }
 
     // The copy of an instrumented DLL may see the blocks it releases for itself come back to its
