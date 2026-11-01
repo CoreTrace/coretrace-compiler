@@ -1489,4 +1489,36 @@ namespace
         EXPECT_EXIT(faultAfterTwoDllsUnloadedAroundTheHostsFilter(), endedByTheFault(),
                     crashBacktraceFrom("handler:2 "));
     }
+
+    // Loads a DLL without the runtime and the DLL that links it, installs the host's filter over the
+    // copy's handler, then makes the page of the other DLL's headers unreadable, as a packer or an
+    // anti-tamper check can. Unloads the DLL that links the runtime on a thread of its own, where
+    // nothing but the host's filter would catch a fault, then faults. Prints why and exits with 2
+    // when the page stays readable.
+    [[noreturn]] void faultAfterUnloadingPastUnreadableHeaders()
+    {
+        HMODULE other = LoadLibraryA(CT_RELOAD_LIBRARY_A);
+        HMODULE runtime = loadRuntimeLibrary();
+        SetUnhandledExceptionFilter(&hostFilter);
+        DWORD protection = 0;
+        if (!other || !VirtualProtect(other, 1, PAGE_NOACCESS, &protection))
+        {
+            std::fprintf(stderr, "the headers of the other library stayed readable\n");
+            std::exit(2);
+        }
+        std::thread(unloadRuntimeLibrary, runtime).join();
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // The copy, whose handler is no longer the process's, looks through the modules for the copy
+    // whose handler went over its own: it skips one whose headers it cannot read, rather than fault
+    // while FreeLibrary unloads its DLL, and the host's filter gets the fault's exception (#236).
+    TEST(BacktraceReplaceDeathTest, ADllUnloadsPastAModuleWhoseHeadersAreUnreadable)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultAfterUnloadingPastUnreadableHeaders(),
+                    testing::ExitedWithCode(static_cast<int>(kHostFilterExit)),
+                    "host filter e0000225");
+    }
 } // namespace
