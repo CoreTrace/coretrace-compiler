@@ -9,6 +9,8 @@
 
 extern "C" void* __ct_malloc(size_t size, const char* site);
 extern "C" void __ct_free(void* ptr, const char* site);
+extern "C" void __ct_check_bounds(const void* base, const void* ptr, size_t access_size,
+                                  const char* site, int is_write);
 
 extern "C" int __ct_config_disable_alloc_trace = 1;
 
@@ -37,9 +39,15 @@ namespace
 {
     int churn_at_unload_count = 0;
     size_t churn_at_unload_size = 0;
+    bool check_at_unload = false;
 
-    void churnAtUnload()
+    void atUnload()
     {
+        if (check_at_unload)
+        {
+            __ct_check_bounds(&check_at_unload, &check_at_unload, sizeof(check_at_unload),
+                              "allocating:check", 0);
+        }
         if (churn_at_unload_count > 0)
         {
             ct_allocating_library_churn(churn_at_unload_count, churn_at_unload_size);
@@ -55,9 +63,17 @@ extern "C" __declspec(dllexport) void ct_allocating_library_churn_at_unload(int 
     churn_at_unload_size = size;
 }
 
+// Has the DLL check an access through the copy of the runtime when it unloads, after the terminator
+// of the copy and before the blocks it allocates then: the first use of the copy's allocation table
+// once the terminator has freed it.
+extern "C" __declspec(dllexport) void ct_allocating_library_check_at_unload()
+{
+    check_at_unload = true;
+}
+
 // .CRT$XTYZ comes after .CRT$XTY, where the copy places its terminator, and before .CRT$XTZ, which
 // ends the terminators.
 #pragma comment(linker, "/INCLUDE:ct_allocating_library_late_terminator")
 #pragma section(".CRT$XTYZ", read)
 extern "C" __declspec(allocate(".CRT$XTYZ"))
-__attribute__((used)) void (*const ct_allocating_library_late_terminator)() = churnAtUnload;
+__attribute__((used)) void (*const ct_allocating_library_late_terminator)() = atUnload;
