@@ -15,7 +15,8 @@
 // DLL's destructors still name types then, as they do when the process exits (#227). The copy in a
 // DLL reports the process's crashes while the DLL is loaded. Once it unloads, the handler installed
 // before the copy's reports them again, the executable's or the program's own filter, and a filter
-// installed over the copy's stays, whatever the order in which two such DLLs unload (#236).
+// installed over the copy's stays, whatever the order in which two such DLLs unload, around a
+// filter of the program or not (#236).
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -1390,6 +1391,40 @@ namespace
         const fs::path first = runtimeLibraryCopyPath("in_order_1");
         const fs::path second = runtimeLibraryCopyPath("in_order_2");
         EXPECT_EXIT(faultAfterTwoDllsUnloaded(first, second, true), endedByTheFault(),
+                    crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
+        std::error_code ignored;
+        fs::remove(first, ignored);
+        fs::remove(second, ignored);
+    }
+
+    // Loads two copies of the DLL that links the runtime. Then, as a scope of the program does,
+    // installs the host's filter over the second copy's handler, and puts that handler back
+    // afterwards: the first copy unloads meanwhile. Then the second copy unloads, and the child
+    // faults.
+    [[noreturn]] void faultAfterTwoDllsUnloadedAroundTheHostsFilter(const fs::path& first,
+                                                                    const fs::path& second)
+    {
+        HMODULE libraries[2] = {};
+        loadRuntimeLibraryCopies(first, second, libraries);
+        const LPTOP_LEVEL_EXCEPTION_FILTER second_handler =
+            SetUnhandledExceptionFilter(&hostFilter);
+        FreeLibrary(libraries[0]);
+        SetUnhandledExceptionFilter(second_handler);
+        FreeLibrary(libraries[1]);
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // The second copy's handler went over the first's, and the host's filter was over it when the
+    // first copy unloaded. Once the host has put the second copy's handler back and that copy has
+    // unloaded too, the executable's handler reports the crash, not the first copy's, whose code
+    // is gone (#236).
+    TEST(BacktraceReplaceDeathTest, TwoDllsUnloadedAroundTheHostsFilterLeaveTheExecutablesHandler)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        const fs::path first = runtimeLibraryCopyPath("around_1");
+        const fs::path second = runtimeLibraryCopyPath("around_2");
+        EXPECT_EXIT(faultAfterTwoDllsUnloadedAroundTheHostsFilter(first, second), endedByTheFault(),
                     crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
         std::error_code ignored;
         fs::remove(first, ignored);
