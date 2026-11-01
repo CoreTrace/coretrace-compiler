@@ -28,6 +28,34 @@
 // virtual calls.
 #pragma init_seg(lib)
 
+CT_NODISCARD CT_NOINSTR bool ct_is_readable(const void* addr, size_t size)
+{
+    if (!addr || size == 0)
+    {
+        return false;
+    }
+
+    MEMORY_BASIC_INFORMATION mbi = {};
+    if (VirtualQuery(addr, &mbi, sizeof(mbi)) == 0)
+    {
+        return false;
+    }
+
+    if (mbi.State != MEM_COMMIT)
+    {
+        return false;
+    }
+    if ((mbi.Protect & PAGE_NOACCESS) != 0 || (mbi.Protect & PAGE_GUARD) != 0)
+    {
+        return false;
+    }
+
+    const uintptr_t start = reinterpret_cast<uintptr_t>(addr);
+    const uintptr_t end = start + size;
+    const uintptr_t region_end = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+    return end >= start && end <= region_end;
+}
+
 namespace
 {
     constexpr size_t kBoxMaxValueWidth = 60;
@@ -105,34 +133,6 @@ namespace
         const DWORD normalized = protect & 0xFFu;
         return normalized == PAGE_EXECUTE || normalized == PAGE_EXECUTE_READ ||
                normalized == PAGE_EXECUTE_READWRITE || normalized == PAGE_EXECUTE_WRITECOPY;
-    }
-
-    CT_NODISCARD CT_NOINSTR bool ct_is_readable(const void* addr, size_t size)
-    {
-        if (!addr || size == 0)
-        {
-            return false;
-        }
-
-        MEMORY_BASIC_INFORMATION mbi = {};
-        if (VirtualQuery(addr, &mbi, sizeof(mbi)) == 0)
-        {
-            return false;
-        }
-
-        if (mbi.State != MEM_COMMIT)
-        {
-            return false;
-        }
-        if ((mbi.Protect & PAGE_NOACCESS) != 0 || (mbi.Protect & PAGE_GUARD) != 0)
-        {
-            return false;
-        }
-
-        const uintptr_t start = reinterpret_cast<uintptr_t>(addr);
-        const uintptr_t end = start + size;
-        const uintptr_t region_end = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
-        return end >= start && end <= region_end;
     }
 
     CT_NODISCARD CT_NOINSTR bool ct_lookup_symbol_name(const void* addr, std::string& out)
