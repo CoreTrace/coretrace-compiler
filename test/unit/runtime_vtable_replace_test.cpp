@@ -12,7 +12,10 @@
 // one forever. The crash handler's backtraces, which name frames through the same session, name
 // none after a DLL unloaded since (#225). The copy in a DLL frees the names it decoded when the DLL
 // unloads: the DLL keeps no heap block at each load, as one without the runtime. The boxes of the
-// DLL's destructors still name types then, as they do when the process exits (#227).
+// DLL's destructors still name types then, as they do when the process exits (#227). The copy in a
+// DLL reports the process's crashes while the DLL is loaded. Once it unloads, the handler installed
+// before the copy's reports them again, the executable's or the program's own filter, and a filter
+// installed over the copy's stays, whatever the order in which two such DLLs unload (#236).
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -1257,6 +1260,22 @@ namespace
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
         EXPECT_EXIT(faultWhileADllThatLinksTheRuntimeIsLoaded(), endedByTheFault(),
+                    crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
+    }
+
+    [[noreturn]] void faultAfterADllThatLinksTheRuntimeUnloaded()
+    {
+        FreeLibrary(loadRuntimeLibrary());
+        faultOnAThread(&raiseUnhandledException);
+    }
+
+    // Once FreeLibrary has unloaded the DLL, whose code is gone, the executable's handler reports
+    // the crash (#236).
+    TEST(BacktraceReplaceDeathTest, OnceADllThatLinksTheRuntimeUnloadsTheExecutableReportsCrashes)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultAfterADllThatLinksTheRuntimeUnloaded(), endedByTheFault(),
                     crashBacktrace(Backtrace::NamesTheModulesLoadedAllAlong));
     }
 
