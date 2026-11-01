@@ -314,7 +314,10 @@ CT_NOINSTR void ct_maybe_install_backtrace(void)
         if (!readable)
         {
             // The filter may be the handler of a copy that this one cannot link to, and would put
-            // back once its code is gone: it goes back in place, without this copy's handler.
+            // back once its code is gone: it goes back in place, without this copy's handler. No
+            // unit test exercises this: a copy's module whose headers cannot be read is loaded by
+            // making its header page PAGE_NOACCESS, and loading the next module then hangs the
+            // loader, which reads that header under its lock.
             ct_crash_handler_put_back(record.handler, record.replaced);
             ct_write_prefix(CTLevel::Info);
             ct_write_cstr("ct: backtrace handler not installed: the headers of the module of the "
