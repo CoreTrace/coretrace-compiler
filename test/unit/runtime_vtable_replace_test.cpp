@@ -12,10 +12,11 @@
 // one forever. The crash handler's backtraces, which name frames through the same session, name
 // none after a DLL unloaded since (#225). The copy in a DLL frees the names it decoded when the DLL
 // unloads: the DLL keeps no heap block at each load, as one without the runtime. The boxes of the
-// DLL's destructors still name types then, as they do when the process exits (#227). Once a DLL
-// that links the runtime unloads, the handler installed before its copy's reports the process's
-// crashes, the executable's or the program's own filter, and a filter installed over the copy's
-// stays, whatever the order in which two such DLLs unload (#236).
+// DLL's destructors still name types then, as they do when the process exits (#227). Only the
+// executable's copy installs a crash handler: it reports a crash in the code of a DLL that links
+// the runtime, whose copy installs none, and the crashes once such DLLs have unloaded for real, in
+// either order. A DLL's copy leaves the program's filter alone while the DLL is loaded and when it
+// unloads, however the program or another thread changes that filter meanwhile (#236).
 #include <gtest/gtest.h>
 
 #include <algorithm>
