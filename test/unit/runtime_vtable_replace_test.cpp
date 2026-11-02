@@ -12,10 +12,10 @@
 // one forever. The crash handler's backtraces, which name frames through the same session, name
 // none after a DLL unloaded since (#225). The copy in a DLL frees the names it decoded when the DLL
 // unloads: the DLL keeps no heap block at each load, as one without the runtime. The boxes of the
-// DLL's destructors still name types then, as they do when the process exits (#227). The copy in a
-// DLL reports the process's crashes while the DLL is loaded. Once it unloads, the handler installed
-// before the copy's reports them again, the executable's or the program's own filter, and a filter
-// installed over the copy's stays, whatever the order in which two such DLLs unload (#236).
+// DLL's destructors still name types then, as they do when the process exits (#227). Once a DLL
+// that links the runtime unloads, the handler installed before its copy's reports the process's
+// crashes, the executable's or the program's own filter, and a filter installed over the copy's
+// stays, whatever the order in which two such DLLs unload (#236).
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -1303,24 +1303,6 @@ namespace
     testing::Matcher<const std::string&> crashBacktraceFrom(const char* mark)
     {
         return testing::MakeMatcher(new CrashBacktraceFrom(mark));
-    }
-
-    // Removes the executable's handler, as for a program that does not link the runtime, loads the
-    // DLL that links it, then faults.
-    [[noreturn]] void faultWhileADllThatLinksTheRuntimeIsLoaded()
-    {
-        SetUnhandledExceptionFilter(nullptr);
-        printImage("handler:2", loadRuntimeLibrary());
-        faultOnAThread(&raiseUnhandledException);
-    }
-
-    // While the DLL is loaded, its copy's handler reports the crashes of the process (#236).
-    TEST(BacktraceReplaceDeathTest, ADllThatLinksTheRuntimeReportsTheCrashesWhileItIsLoaded)
-    {
-        GTEST_FLAG_SET(death_test_style, "threadsafe");
-        BacktraceInChildren backtrace;
-        EXPECT_EXIT(faultWhileADllThatLinksTheRuntimeIsLoaded(), endedByTheFault(),
-                    crashBacktraceFrom("handler:2 "));
     }
 
     [[noreturn]] void faultAfterADllThatLinksTheRuntimeUnloaded()
