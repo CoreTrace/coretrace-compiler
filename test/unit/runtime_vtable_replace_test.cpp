@@ -1569,4 +1569,74 @@ namespace
         }
         return nullptr;
     }
+
+    // SetUnhandledExceptionFilter as the loader resolved it for the DLL's copy of the runtime, and
+    // how many calls the copy made to the stand-in that replaces it.
+    using SetFilterFunction = LPTOP_LEVEL_EXCEPTION_FILTER(WINAPI*)(LPTOP_LEVEL_EXCEPTION_FILTER);
+    SetFilterFunction resolvedSetFilter = nullptr;
+    std::atomic<int> copySetFilterCalls{0};
+
+    // Points the DLL's import of SetUnhandledExceptionFilter at `stand_in`. Prints why and exits
+    // with 2 when the DLL does not import it.
+    void replaceTheCopysSetFilter(HMODULE runtime, SetFilterFunction stand_in)
+    {
+        resolvedSetFilter = reinterpret_cast<SetFilterFunction>(
+            patchImport(runtime, "SetUnhandledExceptionFilter", reinterpret_cast<void*>(stand_in)));
+        if (!resolvedSetFilter)
+        {
+            std::fprintf(stderr, "the runtime library imports no SetUnhandledExceptionFilter\n");
+            std::exit(2);
+        }
+    }
+
+    // Two filters that another thread installs in turn, whose bodies differ so that the linker does
+    // not fold them into one.
+    LONG WINAPI firstAlternateFilter(EXCEPTION_POINTERS*)
+    {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    LONG WINAPI secondAlternateFilter(EXCEPTION_POINTERS*)
+    {
+        return EXCEPTION_EXECUTE_HANDLER;
+    }
+
+    // How many times, at most, that thread changes the filter.
+    constexpr int kAlternations = 10000;
+
+    // A stand-in for the copy's SetUnhandledExceptionFilter: after each of its calls, another thread
+    // installs one of its two filters in turn, kAlternations times at most.
+    LPTOP_LEVEL_EXCEPTION_FILTER WINAPI
+    setFilterWhileAnotherThreadAlternates(LPTOP_LEVEL_EXCEPTION_FILTER filter)
+    {
+        const LPTOP_LEVEL_EXCEPTION_FILTER replaced = resolvedSetFilter(filter);
+        const int call = copySetFilterCalls.fetch_add(1);
+        if (call < kAlternations)
+        {
+            resolvedSetFilter(call % 2 == 0 ? &firstAlternateFilter : &secondAlternateFilter);
+        }
+        return replaced;
+    }
+
+    // Loads the DLL that links the runtime and installs the host's filter. While FreeLibrary unloads
+    // the DLL, another thread changes the filter after each of the copy's calls to
+    // SetUnhandledExceptionFilter, as the stand-in does. Exits with 4 when the copy kept calling for
+    // as long as that thread changed the filter, with 0 otherwise.
+    [[noreturn]] void unloadWhileAnotherThreadChangesTheFilter()
+    {
+        HMODULE runtime = loadRuntimeLibrary();
+        SetUnhandledExceptionFilter(&hostFilter);
+        replaceTheCopysSetFilter(runtime, &setFilterWhileAnotherThreadAlternates);
+        unloadRuntimeLibrary(runtime);
+        std::exit(copySetFilterCalls.load() >= kAlternations ? 4 : 0);
+    }
+
+    // FreeLibrary, which holds the loader lock, does not wait on another thread that keeps changing
+    // the filter while the DLL unloads: the DLL's copy leaves the filter alone (#236).
+    TEST(BacktraceReplaceDeathTest, ADllUnloadsWhileAnotherThreadKeepsChangingTheFilter)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(unloadWhileAnotherThreadChangesTheFilter(), testing::ExitedWithCode(0), "");
+    }
 } // namespace
