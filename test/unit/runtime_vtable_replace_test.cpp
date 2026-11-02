@@ -1232,8 +1232,8 @@ namespace
                     crashBacktrace(Backtrace::NamesTheExecutableOnly));
     }
 
-    // Loads the DLL that links the runtime, whose copy installs its handler over the executable's.
-    // Prints why and exits with 2 when it does not load.
+    // Loads the DLL that links the runtime, whose copy installs no crash handler. Prints why and
+    // exits with 2 when it does not load.
     HMODULE loadRuntimeLibrary()
     {
         HMODULE runtime = LoadLibraryA(CT_RUNTIME_LIBRARY);
@@ -1254,7 +1254,7 @@ namespace
     }
 
     // Frees a DLL that links the runtime. Prints why and exits with 2 when the DLL stays mapped:
-    // its copy's handler would still have its code.
+    // FreeLibrary must unload it for real.
     void unloadRuntimeLibrary(HMODULE module)
     {
         FreeLibrary(module);
@@ -1312,8 +1312,8 @@ namespace
         faultOnAThread(&raiseUnhandledException);
     }
 
-    // Once FreeLibrary has unloaded the DLL, whose code is gone, the executable's handler reports
-    // the crash (#236).
+    // Once FreeLibrary has unloaded the DLL, the executable's handler reports the crash: the DLL's
+    // copy installed none, which would have gone with the DLL's code (#236).
     TEST(BacktraceReplaceDeathTest, OnceADllThatLinksTheRuntimeUnloadsTheExecutableReportsCrashes)
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
@@ -1343,8 +1343,8 @@ namespace
         faultOnAThread(&raiseUnhandledException);
     }
 
-    // The filter that the program installed before the DLL's copy installed its handler is back
-    // once FreeLibrary has unloaded the DLL (#236).
+    // The filter that the program installed before it loaded the DLL reports the crash once
+    // FreeLibrary has unloaded the DLL: the DLL's copy did not replace it (#236).
     TEST(BacktraceReplaceDeathTest, TheHostsFilterInstalledBeforeADllIsBackOnceItUnloads)
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
@@ -1362,7 +1362,7 @@ namespace
         faultOnAThread(&raiseUnhandledException);
     }
 
-    // Unloading the DLL leaves the filter that the program installed over its copy's handler
+    // Unloading the DLL leaves the filter that the program installed after it loaded the DLL
     // (#236).
     TEST(BacktraceReplaceDeathTest, ADllUnloadedLeavesTheHostsFilterInstalledAfterIt)
     {
@@ -1373,19 +1373,19 @@ namespace
                     "host filter e0000225");
     }
 
-    // A copy of a DLL that links the runtime, by default the one of reload/ct_runtime_library.cpp,
-    // at a path of the child's own: the loader maps each copy as a module apart, with a copy of the
-    // runtime of its own. Prints why and exits with 2 when it does not load.
+    // A copy of the DLL of reload/ct_runtime_library.cpp, which links the runtime, at a path of the
+    // child's own: the loader maps each copy as a module apart, with a copy of the runtime of its
+    // own. Prints why and exits with 2 when it does not load.
     class RuntimeLibraryCopy
     {
       public:
-        explicit RuntimeLibraryCopy(const char* name, const char* source = CT_RUNTIME_LIBRARY)
+        explicit RuntimeLibraryCopy(const char* name)
             : path_(fs::path(testing::TempDir()) /
-                    (fs::path(source).stem().string() + "_" + name + "_" +
+                    (fs::path(CT_RUNTIME_LIBRARY).stem().string() + "_" + name + "_" +
                      std::to_string(GetCurrentProcessId()) + ".dll"))
         {
             std::error_code error;
-            fs::copy_file(source, path_, fs::copy_options::overwrite_existing, error);
+            fs::copy_file(CT_RUNTIME_LIBRARY, path_, fs::copy_options::overwrite_existing, error);
             module_ = error ? nullptr : LoadLibraryW(path_.c_str());
             if (!module_)
             {
@@ -1414,8 +1414,8 @@ namespace
         HMODULE module_ = nullptr;
     };
 
-    // Loads two copies of the DLL that links the runtime, whose copies of the runtime each install
-    // their handler over the one before, unloads them in load order or in reverse, then faults.
+    // Loads two copies of the DLL that links the runtime, unloads them in load order or in reverse,
+    // then faults.
     [[noreturn]] void faultAfterTwoDllsUnloaded(bool in_load_order)
     {
         RuntimeLibraryCopy first("first");
@@ -1426,8 +1426,8 @@ namespace
         faultOnAThread(&raiseUnhandledException);
     }
 
-    // The second copy's handler was installed over the first's: unloaded first, it leaves the
-    // first copy's handler, which leaves the executable's (#236).
+    // Neither DLL's copy of the runtime installs a handler: once both DLLs have unloaded, the second
+    // first, the executable's handler reports the crash (#236).
     TEST(BacktraceReplaceDeathTest, OnceTwoDllsUnloadInReverseOrderTheExecutableReportsCrashes)
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
@@ -1436,9 +1436,7 @@ namespace
                     crashBacktraceFrom("handler:2 "));
     }
 
-    // The first copy unloads while the second's handler, installed over its own, is still there:
-    // once the second copy unloads too, the executable's handler reports the crash, not the first
-    // copy's, whose code is gone (#236).
+    // Nor when the first DLL unloads first (#236).
     TEST(BacktraceReplaceDeathTest, OnceTwoDllsUnloadInLoadOrderTheExecutableReportsCrashes)
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
