@@ -1385,16 +1385,24 @@ namespace
         return current;
     }
 
+    // Installs the host's filter, loads the DLL that links the runtime, unloads it, then faults.
+    // Prints why and exits with 3 when the DLL's copy replaced the host's filter.
     [[noreturn]] void faultWithTheHostsFilterInstalledBeforeADll()
     {
         SetUnhandledExceptionFilter(&hostFilter);
-        unloadRuntimeLibrary(loadRuntimeLibrary());
+        HMODULE runtime = loadRuntimeLibrary();
+        if (currentFilter() != &hostFilter)
+        {
+            std::fprintf(stderr, "the runtime library replaced the host's filter\n");
+            std::exit(3);
+        }
+        unloadRuntimeLibrary(runtime);
         faultOnAThread(&raiseUnhandledException);
     }
 
-    // The filter that the program installed before it loaded the DLL reports the crash once
-    // FreeLibrary has unloaded the DLL: the DLL's copy did not replace it (#236).
-    TEST(BacktraceReplaceDeathTest, TheHostsFilterInstalledBeforeADllIsBackOnceItUnloads)
+    // The filter that the program installed before it loaded the DLL stays the process's while the
+    // DLL is loaded, and reports the crash once FreeLibrary has unloaded the DLL (#236).
+    TEST(BacktraceReplaceDeathTest, TheHostsFilterInstalledBeforeADllStaysWhileItComesAndGoes)
     {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
