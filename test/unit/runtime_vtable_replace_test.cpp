@@ -1376,6 +1376,15 @@ namespace
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
+    // The process's filter, read the only way Windows allows: by setting another one, then putting
+    // it back.
+    LPTOP_LEVEL_EXCEPTION_FILTER currentFilter()
+    {
+        const LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(&hostFilter);
+        SetUnhandledExceptionFilter(current);
+        return current;
+    }
+
     [[noreturn]] void faultWithTheHostsFilterInstalledBeforeADll()
     {
         SetUnhandledExceptionFilter(&hostFilter);
@@ -1411,6 +1420,27 @@ namespace
         EXPECT_EXIT(faultWithTheHostsFilterInstalledAfterADll(),
                     testing::ExitedWithCode(static_cast<int>(kHostFilterExit)),
                     "host filter e0000225");
+    }
+
+    // Removes the executable's handler, as for a program that does not link the runtime, then loads
+    // the DLL that links it and unloads it. Exits with 3 when the DLL's copy installed a filter, with
+    // 0 otherwise.
+    [[noreturn]] void loadADllThatLinksTheRuntimeWithoutAHandler()
+    {
+        SetUnhandledExceptionFilter(nullptr);
+        HMODULE runtime = loadRuntimeLibrary();
+        const bool untouched = currentFilter() == nullptr;
+        unloadRuntimeLibrary(runtime);
+        std::exit(untouched ? 0 : 3);
+    }
+
+    // In a program that does not link the runtime, the DLL that links it installs no crash handler:
+    // an instrumented DLL that such a program loads reports no crash (#236).
+    TEST(BacktraceReplaceDeathTest, ADllThatLinksTheRuntimeInstallsNoHandlerInAProgramWithoutOne)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(loadADllThatLinksTheRuntimeWithoutAHandler(), testing::ExitedWithCode(0), "");
     }
 
     // A copy of the DLL of reload/ct_runtime_library.cpp, which links the runtime, at a path of the
@@ -1483,15 +1513,6 @@ namespace
         BacktraceInChildren backtrace;
         EXPECT_EXIT(faultAfterTwoDllsUnloaded(true), endedByTheFault(),
                     crashBacktraceFrom("handler:2 "));
-    }
-
-    // The process's filter, read the only way Windows allows: by setting another one, then putting
-    // it back.
-    LPTOP_LEVEL_EXCEPTION_FILTER currentFilter()
-    {
-        const LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(&hostFilter);
-        SetUnhandledExceptionFilter(current);
-        return current;
     }
 
     // Points the import of `function` from kernel32.dll by the loaded `module` at `replacement`, and
