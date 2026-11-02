@@ -1639,4 +1639,46 @@ namespace
         BacktraceInChildren backtrace;
         EXPECT_EXIT(unloadWhileAnotherThreadChangesTheFilter(), testing::ExitedWithCode(0), "");
     }
+
+    // The filter that the host installed last, as the child and the stand-in below record it.
+    std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> hostsLastFilter{nullptr};
+
+    // A stand-in for the copy's SetUnhandledExceptionFilter: right after the copy's first call, the
+    // host installs again the filter that this call set, as a host may that puts back a filter it
+    // had read.
+    LPTOP_LEVEL_EXCEPTION_FILTER WINAPI
+    setFilterThenTheHostSetsItAgain(LPTOP_LEVEL_EXCEPTION_FILTER filter)
+    {
+        const LPTOP_LEVEL_EXCEPTION_FILTER replaced = resolvedSetFilter(filter);
+        if (copySetFilterCalls.fetch_add(1) == 0)
+        {
+            resolvedSetFilter(filter);
+            hostsLastFilter.store(filter);
+        }
+        return replaced;
+    }
+
+    // Loads the DLL that links the runtime and installs the host's filter. While FreeLibrary unloads
+    // the DLL, the host installs again the filter that the copy's first call to
+    // SetUnhandledExceptionFilter set, as the stand-in does. Exits with 3 when the process's filter
+    // is not then the one the host installed last, with 0 otherwise.
+    [[noreturn]] void unloadWhileTheHostSetsAFilterAgain()
+    {
+        HMODULE runtime = loadRuntimeLibrary();
+        SetUnhandledExceptionFilter(&hostFilter);
+        hostsLastFilter.store(&hostFilter);
+        replaceTheCopysSetFilter(runtime, &setFilterThenTheHostSetsItAgain);
+        unloadRuntimeLibrary(runtime);
+        std::exit(currentFilter() == hostsLastFilter.load() ? 0 : 3);
+    }
+
+    // The filter that the host installed last stays the process's once FreeLibrary has unloaded the
+    // DLL, even when the host installed it during the unload, at the address of a filter that the
+    // DLL's copy had set for that moment (#236).
+    TEST(BacktraceReplaceDeathTest, TheFilterTheHostInstallsLastStaysOnceADllUnloads)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(unloadWhileTheHostSetsAFilterAgain(), testing::ExitedWithCode(0), "");
+    }
 } // namespace
