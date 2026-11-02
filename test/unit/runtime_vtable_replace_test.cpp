@@ -1322,6 +1322,46 @@ namespace
                     crashBacktraceFrom("handler:2 "));
     }
 
+    // A crash backtrace with a frame in the image that the child printed after `mark`.
+    testing::Matcher<const std::string&> aFrameIn(const char* mark)
+    {
+        return testing::Truly(
+            [mark](const std::string& output)
+            {
+                const CrashImage image = imageAfter(output, mark);
+                const std::vector<CrashFrame> frames = crashFramesOf(output);
+                return std::any_of(frames.begin(), frames.end(), [&](const CrashFrame& frame)
+                                   { return image.holds(frame.address); });
+            });
+    }
+
+    // Loads the DLL that links the runtime, then faults in the DLL's own code. Prints why and exits
+    // with 2 when the DLL has no function that faults.
+    [[noreturn]] void faultInADllThatLinksTheRuntime()
+    {
+        HMODULE runtime = loadRuntimeLibrary();
+        auto* fault =
+            reinterpret_cast<void (*)()>(GetProcAddress(runtime, "ct_runtime_library_fault"));
+        if (!fault)
+        {
+            std::fprintf(stderr, "the runtime library has no function that faults\n");
+            std::exit(2);
+        }
+        printImage("handler:2", GetModuleHandleW(nullptr));
+        printImage("dll:2", runtime);
+        faultOnAThread(fault);
+    }
+
+    // The executable's handler reports a crash in the code of a DLL that links the runtime, whose
+    // copy installs no handler (#236).
+    TEST(BacktraceReplaceDeathTest, ACrashInADllThatLinksTheRuntimeIsReportedByTheExecutable)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        BacktraceInChildren backtrace;
+        EXPECT_EXIT(faultInADllThatLinksTheRuntime(), endedByTheFault(),
+                    testing::AllOf(crashBacktraceFrom("handler:2 "), aFrameIn("dll:2 ")));
+    }
+
     // A filter that the program installs for the exceptions that nothing handles, as a crash
     // reporter does: it prints the code of the exception, then ends the process with an exit code
     // of its own.
