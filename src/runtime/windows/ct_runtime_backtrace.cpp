@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The crash handler of this copy of the runtime, which CT_BACKTRACE installs for the whole process
-// when the module that holds the copy initializes: the executable, or a DLL that links the runtime,
-// whose copy's handler goes over the filter installed before it. When FreeLibrary unloads the DLL,
-// whose code the process must not call afterwards, its copy puts that filter back (#236).
+// The crash handler of the runtime, which CT_BACKTRACE installs for the whole process from the
+// executable's copy of the runtime only. A DLL that links the runtime has a copy of its own, which
+// installs none: Windows has no call that puts the process's filter back only if it still is the
+// one expected, so a DLL's copy could not take its handler out when FreeLibrary unloads the DLL
+// without overwriting a filter that the program installs meanwhile, and a filter installed over the
+// handler would call it once its code is gone. A crash in the DLL is reported by the executable's
+// handler; an instrumented DLL that a program without the runtime loads reports none (#236).
 #include "ct_runtime_internal.h"
 #include "ct_runtime_helpers.h"
 
@@ -276,7 +279,9 @@ namespace
 
 CT_NOINSTR void ct_maybe_install_backtrace(void)
 {
-    if (std::getenv("CT_BACKTRACE") == nullptr)
+    // A DLL's copy leaves the process's filter alone: see the top of this file.
+    if (std::getenv("CT_BACKTRACE") == nullptr ||
+        reinterpret_cast<HMODULE>(&__ImageBase) != GetModuleHandleW(nullptr))
     {
         return;
     }
