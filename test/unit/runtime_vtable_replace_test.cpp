@@ -1268,11 +1268,14 @@ namespace
 
     // A crash backtrace that names RaiseException, printed by the handler of the module whose image
     // the child printed after `mark`: the first frame, which the handler takes in itself, lies in
-    // that image.
+    // that image. With `fault_mark`, a frame lies in the image that the child printed after it too.
     class CrashBacktraceFrom : public testing::MatcherInterface<const std::string&>
     {
       public:
-        explicit CrashBacktraceFrom(const char* mark) : mark_(mark) {}
+        CrashBacktraceFrom(const char* mark, const char* fault_mark)
+            : mark_(mark), fault_mark_(fault_mark)
+        {
+        }
 
         bool MatchAndExplain(const std::string& output,
                              testing::MatchResultListener* listener) const override
@@ -1282,10 +1285,21 @@ namespace
             {
                 return false;
             }
-            if (!imageAfter(output, mark_).holds(crashFramesOf(output).front().address))
+            const std::vector<CrashFrame> frames = crashFramesOf(output);
+            if (!imageAfter(output, mark_).holds(frames.front().address))
             {
                 *listener << "the first frame is not in the image after " << mark_;
                 return false;
+            }
+            if (fault_mark_)
+            {
+                const CrashImage fault = imageAfter(output, fault_mark_);
+                if (std::none_of(frames.begin(), frames.end(), [&](const CrashFrame& frame)
+                                 { return fault.holds(frame.address); }))
+                {
+                    *listener << "no frame is in the image after " << fault_mark_;
+                    return false;
+                }
             }
             return true;
         }
@@ -1295,15 +1309,21 @@ namespace
             *os << "is a crash backtrace that names RaiseException, printed by the handler in the "
                    "image after "
                 << mark_;
+            if (fault_mark_)
+            {
+                *os << ", with a frame in the image after " << fault_mark_;
+            }
         }
 
       private:
         const char* mark_;
+        const char* fault_mark_;
     };
 
-    testing::Matcher<const std::string&> crashBacktraceFrom(const char* mark)
+    testing::Matcher<const std::string&> crashBacktraceFrom(const char* mark,
+                                                            const char* fault_mark = nullptr)
     {
-        return testing::MakeMatcher(new CrashBacktraceFrom(mark));
+        return testing::MakeMatcher(new CrashBacktraceFrom(mark, fault_mark));
     }
 
     [[noreturn]] void faultAfterADllThatLinksTheRuntimeUnloaded()
@@ -1321,19 +1341,6 @@ namespace
         BacktraceInChildren backtrace;
         EXPECT_EXIT(faultAfterADllThatLinksTheRuntimeUnloaded(), endedByTheFault(),
                     crashBacktraceFrom("handler:2 "));
-    }
-
-    // A crash backtrace with a frame in the image that the child printed after `mark`.
-    testing::Matcher<const std::string&> aFrameIn(const char* mark)
-    {
-        return testing::Truly(
-            [mark](const std::string& output)
-            {
-                const CrashImage image = imageAfter(output, mark);
-                const std::vector<CrashFrame> frames = crashFramesOf(output);
-                return std::any_of(frames.begin(), frames.end(), [&](const CrashFrame& frame)
-                                   { return image.holds(frame.address); });
-            });
     }
 
     // Loads the DLL that links the runtime, then faults in the DLL's own code. Prints why and exits
@@ -1360,7 +1367,7 @@ namespace
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         BacktraceInChildren backtrace;
         EXPECT_EXIT(faultInADllThatLinksTheRuntime(), endedByTheFault(),
-                    testing::AllOf(crashBacktraceFrom("handler:2 "), aFrameIn("dll:2 ")));
+                    crashBacktraceFrom("handler:2 ", "dll:2 "));
     }
 
     // A filter that the program installs for the exceptions that nothing handles, as a crash
