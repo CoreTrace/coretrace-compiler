@@ -90,6 +90,11 @@ pull request.
   the program break and the mapping above it, `RLIMIT_DATA`, and the memory of the process and
   of the system (#239, #233).
 
+### Documentation
+
+- `NOTICE` dates the copyright from 2025, when the code began, credits the CoreTrace
+  contributors alongside Hugo Payet and links the repository.
+
 ## v0.12.0 (2026-10-22)
 
 Release traces name the kind and the allocation site of each block, and the Windows runtime
