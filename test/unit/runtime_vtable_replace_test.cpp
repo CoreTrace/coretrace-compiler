@@ -1613,15 +1613,16 @@ namespace
     constexpr int kAlternations = 10000;
 
     // A stand-in for the copy's SetUnhandledExceptionFilter: after each of its calls, another thread
-    // installs one of its two filters in turn, kAlternations times at most.
+    // installs whichever of its two filters the call did not set, kAlternations times at most. A
+    // filter that the call had just set would let the copy take it for its own and stop.
     LPTOP_LEVEL_EXCEPTION_FILTER WINAPI
     setFilterWhileAnotherThreadAlternates(LPTOP_LEVEL_EXCEPTION_FILTER filter)
     {
         const LPTOP_LEVEL_EXCEPTION_FILTER replaced = resolvedSetFilter(filter);
-        const int call = copySetFilterCalls.fetch_add(1);
-        if (call < kAlternations)
+        if (copySetFilterCalls.fetch_add(1) < kAlternations)
         {
-            resolvedSetFilter(call % 2 == 0 ? &firstAlternateFilter : &secondAlternateFilter);
+            resolvedSetFilter(filter == &firstAlternateFilter ? &secondAlternateFilter
+                                                              : &firstAlternateFilter);
         }
         return replaced;
     }
