@@ -286,6 +286,25 @@ runtime as follows:
   have unloaded. Once that copy has stopped following the loader, when the module that holds it
   detaches, the handler prints every frame bare.
 
+## Crash handler on Windows
+
+With `CT_BACKTRACE` set, only the executable's copy of the runtime installs a crash handler for the
+whole process, with `SetUnhandledExceptionFilter`, when the executable initializes. The copy in a
+DLL that links the runtime installs none and leaves the process's filter alone, while the DLL is
+loaded and when it unloads; `FreeLibrary` unloads the DLL as any other (#236).
+
+- In an executable that links the runtime, its handler reports the crashes of the whole process,
+  those in the code of an instrumented DLL included, while the DLL is loaded and once it has
+  unloaded.
+- A filter that the program installs, before or after it loads such a DLL, stays the process's.
+- **Limit.** In a program that does not link the runtime, an instrumented DLL reports no crash,
+  even with `CT_BACKTRACE` set: the program's own filter, if any, or Windows handles it.
+
+Windows has no call that sets the process's filter only if it still is the one expected. A DLL's
+copy that installed its handler could not take it out when the DLL unloads without overwriting a
+filter that the program or another thread installs meanwhile, and a filter installed over the
+handler would call it once its code is gone.
+
 ## LLVM versions
 
 CoreTrace Compiler builds and instruments with LLVM 16 to 23. Most behaviour is the same on
