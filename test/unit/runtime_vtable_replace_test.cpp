@@ -714,22 +714,7 @@ namespace
     // within 20 seconds, as when it waits on a lock that its own thread holds.
     [[noreturn]] void churnAndUnload(const char* library, int late, bool check)
     {
-        // The watchdog runs before the DLL loads: a thread takes the loader lock to start, and
-        // would wait for it behind a FreeLibrary that waits with that lock held.
-        HANDLE watching = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (!watching)
-        {
-            std::exit(2);
-        }
-        std::thread(
-            [watching]
-            {
-                SetEvent(watching);
-                Sleep(20000);
-                TerminateProcess(GetCurrentProcess(), 7);
-            })
-            .detach();
-        WaitForSingleObject(watching, INFINITE);
+        startWatchdog();
         using Churn = void (*)(int, size_t);
         HMODULE module = LoadLibraryA(library);
         if (!module)
