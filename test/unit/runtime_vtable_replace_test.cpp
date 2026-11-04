@@ -171,6 +171,30 @@ namespace
         HANDLE file_ = INVALID_HANDLE_VALUE;
     };
 
+    // Starts a thread that ends the process with 7 once 20 seconds have passed, for a death
+    // test's child, and returns once that thread runs: a thread takes the loader lock to start, so
+    // one started just before a LoadLibrary or a FreeLibrary that waits forever with that lock
+    // held would wait too, and nothing would end the process. Exits with 2 when it cannot wait
+    // for the thread.
+    void startWatchdog()
+    {
+        HANDLE running = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!running)
+        {
+            std::exit(2);
+        }
+        std::thread(
+            [running]
+            {
+                SetEvent(running);
+                Sleep(20000);
+                TerminateProcess(GetCurrentProcess(), 7);
+            })
+            .detach();
+        WaitForSingleObject(running, INFINITE);
+        CloseHandle(running);
+    }
+
     TEST(VtableReplace, ADllReplacedAtItsPathWithItsTimeStampIsNamedAgain)
     {
         const fs::path path = fs::path(testing::TempDir()) / "ct_replaced_library.dll";
@@ -739,13 +763,7 @@ namespace
     // having called into the DLL unloaded, cannot let it exit.
     [[noreturn]] void unloadARuntimeLibraryThenLoadAnother(bool trace_before)
     {
-        std::thread(
-            []
-            {
-                Sleep(20000);
-                TerminateProcess(GetCurrentProcess(), 7);
-            })
-            .detach();
+        startWatchdog();
         DllStandardError output(fs::path(testing::TempDir()) / "ct_runtime_library_unload.txt");
         HMODULE runtime = LoadLibraryA(CT_RUNTIME_LIBRARY);
         FARPROC entry = runtime ? GetProcAddress(runtime, "ct_runtime_library_trace") : nullptr;
