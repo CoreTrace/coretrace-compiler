@@ -1122,13 +1122,7 @@ namespace
     // the process within 20 seconds.
     [[noreturn]] void faultOnAThread(void (*fault)())
     {
-        std::thread(
-            []
-            {
-                Sleep(20000);
-                TerminateProcess(GetCurrentProcess(), 7);
-            })
-            .detach();
+        startWatchdog();
         std::thread(fault).join();
         std::exit(8);
     }
