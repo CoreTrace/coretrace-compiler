@@ -3,14 +3,18 @@
 // A DLL that links the runtime and allocates through its copy, as an instrumented DLL does: the
 // copy records the blocks in its allocation table and its block index, and keeps the blocks it
 // frees in its quarantine. runtime_vtable_replace_test.cpp loads it, has it allocate, and unloads
-// it, to check what its copy keeps once FreeLibrary has unloaded it (#227). Its allocation trace
-// is off, so that many blocks print nothing.
+// it, to check what its copy keeps once FreeLibrary has unloaded it (#227), and has it map and
+// unmap a page through its copy (#243). Its allocation trace is off, so that many blocks print
+// nothing.
 #include <cstddef>
 
 extern "C" void* __ct_malloc(size_t size, const char* site);
 extern "C" void __ct_free(void* ptr, const char* site);
 extern "C" void __ct_check_bounds(const void* base, const void* ptr, size_t access_size,
                                   const char* site, int is_write);
+extern "C" void* __ct_mmap(void* addr, size_t len, int prot, int flags, int fd, size_t offset,
+                           const char* site);
+extern "C" int __ct_munmap(void* addr, size_t len, const char* site);
 
 extern "C" int __ct_config_disable_alloc_trace = 1;
 
@@ -27,6 +31,20 @@ extern "C" __declspec(dllexport) void ct_allocating_library_churn(int count, siz
         __ct_free(blocks[index], "allocating:block");
     }
     __ct_free(blocks, "allocating:array");
+}
+
+// Maps a page through the copy of the runtime, which records it, and unmaps it, which drops the
+// page's record. 0 once unmapped, 1 when the mapping failed, -1 when the unmapping did.
+extern "C" __declspec(dllexport) int ct_allocating_library_map_and_unmap()
+{
+    constexpr size_t kPageSize = 4096;
+    constexpr int kReadWrite = 0x1 | 0x2; // PROT_READ | PROT_WRITE, which Windows does not define.
+    void* page = __ct_mmap(nullptr, kPageSize, kReadWrite, 0, -1, 0, "allocating:page");
+    if (page == reinterpret_cast<void*>(-1))
+    {
+        return 1;
+    }
+    return __ct_munmap(page, kPageSize, "allocating:page");
 }
 
 // A block of `size` bytes allocated through the copy of the runtime, which the DLL never frees.
