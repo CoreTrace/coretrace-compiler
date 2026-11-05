@@ -1202,6 +1202,9 @@ extern "C"
     {
         ct_init_env_once();
         (void)len;
+        // Dropping the page's record frees a node of the table with ct_alloc_lock held, which
+        // may reach the runtime's entry points (#197): it is the runtime's own work (#243).
+        CtRuntimeScope scope;
 
         size_t size = 0;
         const char* alloc_site = nullptr;

@@ -775,6 +775,45 @@ namespace
                     testing::ExitedWithCode(0), "");
     }
 
+    // Loads `library` and has it map a page through its copy of the runtime and unmap it. Exits
+    // with 0 once unmapped, 2 when the DLL, its function or the watchdog are missing, 3 when the
+    // mapping or the unmapping failed, and 7 when they have not returned within 20 seconds, as when
+    // the copy waits on a lock that its own thread holds.
+    [[noreturn]] void mapAndUnmap(const char* library)
+    {
+        startWatchdog();
+        HMODULE module = LoadLibraryA(library);
+        if (!module)
+        {
+            std::exit(2);
+        }
+        auto map_and_unmap = reinterpret_cast<int (*)()>(
+            GetProcAddress(module, "ct_allocating_library_map_and_unmap"));
+        if (!map_and_unmap)
+        {
+            std::exit(2);
+        }
+        std::exit(map_and_unmap() == 0 ? 0 : 3);
+    }
+
+    // The copy of a DLL that maps and unmaps a page through it records the page, then drops its
+    // record.
+    TEST(DllAllocStateDeathTest, ADllThatMapsAPageThroughItsCopyUnmapsIt)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(mapAndUnmap(CT_ALLOCATING_LIBRARY), testing::ExitedWithCode(0), "");
+    }
+
+    // Dropping the page's record frees a node of the copy's table with the table's lock held. The
+    // node comes back to the copy's entry points through the DLL's operator delete: the copy drops
+    // the record as its own work, so that the release does not wait on that lock (#197, #243).
+    TEST(DllAllocStateDeathTest, ADllWhoseOperatorDeleteFreesThroughItsCopyUnmapsAPage)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(mapAndUnmap(CT_NEW_DELETE_THROUGH_RUNTIME_LIBRARY), testing::ExitedWithCode(0),
+                    "");
+    }
+
     // The line `label` of the first box of `site`, empty without one.
     std::string lineOf(const std::string& boxes, const char* site, const char* label)
     {

@@ -93,6 +93,13 @@ pull request.
   blocks of 64 bytes freed, and 957 KB for 5000 blocks of 16 bytes, in a probe of #227. The copy now
   frees them when `FreeLibrary` unloads the DLL, after the DLL's exit-time code, and keeps them when
   the process exits, for the leak report (#227).
+- **Unmapping a recorded page, on Windows.** The runtime's `munmap` dropped the record of a
+  mapping that it had recorded with its allocation table's lock held, outside the runtime's own
+  work. When the release of that record came back to the runtime's entry points, as through the
+  copies of the library's inline functions that an instrumented module compiles (#197), it waited
+  for that lock, which its own thread held, and the unmap never returned: a test DLL whose
+  operators new and delete go through the runtime hung in each of the four Windows jobs. `munmap`
+  now drops the record as the runtime's own work (#243).
 
 ### Tests and CI
 
