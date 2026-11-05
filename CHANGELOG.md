@@ -14,8 +14,37 @@ pull request.
 
 ## Unreleased
 
+### Features
+
+- **Compilations from several threads, each in a directory of its own.** Each compilation reads
+  and writes files through a file system of its own, whose working directory
+  `-working-directory` sets without changing the process's: the sources, the include
+  directories and the files the compilation writes, its output, dependency file, time trace,
+  optimization record, stack usage, split DWARF and serialized diagnostics, are relative to it,
+  as with clang. A host, such as an analyzer, compiles each command of a compilation database in
+  its directory from several threads at once, instead of changing the process's working
+  directory under a lock that serializes the compilations (README, "Faster compilations for a
+  host").
+- **`compilerlib::compileToModule`**, in `compilerlib/compile_module.hpp`, gives the module of an
+  LLVM IR compilation, created in an `llvm::LLVMContext` of the host, instead of its text or
+  bitcode, which the host had to read back. The module is the one `compile` writes, instrumented
+  or not; the context keeps whether it discards value names.
+
+### Behaviour changes
+
+- **`-working-directory` and the programs a compilation runs.** With `-working-directory`, a
+  compilation that links, assembles a `.s` source or passes `-fno-integrated-cc1` fails with an
+  error: those jobs run as programs of their own, which would start in the process's working
+  directory. `cc` enters the directory itself, as clang does, and links there.
+
 ### Fixes
 
+- **`-working-directory` moved the whole process.** compilerlib moved the working directory of
+  the process to the directory of `-working-directory`, and left it there after the compilation.
+  A relative directory was also applied twice, to the process and then to the sources, which the
+  compilation then did not find; `cc` now accepts one.
+- **`CT_DEBUG_AUTOFREE` read from several threads.** The allocation pass read the variable into
+  two plain statics on its first use, on which two threads instrumenting modules at once raced.
 - **A child of `fork()` and the vtable diagnostics, on Linux.** With `--ct-vtable-diag`, a
   child of `fork()` could hang. The runtime looked the modules up through `dl_iterate_phdr`,
   whose lock glibc does not reset in the child (2.39 checked): a child forked while another
@@ -87,8 +116,25 @@ pull request.
   leaves the process's filter alone. An instrumented DLL that a program without the runtime loads
   reports no crash any more (README, "Crash handler on Windows") (#236).
 
+### Performance
+
+- **Compiling from a host.** Eight sources that each include a dozen headers of the C++ standard
+  library, compiled with `-g` by four threads of a host under one lock, with LLVM 18 on four
+  cores, take 9.0 s as textual IR read back with `llvm::parseIR`, 8.0 s as bitcode read back with
+  `llvm::parseBitcodeFile`, 7.4 s with `compileToModule`, and 2.0 s with `compileToModule` and
+  `-working-directory` without the lock.
+- **Building compilerlib.** `compilerlib_static` and `compilerlib_shared` take the objects of one
+  object library, `compilerlib_objects`, instead of compiling each source of compilerlib twice: a
+  project that builds this one through FetchContent, as the analyzers do, builds both libraries
+  and `cc`, the runtime included, in 25 s instead of 43 s on four cores with LLVM 18, and 90 s of
+  CPU time instead of 159 s. The objects are position-independent in both libraries.
+
 ### Tests and CI
 
+- Compilations from eight threads at once, each in a directory of its own with a header of the
+  same name, read their own header, through `compile` and `compileToModule`, instrumented or
+  not. `compileToModule` gives the module that `compile` writes as text, at `-O0` and `-O2`,
+  instrumented or not.
 - The jobs of the Build and clang-format workflows that ran on `ubuntu-latest` run on Ubuntu
   24.04, and the format check installs and runs clang-format 18. `ubuntu-latest` had moved to
   Ubuntu 26.04, where clang-format 19 ran and apt.llvm.org has no LLVM 20. `scripts/format.sh`
