@@ -170,6 +170,17 @@ CT_NOINSTR void ct_quarantine_set_limit(size_t bytes)
     ct_release_over_limit();
 }
 
+CT_NOINSTR void ct_quarantine_release_all(void)
+{
+    ct_quarantine_set_limit(0);
+    ct_lock_acquire();
+    std::free(ct_queue);
+    ct_queue = nullptr;
+    ct_queue_capacity = 0;
+    ct_queue_head = 0;
+    ct_lock_release();
+}
+
 CT_NODISCARD CT_NOINSTR size_t ct_quarantine_bytes(void)
 {
     ct_lock_acquire();

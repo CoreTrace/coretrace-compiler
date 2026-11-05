@@ -239,7 +239,9 @@ reports the DLL's leaks when the process exits, after the DLL's `atexit` handler
 of its global objects and its destructor functions: from a terminator of the DLL, or, when the DLL
 itself ends the process with `exit()`, when the loader detaches it. That comes before the exit-time
 code of the modules that detach after the DLL. It reports nothing when `FreeLibrary` unloads the
-DLL (#232).
+DLL (#232). It frees its table then, after that exit-time code, with the blocks that its quarantine
+held, which the DLL had released, and what its block index grew into; the blocks that the DLL still
+holds stay allocated (#227).
 
 ## DbgHelp on Windows
 

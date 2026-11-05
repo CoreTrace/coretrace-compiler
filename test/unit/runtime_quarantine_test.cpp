@@ -132,4 +132,36 @@ namespace
         EXPECT_EQ(__ct_realloc(released, 4 * kBlockSize, "test:realloc"), nullptr);
         EXPECT_EQ(recordedState(released), CT_ENTRY_FREED);
     }
+
+    // Releasing everything empties the quarantine, the freed records of its blocks going with
+    // them, as a copy of the runtime does when its module unloads (#227). A block released
+    // afterwards goes to the allocator at once.
+    TEST_F(QuarantineTest, ReleaseAllEmptiesTheQuarantine)
+    {
+        std::vector<void*> released;
+        for (int i = 0; i < 4; ++i)
+        {
+            void* tracked = __ct_malloc(kBlockSize, "test:tracked");
+            ASSERT_NE(tracked, nullptr);
+            released.push_back(tracked);
+        }
+        for (void* tracked : released)
+        {
+            __ct_free(tracked, "test:free");
+        }
+        ASSERT_EQ(recordedState(released.back()), CT_ENTRY_FREED);
+
+        ct_quarantine_release_all();
+        EXPECT_EQ(ct_quarantine_bytes(), 0u);
+        for (void* tracked : released)
+        {
+            EXPECT_EQ(recordedState(tracked), 0);
+        }
+
+        void* later = __ct_malloc(kBlockSize, "test:tracked");
+        ASSERT_NE(later, nullptr);
+        __ct_free(later, "test:free");
+        EXPECT_EQ(recordedState(later), 0);
+        EXPECT_EQ(ct_quarantine_bytes(), 0u);
+    }
 } // namespace
