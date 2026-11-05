@@ -2,10 +2,15 @@
 #include "args_internal.hpp"
 #include "clang_compat.hpp"
 
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/SmallString.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/Option/ArgList.h>
+#include <llvm/Support/Path.h>
+#include <llvm/Support/VirtualFileSystem.h>
 
 #include <cstring>
+#include <map>
 
 namespace compilerlib
 {
@@ -105,6 +110,108 @@ namespace compilerlib
             out.push_back(std::move(arg));
         }
         args.swap(out);
+    }
+
+    std::string normalizeWorkingDirectoryArgs(std::vector<std::string>& args,
+                                              llvm::vfs::FileSystem& fs)
+    {
+        std::vector<const char*> argv;
+        argv.reserve(args.size());
+        for (const auto& arg : args)
+            argv.push_back(arg.c_str());
+        unsigned missingIndex = 0;
+        unsigned missingCount = 0;
+        // The driver's own parse: the value of another option, or an input after "--", is
+        // not an option.
+        const llvm::opt::InputArgList parsed =
+            clang_compat::driverOptTable().ParseArgs(argv, missingIndex, missingCount);
+
+        // Index of each -working-directory, either spelling, and its absolute directory.
+        std::map<unsigned, std::string> directories;
+        std::string last;
+        for (const llvm::opt::Arg* arg :
+             parsed.filtered(clang_compat::options::OPT_working_directory))
+        {
+            llvm::SmallString<256> directory(arg->getValue());
+            (void)fs.makeAbsolute(directory);
+            last = directory.str().str();
+            directories.emplace(arg->getIndex(), last);
+        }
+        if (directories.empty())
+            return {};
+
+        std::vector<std::string> out;
+        out.reserve(args.size() + directories.size());
+        for (unsigned i = 0; i < args.size(); ++i)
+        {
+            auto found = directories.find(i);
+            if (found == directories.end())
+            {
+                out.push_back(std::move(args[i]));
+                continue;
+            }
+            // The separate spelling has its directory in the next argument.
+            if (args[i] == "-working-directory")
+                ++i;
+            out.push_back("-working-directory");
+            out.push_back(std::move(found->second));
+        }
+        args.swap(out);
+        return last;
+    }
+
+    llvm::opt::ArgStringList
+    resolveCc1OutputPaths(const llvm::opt::ArgStringList& args, llvm::StringRef directory,
+                          llvm::function_ref<const char*(llvm::StringRef)> save)
+    {
+        // The -cc1 spellings the driver gives these options, LLVM 16 to 23.
+        static constexpr llvm::StringLiteral kSeparate[] = {
+            "-o",
+            "-dependency-file",
+            "-header-include-file",
+            "-opt-record-file",
+            "-split-dwarf-output",
+            "-stack-usage-file",
+            "-serialize-diagnostic-file",
+        };
+        static constexpr llvm::StringLiteral kJoined[] = {"-ftime-trace="};
+
+        // nullptr when `path` needs no change: absolute, or "-" for a standard stream. A
+        // relative path is appended to the directory, as clang's FileManager does.
+        auto absolute = [&](llvm::StringRef prefix, llvm::StringRef path) -> const char*
+        {
+            if (path.empty() || path == "-" || llvm::sys::path::is_absolute(path))
+                return nullptr;
+            llvm::SmallString<256> resolved(directory);
+            llvm::sys::path::append(resolved, path);
+            std::string argument = prefix.str();
+            argument += resolved.str();
+            return save(argument);
+        };
+
+        llvm::opt::ArgStringList out;
+        out.reserve(args.size());
+        for (size_t i = 0; i < args.size(); ++i)
+        {
+            const llvm::StringRef arg = args[i];
+            out.push_back(args[i]);
+            if (llvm::is_contained(kSeparate, arg) && i + 1 < args.size())
+            {
+                ++i;
+                const char* resolved = absolute("", args[i]);
+                out.push_back(resolved ? resolved : args[i]);
+                continue;
+            }
+            for (llvm::StringRef prefix : kJoined)
+            {
+                if (!arg.starts_with(prefix))
+                    continue;
+                if (const char* resolved = absolute(prefix, arg.drop_front(prefix.size())))
+                    out.back() = resolved;
+                break;
+            }
+        }
+        return out;
     }
 
     void appendDiagnostics(std::string& out, const std::string& extra)

@@ -31,6 +31,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef _WIN32
@@ -1770,4 +1771,122 @@ int main()
             EXPECT_TRUE(result.success) << autofree << "\n" << result.diagnostics;
         }
     }
+
+    // -working-directory, as clang reads it: the sources, the include directories and the
+    // files a compilation writes are relative to it. The process's working directory stays
+    // where it is, so that compilations from several threads each have one of their own.
+    class WorkingDirectoryTest : public CompileTest
+    {
+      protected:
+        // A project whose source includes its header through a relative include directory.
+        std::string writeProject(const std::string& name, int value) const
+        {
+            writeSource((name + "/inc/value.h").c_str(),
+                        ("#define VALUE " + std::to_string(value) + "\n").c_str());
+            writeSource((name + "/unit.c").c_str(),
+                        "#include \"value.h\"\nint value(void) { return VALUE; }\n");
+            return path(name.c_str());
+        }
+    };
+
+    class WorkingDirectoryOutputTest : public WorkingDirectoryTest,
+                                       public ::testing::WithParamInterface<bool>
+    {
+    };
+
+    TEST_P(WorkingDirectoryOutputTest, ResolvesTheSourcesAndTheFilesWritten)
+    {
+        const fs::path project = writeProject("project", 42);
+        const fs::path processDirectory = fs::current_path();
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-working-directory", project.string(), "-Iinc", "-c", "unit.c",
+                                  "-MD", "-MF", "ct_wd_unit.d", "-o", "ct_wd_unit.o"},
+                                 compilerlib::OutputMode::ToFile, /*instrument=*/GetParam());
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_EQ(fs::current_path(), processDirectory);
+        EXPECT_TRUE(fs::exists(project / "ct_wd_unit.o"));
+        EXPECT_NE(readFile((project / "ct_wd_unit.d").string()).find("value.h"), std::string::npos);
+        EXPECT_FALSE(fs::exists(processDirectory / "ct_wd_unit.o"));
+        EXPECT_FALSE(fs::exists(processDirectory / "ct_wd_unit.d"));
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Instrumentation, WorkingDirectoryOutputTest, ::testing::Bool(),
+                             [](const ::testing::TestParamInfo<bool>& info)
+                             { return info.param ? "Instrumented" : "Plain"; });
+
+    // A relative directory is relative to the process's working directory, in both spellings.
+    TEST_F(WorkingDirectoryTest, RelativeDirectoryIsRelativeToTheProcess)
+    {
+        const fs::path relative = fs::relative(writeProject("project", 42), fs::current_path());
+        if (relative.empty())
+            GTEST_SKIP() << "no relative path from the working directory to the test's";
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-working-directory=" + relative.string(), "-Iinc", "-S", "-emit-llvm", "unit.c"},
+            compilerlib::OutputMode::ToMemory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(result.llvmIR.find("ret i32 42"), std::string::npos) << result.llvmIR;
+    }
+
+    // The linker runs as a program of its own, which would start in the process's working
+    // directory: a link with -working-directory fails instead of linking elsewhere.
+    TEST_F(WorkingDirectoryTest, LinkingIsRejected)
+    {
+        const fs::path project = writeProject("project", 0);
+        writeSource("project/main.c", "int value(void);\nint main(void) { return value(); }\n");
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-working-directory", project.string(), "-Iinc", "unit.c", "main.c", "-o", "program"},
+            compilerlib::OutputMode::ToFile);
+        EXPECT_FALSE(result.success);
+        EXPECT_NE(result.diagnostics.find("-working-directory"), std::string::npos)
+            << result.diagnostics;
+        EXPECT_FALSE(fs::exists(project / "program"));
+    }
+
+    // Compilations from several threads at once, each in a project of its own whose header
+    // has the same name: each reads its own.
+    class ConcurrentCompilationTest : public WorkingDirectoryTest,
+                                      public ::testing::WithParamInterface<bool>
+    {
+    };
+
+    TEST_P(ConcurrentCompilationTest, EachReadsItsOwnWorkingDirectory)
+    {
+        constexpr int kThreads = 8;
+        constexpr int kRounds = 3;
+        std::vector<std::string> projects;
+        for (int i = 0; i < kThreads; ++i)
+            projects.push_back(writeProject("project" + std::to_string(i), 100 + i));
+        const fs::path processDirectory = fs::current_path();
+
+        std::vector<std::string> failures(kThreads);
+        std::vector<std::thread> threads;
+        for (int i = 0; i < kThreads; ++i)
+        {
+            threads.emplace_back(
+                [&, i]
+                {
+                    const std::string expected = "ret i32 " + std::to_string(100 + i);
+                    for (int round = 0; round < kRounds && failures[i].empty(); ++round)
+                    {
+                        compilerlib::CompileResult result = compilerlib::compile(
+                            {"-working-directory", projects[i], "-Iinc", "-S", "-emit-llvm",
+                             "unit.c"},
+                            compilerlib::OutputMode::ToMemory, /*instrument=*/GetParam());
+                        if (!result.success)
+                            failures[i] = result.diagnostics;
+                        else if (result.llvmIR.find(expected) == std::string::npos)
+                            failures[i] = "no \"" + expected + "\" in\n" + result.llvmIR;
+                    }
+                });
+        }
+        for (std::thread& thread : threads)
+            thread.join();
+        for (int i = 0; i < kThreads; ++i)
+            EXPECT_EQ(failures[i], "") << "thread " << i;
+        EXPECT_EQ(fs::current_path(), processDirectory);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Instrumentation, ConcurrentCompilationTest, ::testing::Bool(),
+                             [](const ::testing::TestParamInfo<bool>& info)
+                             { return info.param ? "Instrumented" : "Plain"; });
 } // namespace

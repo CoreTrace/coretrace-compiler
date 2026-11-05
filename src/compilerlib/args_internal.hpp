@@ -7,12 +7,18 @@
 
 #include "compilerlib/attributes.hpp"
 
+#include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Option/Option.h>
 #include <llvm/TargetParser/Triple.h>
 
 #include <string>
 #include <vector>
+
+namespace llvm::vfs
+{
+    class FileSystem;
+} // namespace llvm::vfs
 
 namespace compilerlib
 {
@@ -35,6 +41,22 @@ namespace compilerlib
 
     // Rewrites the `-o=path` and `-x=lang` spellings into the two-argument forms.
     void normalizeEqualsArgs(std::vector<std::string>& args);
+
+    // Rewrites each -working-directory of a driver command line, `-working-directory <dir>` or
+    // `-working-directory=<dir>`, into the two-argument form, with <dir> made absolute by `fs`.
+    // Returns the directory of the last one, which the driver uses; empty without one.
+    CT_NODISCARD std::string normalizeWorkingDirectoryArgs(std::vector<std::string>& args,
+                                                           llvm::vfs::FileSystem& fs);
+
+    // The arguments of a -cc1 job, with the relative path of each file it writes made absolute
+    // against `directory`: its output, dependency file, header list, optimization record, split
+    // DWARF, stack usage, serialized diagnostics and time trace. A job resolves the files it
+    // reads, and its output, against its -working-directory, but the other files it writes
+    // against the process's working directory, which clang itself moves to that directory
+    // first. `save` keeps a new argument alive as long as the job.
+    CT_NODISCARD llvm::opt::ArgStringList
+    resolveCc1OutputPaths(const llvm::opt::ArgStringList& args, llvm::StringRef directory,
+                          llvm::function_ref<const char*(llvm::StringRef)> save);
 
     // Appends `extra` to `out` with exactly one newline between them; no-op when empty.
     void appendDiagnostics(std::string& out, const std::string& extra);

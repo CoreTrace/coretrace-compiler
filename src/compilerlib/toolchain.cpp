@@ -3,6 +3,7 @@
 #include "clang_compat.hpp"
 #include "toolchain_internal.hpp"
 
+#include <llvm/ADT/SmallString.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Object/Archive.h>
 #include <llvm/Object/Binary.h>
@@ -180,7 +181,19 @@ namespace compilerlib
             bool has_source_inputs = false;
             bool has_object_inputs = false;
             std::vector<std::string> inputs;
+            // The -working-directory value, when the arguments give one.
+            std::string working_directory;
         };
+
+        // An input where the driver reads it: relative to -working-directory, when given.
+        CT_NODISCARD std::string inputPath(const ArgScan& scan, const std::string& input)
+        {
+            if (scan.working_directory.empty() || llvm::sys::path::is_absolute(input))
+                return input;
+            llvm::SmallString<256> path(scan.working_directory);
+            llvm::sys::path::append(path, input);
+            return path.str().str();
+        }
 
         CT_NODISCARD ArgScan scanArgs(const std::vector<std::string>& args)
         {
@@ -212,6 +225,15 @@ namespace compilerlib
                             scan.resource_dir = args[++i];
                         else if (arg != "-resource-dir")
                             scan.resource_dir = arg.drop_front(sizeof("-resource-dir=") - 1).str();
+                        continue;
+                    }
+                    if (arg == "-working-directory" || arg.starts_with("-working-directory="))
+                    {
+                        if (arg == "-working-directory" && i + 1 < args.size())
+                            scan.working_directory = args[++i];
+                        else if (arg != "-working-directory")
+                            scan.working_directory =
+                                arg.drop_front(sizeof("-working-directory=") - 1).str();
                         continue;
                     }
                     if (arg == "-isysroot")
@@ -505,7 +527,7 @@ namespace compilerlib
                 llvm::StringRef ext = llvm::sys::path::extension(path);
                 if (!isObjectExt(ext) && !isArchiveExt(ext))
                     continue;
-                llvm::Expected<bool> looksCxx = pathLooksLikeCxxObject(path);
+                llvm::Expected<bool> looksCxx = pathLooksLikeCxxObject(inputPath(scan, path));
                 if (!looksCxx)
                 {
                     error = "failed to inspect object: " + path + ": " +
