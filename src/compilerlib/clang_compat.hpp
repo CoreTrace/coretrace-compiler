@@ -83,6 +83,19 @@ namespace compilerlib::clang_compat
         return file;
     }
 
+    // Removes from `context` the record that Clang's frontend action set up on it, for
+    // -fsave-optimization-record: before LLVM 22, the action closes the file and leaves the
+    // streamer, which would write into it; LLVM 22's handle removes the streamer itself.
+    inline void releaseFrontendOptimizationRecord(llvm::LLVMContext& context)
+    {
+#if LLVM_VERSION_MAJOR >= 22
+        (void)context;
+#else
+        context.setLLVMRemarkStreamer(nullptr);
+        context.setMainRemarkStreamer(nullptr);
+#endif
+    }
+
     // Removes the record's streamer from `context`, which must not write into `file` once
     // it is released.
     inline void releaseOptimizationRecord(llvm::LLVMContext& context, RemarkFile& file)

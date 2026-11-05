@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "compilerlib/compiler.h"
+#include "compilerlib/compile_module.hpp"
 #include "compilerlib/attributes.hpp"
 #include "compilerlib/toolchain.hpp"
 
@@ -75,6 +76,9 @@ namespace compilerlib
         class LocatingCodegenAction : public clang::EmitLLVMOnlyAction
         {
           public:
+            // The module is created in the given context, or in one of the action's own.
+            using clang::EmitLLVMOnlyAction::EmitLLVMOnlyAction;
+
             emit::FunctionLocations takeFunctionLocations(void)
             {
                 return std::move(functions_);
@@ -229,6 +233,11 @@ namespace compilerlib
             // driver reads it, while the process's stays where it is. Compilations from
             // several threads thus each have a working directory of their own.
             llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs;
+            // compileToModule's context, where code generation creates the module, which the
+            // compilation then leaves in `module`; null for compile(), whose actions create
+            // contexts of their own.
+            llvm::LLVMContext* module_context = nullptr;
+            std::unique_ptr<llvm::Module> module;
             // Options of the driver's diagnostics engine, which must outlive it.
             clang_compat::DiagnosticOptionsStorage driver_diagnostic_options;
             DiagsSaver dc;
@@ -723,7 +732,96 @@ namespace compilerlib
                 return result;
             }
 
+            // compileToModule's job: the module stays in ctx_.module.
+            CompileResult runToModule(const clang::driver::Command& job)
+            {
+                CompileResult result;
+                if (!runOnClangStack([&] { result = runToModuleOnThisThread(job); }))
+                {
+                    ctx_.module.reset();
+                    return {false, "compilation crashed", {}};
+                }
+                return result;
+            }
+
           private:
+            // What code generation changes in compileToModule's context, which the host
+            // keeps: whether value names are discarded, which would apply to the modules the
+            // host reads into it later, and the optimization record of
+            // -fsave-optimization-record, whose file is closed once the job ends.
+            class ModuleContextScope
+            {
+              public:
+                ModuleContextScope(llvm::LLVMContext& context, bool optimizationRecord)
+                    : context_(context), discardValueNames_(context.shouldDiscardValueNames()),
+                      optimizationRecord_(optimizationRecord)
+                {
+                }
+
+                ModuleContextScope(const ModuleContextScope&) = delete;
+                ModuleContextScope& operator=(const ModuleContextScope&) = delete;
+
+                ~ModuleContextScope()
+                {
+                    context_.setDiscardValueNames(discardValueNames_);
+                    if (optimizationRecord_)
+                        clang_compat::releaseFrontendOptimizationRecord(context_);
+                }
+
+              private:
+                llvm::LLVMContext& context_;
+                bool discardValueNames_;
+                bool optimizationRecord_;
+            };
+
+            CompileResult runToModuleOnThisThread(const clang::driver::Command& job)
+            {
+                auto ci = makeCompilerInstance(job.getArguments());
+                if (!ci)
+                    return {false, "failed to create compiler instance", {}};
+                switch (ci->getFrontendOpts().ProgramAction)
+                {
+                case clang::frontend::EmitLLVM:
+                case clang::frontend::EmitBC:
+                    break;
+                default:
+                    return {false,
+                            mergeDiagnostics(ctx_.driver_diagnostics,
+                                             "a module needs an LLVM IR compilation: pass -S "
+                                             "-emit-llvm or -c -emit-llvm"),
+                            {}};
+                }
+                Cc1TimeTrace trace(*ci, job.getExecutable());
+
+                std::string error;
+                auto keepModule = [&](std::unique_ptr<llvm::Module> module) -> bool
+                {
+                    if (ctx_.instrument && !instrument(*module, error))
+                        return false;
+                    ctx_.module = std::move(module);
+                    return true;
+                };
+                bool ok = false;
+                {
+                    ModuleContextScope scope(*ctx_.module_context,
+                                             !ci->getCodeGenOpts().OptRecordFile.empty());
+                    ok = ctx_.runtimeConfig.optnone_enabled
+                             ? runCodegenWithModule<
+                                   frontend::OptNoneAction<InstrumentedCodegenAction>>(
+                                   *ci, keepModule, error)
+                             : runCodegenWithModule<InstrumentedCodegenAction>(*ci, keepModule,
+                                                                               error);
+                }
+                if (!ok)
+                {
+                    ctx_.module.reset();
+                    return {false, mergeDiagnostics(ctx_.driver_diagnostics, error), {}};
+                }
+                // Before the diagnostics are collected: writing the trace may report one.
+                trace.finish();
+                return {true, mergeDiagnostics(ctx_.driver_diagnostics, ctx_.dc.message), {}};
+            }
+
             CT_NODISCARD bool runInstrumentedOnThisThread(const clang::driver::Command& job,
                                                           std::string& error)
             {
@@ -998,7 +1096,8 @@ namespace compilerlib
                     options.OptRecordFile.clear();
                 }
 
-                Action action;
+                // compileToModule's context, or one of the action's own.
+                Action action(ctx_.module_context);
                 resetDiagnostics();
                 if (!ci.ExecuteAction(action))
                 {
@@ -1334,88 +1433,114 @@ namespace compilerlib
             return {true, mergeDiagnostics(ctx.driver_diagnostics, cc1_diags), {}};
         }
 
+        // The compilation `ctx` describes, from its arguments to its result.
+        CT_NODISCARD CompileResult runCompilation(CompileContext& ctx)
+        {
+            ArgBuilder argBuilder(ctx);
+            std::string error;
+
+            if (!argBuilder.build(error))
+                return {false, std::move(error), {}};
+
+            auto diags = createDriverDiagnostics(ctx);
+
+            DriverSession driver(ctx, *diags);
+            std::unique_ptr<clang::driver::Compilation> comp = driver.buildCompilation(error);
+            if (!comp)
+            {
+                if (error.empty())
+                    error = ctx.dc.message.empty() ? "failed to build compilation"
+                                                   : std::move(ctx.dc.message);
+                return {false, std::move(error), {}};
+            }
+
+            if (comp->getJobs().empty())
+                return {false,
+                        ctx.dc.message.empty() ? "no jobs to run" : std::move(ctx.dc.message),
+                        {}};
+
+            // Instrumented LTO is not supported (#163): the bitcode would be written without its
+            // summary, and the link-time pipeline would optimize the instrumented code again,
+            // which no test covers. The driver resolves -flto, -flto=<mode> and -fno-lto.
+            if (ctx.instrument && clang_compat::usesLto(*comp))
+                return {false,
+                        "error: ct: --instrument does not support -flto: compile instrumented code "
+                        "without link-time optimization",
+                        {}};
+
+            // Plain file output runs the jobs as clang's driver does; the other modes run the -cc1
+            // jobs here and the others, such as the link, as programs.
+            const bool driverExecutes = !ctx.instrument && ctx.mode == OutputMode::ToFile &&
+                                        !ctx.runtimeConfig.optnone_enabled;
+
+            // A program starts in the working directory of this process, which -working-directory
+            // leaves where it is: it would read and write its relative paths elsewhere. -### only
+            // prints the jobs.
+            if (!ctx.working_directory.empty() && !allJobsRunInProcess(*comp, driverExecutes) &&
+                !comp->getArgs().hasArg(clang_compat::options::OPT__HASH_HASH_HASH))
+                return {
+                    false,
+                    "error: ct: -working-directory does not support jobs that run as programs of "
+                    "their own, as linking, assembling and -fno-integrated-cc1 do: they would run "
+                    "in the working directory of this process",
+                    {}};
+
+            if (driverExecutes)
+                return runNonInstrumentedCompilation(ctx, driver, *comp);
+
+            JobPlan plan = buildJobPlan(*comp);
+            if (!validateJobPlan(plan, ctx.mode, error))
+                return {false, std::move(error), {}};
+
+            if (!ctx.dc.message.empty())
+            {
+                ctx.driver_diagnostics = std::move(ctx.dc.message);
+                ctx.dc.message.clear();
+                ctx.dc.os.flush();
+            }
+
+            Cc1Runner cc1(ctx, *diags);
+            if (ctx.module_context)
+                return cc1.runToModule(*plan.cc1Jobs.front());
+            if (ctx.mode == OutputMode::ToMemory || ctx.mode == OutputMode::ToMemoryBitcode)
+                return cc1.runSingle(*plan.cc1Jobs.front());
+
+            if (plan.cc1Jobs.empty())
+            {
+                Linker linker(hasArg(ctx.filtered_args, "-v"));
+                if (!linker.run(plan.otherJobs, error))
+                    return {false, mergeDiagnostics(ctx.driver_diagnostics, error), {}};
+                return {true, mergeDiagnostics(ctx.driver_diagnostics, {}), {}};
+            }
+
+            if (ctx.instrument)
+                return runInstrumentedToFile(ctx, cc1, plan, error);
+            return runPlainToFile(ctx, cc1, plan, error);
+        }
+
     } // namespace
 
     CT_NODISCARD CompileResult compile(const std::vector<std::string>& input_args, OutputMode mode,
                                        bool instrument)
     {
         CompileContext ctx(input_args, mode, instrument);
-        ArgBuilder argBuilder(ctx);
-        std::string error;
+        return runCompilation(ctx);
+    }
 
-        if (!argBuilder.build(error))
-            return {false, std::move(error), {}};
-
-        auto diags = createDriverDiagnostics(ctx);
-
-        DriverSession driver(ctx, *diags);
-        std::unique_ptr<clang::driver::Compilation> comp = driver.buildCompilation(error);
-        if (!comp)
-        {
-            if (error.empty())
-                error = ctx.dc.message.empty() ? "failed to build compilation"
-                                               : std::move(ctx.dc.message);
-            return {false, std::move(error), {}};
-        }
-
-        if (comp->getJobs().empty())
-            return {
-                false, ctx.dc.message.empty() ? "no jobs to run" : std::move(ctx.dc.message), {}};
-
-        // Instrumented LTO is not supported (#163): the bitcode would be written without its
-        // summary, and the link-time pipeline would optimize the instrumented code again,
-        // which no test covers. The driver resolves -flto, -flto=<mode> and -fno-lto.
-        if (instrument && clang_compat::usesLto(*comp))
-            return {false,
-                    "error: ct: --instrument does not support -flto: compile instrumented code "
-                    "without link-time optimization",
-                    {}};
-
-        // Plain file output runs the jobs as clang's driver does; the other modes run the -cc1
-        // jobs here and the others, such as the link, as programs.
-        const bool driverExecutes =
-            !instrument && mode == OutputMode::ToFile && !ctx.runtimeConfig.optnone_enabled;
-
-        // A program starts in the working directory of this process, which -working-directory
-        // leaves where it is: it would read and write its relative paths elsewhere. -### only
-        // prints the jobs.
-        if (!ctx.working_directory.empty() && !allJobsRunInProcess(*comp, driverExecutes) &&
-            !comp->getArgs().hasArg(clang_compat::options::OPT__HASH_HASH_HASH))
-            return {false,
-                    "error: ct: -working-directory does not support jobs that run as programs of "
-                    "their own, as linking, assembling and -fno-integrated-cc1 do: they would run "
-                    "in the working directory of this process",
-                    {}};
-
-        if (driverExecutes)
-            return runNonInstrumentedCompilation(ctx, driver, *comp);
-
-        JobPlan plan = buildJobPlan(*comp);
-        if (!validateJobPlan(plan, mode, error))
-            return {false, std::move(error), {}};
-
-        if (!ctx.dc.message.empty())
-        {
-            ctx.driver_diagnostics = std::move(ctx.dc.message);
-            ctx.dc.message.clear();
-            ctx.dc.os.flush();
-        }
-
-        Cc1Runner cc1(ctx, *diags);
-        if (mode == OutputMode::ToMemory || mode == OutputMode::ToMemoryBitcode)
-            return cc1.runSingle(*plan.cc1Jobs.front());
-
-        if (plan.cc1Jobs.empty())
-        {
-            Linker linker(hasArg(ctx.filtered_args, "-v"));
-            if (!linker.run(plan.otherJobs, error))
-                return {false, mergeDiagnostics(ctx.driver_diagnostics, error), {}};
-            return {true, mergeDiagnostics(ctx.driver_diagnostics, {}), {}};
-        }
-
-        if (instrument)
-            return runInstrumentedToFile(ctx, cc1, plan, error);
-        return runPlainToFile(ctx, cc1, plan, error);
+    CT_NODISCARD ModuleResult compileToModule(const std::vector<std::string>& args,
+                                              llvm::LLVMContext& context, bool instrument)
+    {
+        // The modes of in-memory output: a single -cc1 job, and -c kept, which a bitcode
+        // compilation needs.
+        CompileContext ctx(args, OutputMode::ToMemoryBitcode, instrument);
+        ctx.module_context = &context;
+        CompileResult result = runCompilation(ctx);
+        ModuleResult moduleResult;
+        moduleResult.success = result.success && ctx.module != nullptr;
+        moduleResult.diagnostics = std::move(result.diagnostics);
+        if (moduleResult.success)
+            moduleResult.module = std::move(ctx.module);
+        return moduleResult;
     }
 
 } // namespace compilerlib
