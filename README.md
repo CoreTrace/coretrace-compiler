@@ -487,3 +487,55 @@ expects, and waits for it: a host can compile from a thread with a small stack, 
 secondary thread on macOS, whose stack is 512 KiB (#204). The time-trace profiler a host runs on
 its own thread, started with `llvm::timeTraceProfilerInitialize`, therefore does not record the
 compilation. With `-ftime-trace`, each job writes its own trace file, as clang does.
+
+### Faster compilations for a host
+
+A compilation takes the time Clang takes: compilerlib adds about 2 ms to each call. A host that
+compiles many sources, as the CoreTrace analyzers do, gains most from compiling them from several
+threads, and from taking the module itself.
+
+**Several threads.** `compilerlib::compile` and `compilerlib::compileToModule` may run from several
+threads at once. Each compilation reads and writes files through a file system of its own, whose
+working directory `-working-directory <dir>` sets, as clang reads that option, without changing
+the working directory of the process: the sources, the include directories and the files the
+compilation writes, its output, dependency file and the others, are relative to `<dir>`, and a
+relative `<dir>` is relative to the process's working directory. A host compiles each command of
+a compilation database in its directory that way, from as many threads as it has cores, instead
+of changing the process's working directory under a lock. Two limits:
+
+- A job that runs as a program of its own starts in the process's working directory: with
+  `-working-directory`, a compilation that links, assembles a `.s` source or passes
+  `-fno-integrated-cc1` fails with an error. `cc` enters the directory itself, as clang does, and
+  links there.
+- `-mllvm` options set LLVM's own options, which the whole process shares: compilations that run
+  at once must not pass different ones.
+
+**The module itself.** `compilerlib::compileToModule`, from `compilerlib/compile_module.hpp`, gives
+the module that `compile` writes as text or bitcode, created in an `llvm::LLVMContext` of the host,
+instead of writing it for the host to read it back:
+
+```cpp
+#include <compilerlib/compile_module.hpp>
+
+llvm::LLVMContext context; // one per thread
+compilerlib::ModuleResult result = compilerlib::compileToModule(
+    {"-working-directory", directory, "-g", "-S", "-emit-llvm", "unit.cpp"}, context);
+if (result.success)
+    analyze(*result.module);
+```
+
+Its arguments are those of an LLVM IR compilation, `-S -emit-llvm` or `-c -emit-llvm`; the output
+file is not written, and the other files the arguments ask for, such as a dependency file, are.
+With `instrument`, the module is the instrumented one. Code generation sets options of the
+context, as it does with clang, except whether value names are discarded: the context keeps its
+own setting, which applies to the modules read into it later.
+
+Eight sources that each include a dozen headers of the C++ standard library, compiled with
+`-g` by four threads of a host, with LLVM 18 on four cores:
+
+| Compilation | Time |
+| --- | --- |
+| One at a time, textual IR read back with `llvm::parseIR` | 9.0 s |
+| One at a time, bitcode read back with `llvm::parseBitcodeFile` | 8.0 s |
+| One at a time, `compileToModule` | 7.4 s |
+| Four at a time, `compileToModule` with `-working-directory` | 2.0 s |
