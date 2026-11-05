@@ -804,6 +804,16 @@ namespace
         EXPECT_EXIT(mapAndUnmap(CT_ALLOCATING_LIBRARY), testing::ExitedWithCode(0), "");
     }
 
+    // Dropping the page's record frees a node of the copy's table with the table's lock held. The
+    // node comes back to the copy's entry points through the DLL's operator delete: the copy drops
+    // the record as its own work, so that the release does not wait on that lock (#197, #243).
+    TEST(DllAllocStateDeathTest, ADllWhoseOperatorDeleteFreesThroughItsCopyUnmapsAPage)
+    {
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        EXPECT_EXIT(mapAndUnmap(CT_NEW_DELETE_THROUGH_RUNTIME_LIBRARY), testing::ExitedWithCode(0),
+                    "");
+    }
+
     // The line `label` of the first box of `site`, empty without one.
     std::string lineOf(const std::string& boxes, const char* site, const char* label)
     {
