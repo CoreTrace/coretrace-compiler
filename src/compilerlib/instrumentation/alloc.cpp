@@ -1136,13 +1136,8 @@ namespace compilerlib
 
         CT_NODISCARD bool debugAutofreeEnabled(void)
         {
-            static int initialized = 0;
-            static bool enabled = false;
-            if (!initialized)
-            {
-                enabled = std::getenv("CT_DEBUG_AUTOFREE") != nullptr;
-                initialized = 1;
-            }
+            // Initialized once, even when several threads instrument modules at once.
+            static const bool enabled = std::getenv("CT_DEBUG_AUTOFREE") != nullptr;
             return enabled;
         }
 
