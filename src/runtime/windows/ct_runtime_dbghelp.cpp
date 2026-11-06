@@ -168,8 +168,6 @@ namespace
         // detach: the lookups that come after, from the module's destructors, use what it
         // recorded, without listing every module again.
         std::atomic<bool> watched{false};
-        // The base of the executable, which stays loaded as long as the process.
-        std::atomic<ULONG_PTR> executable{0};
         unsigned long synced_changes = 0;
         unsigned long synced_unloads = 0;
         bool synced = false;
@@ -212,8 +210,6 @@ namespace
         auto* register_notification = reinterpret_cast<RegisterFn>(
             GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "LdrRegisterDllNotification"));
         PVOID cookie = nullptr;
-        ct_module_changes.executable.store(reinterpret_cast<ULONG_PTR>(GetModuleHandleW(nullptr)),
-                                           std::memory_order_release);
         if (register_notification &&
             register_notification(0, &ct_module_notification, nullptr, &cookie) >= 0)
         {
@@ -344,7 +340,7 @@ CT_NOINSTR bool ct_dbghelp_module_current_locked(HANDLE process, DWORD64 address
     // The executable stays loaded as long as the process, and the module that holds this copy as
     // long as its code runs: the session's modules at their bases stay theirs, however many DLLs
     // the loader has unloaded since.
-    if (base == changes.executable.load(std::memory_order_acquire) ||
+    if (base == reinterpret_cast<ULONG_PTR>(ct_executable_module()) ||
         base == reinterpret_cast<ULONG_PTR>(&__ImageBase))
     {
         return true;
