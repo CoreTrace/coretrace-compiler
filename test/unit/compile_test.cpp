@@ -1782,4 +1782,35 @@ int main()
         ASSERT_TRUE(result.success) << result.diagnostics;
         EXPECT_NE(result.llvmIR.find("fptrunc x86_fp80"), std::string::npos) << result.llvmIR;
     }
+
+    // At -O0, `entry` lives in a slot written once, in the right operand of &&, which does not
+    // dominate the loop body. The body's check uses the pointer loaded from the slot: the value
+    // stored there is not defined on every path to it, and using it gave invalid IR.
+    TEST_F(CompileTest, BoundsCheckOfAPointerAssignedInAConditionIsValid)
+    {
+        const char* source = R"(struct entry
+{
+    int status;
+    struct entry* next;
+};
+
+struct entry* find(void);
+
+int drain(int status)
+{
+    struct entry* entry;
+    while (status && (entry = find()) != 0)
+    {
+        entry->status = status;
+        status = 0;
+    }
+    return status;
+}
+)";
+        compilerlib::CompileResult result = compilerlib::compile(
+            {kElfTarget, "-O0", "-S", "-emit-llvm", writeSource("unit.c", source)},
+            compilerlib::OutputMode::ToMemory, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(result.llvmIR.find("__ct_check_bounds"), std::string::npos) << result.llvmIR;
+    }
 } // namespace

@@ -14,6 +14,7 @@
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DebugInfo.h>
 #include <llvm/IR/DebugInfoMetadata.h>
+#include <llvm/IR/Dominators.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/IntrinsicInst.h>
@@ -181,7 +182,13 @@ namespace compilerlib
             return stored;
         }
 
-        CT_NODISCARD llvm::Value* resolveBasePointer(llvm::Value* ptr)
+        // The base of the object `ptr` points into, for the check of `access`. A pointer loaded
+        // from a slot written once is replaced by the value stored there, when that value is
+        // defined wherever the access runs: the store can sit on a path that does not lead to
+        // the access, such as the right operand of && in a loop condition.
+        CT_NODISCARD llvm::Value*
+        resolveBasePointer(llvm::Value* ptr, const llvm::Instruction& access,
+                           llvm::function_ref<const llvm::DominatorTree&()> dominators)
         {
             llvm::Value* base = stripPointerCastsAndGEPs(ptr);
             auto* load = llvm::dyn_cast<llvm::LoadInst>(base);
@@ -201,6 +208,11 @@ namespace compilerlib
 
             llvm::Value* stored = findSingleStoredValue(alloca);
             if (!stored || stored->getType() != load->getType())
+            {
+                return base ? base : ptr;
+            }
+            auto* definition = llvm::dyn_cast<llvm::Instruction>(stored);
+            if (definition && !dominators().dominates(definition, &access))
             {
                 return base ? base : ptr;
             }
@@ -454,6 +466,16 @@ namespace compilerlib
                 }
             }
 
+            // Built on the first query. The checks only add instructions to the blocks, so
+            // the tree stays valid while they are emitted.
+            std::optional<llvm::DominatorTree> dominatorTree;
+            auto dominators = [&]() -> const llvm::DominatorTree&
+            {
+                if (!dominatorTree)
+                    dominatorTree.emplace(func);
+                return *dominatorTree;
+            };
+
             llvm::SmallVector<llvm::Instruction*, 64> accesses;
             for (llvm::Instruction& inst : llvm::instructions(func))
             {
@@ -474,7 +496,7 @@ namespace compilerlib
                 // inside; a stack object that is the base of a check gets registered.
                 auto check = [&](llvm::Value* ptr, llvm::Value* sizeVal, bool isWrite)
                 {
-                    llvm::Value* base = resolveBasePointer(ptr);
+                    llvm::Value* base = resolveBasePointer(ptr, *inst, dominators);
                     if (auto* object = llvm::dyn_cast<llvm::AllocaInst>(base))
                     {
                         if (std::optional<uint64_t> objectSize = stackObjectSize(*object, layout))
