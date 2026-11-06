@@ -7,8 +7,9 @@
 // GetProcAddress and SymFromAddr with functions that print each call they receive from then on:
 // from the DLL, which the program no longer calls, and from the executable once its own TLS
 // callback runs at detach, before those of its copy of the runtime. Then it leaves:
-// - "free": it unloads the DLL, whose destructors name a call, then loads and unloads another
-//   DLL, which the DLL's watch, were it still registered, would report into its unloaded code;
+// - "free": it unloads the DLL, whose destructors name a call, then loads and unloads the DLL of
+//   reload/ct_dllmain_library.cpp, which it had not loaded: the DLL's watch, were it still
+//   registered, would report that load into its unloaded code;
 // - "return": it returns from main with the DLL loaded;
 // - "exitprocess": it calls ExitProcess with the DLL loaded.
 #ifndef NOMINMAX
@@ -258,11 +259,13 @@ int main(int argc, char** argv)
     if (std::strcmp(how, "free") == 0)
     {
         FreeLibrary(dll);
-        HMODULE other = LoadLibraryW(L"version.dll");
-        if (other)
+        HMODULE other = LoadLibraryA(CT_DLLMAIN_LIBRARY);
+        if (!other)
         {
-            FreeLibrary(other);
+            std::puts("detach_lookups_main: the other DLL did not load");
+            return 4;
         }
+        FreeLibrary(other);
     }
     std::puts("detach_lookups_main: done");
     std::fflush(stdout);

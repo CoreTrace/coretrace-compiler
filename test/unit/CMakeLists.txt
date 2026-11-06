@@ -201,8 +201,9 @@ if(TARGET ct_instrument_runtime)
     add_executable(detach_lookups_main detach_lookups_main.cpp)
     target_link_libraries(detach_lookups_main PRIVATE ct_instrument_runtime coretrace_logger)
     target_compile_definitions(detach_lookups_main PRIVATE
-      CT_RUNTIME_LIBRARY="$<TARGET_FILE:ct_runtime_library>")
-    add_dependencies(detach_lookups_main ct_runtime_library)
+      CT_RUNTIME_LIBRARY="$<TARGET_FILE:ct_runtime_library>"
+      CT_DLLMAIN_LIBRARY="$<TARGET_FILE:ct_dllmain_library>")
+    add_dependencies(detach_lookups_main ct_runtime_library ct_dllmain_library)
     coretrace_force_msvc_runtime(detach_lookups_main)
   endif()
   if(APPLE)
