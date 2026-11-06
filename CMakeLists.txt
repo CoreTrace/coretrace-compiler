@@ -406,7 +406,6 @@ else()
   endif()
 endif()
 
-target_compile_definitions(compilerlib_objects PRIVATE ${CT_RUNTIME_DEFINITIONS})
 coretrace_disable_rtti(compilerlib_objects)
 # The usage requirements of Clang and LLVM, as the libraries that link them.
 target_link_libraries(compilerlib_objects PRIVATE ${CT_CLANG_LINK_LIBS} ${CT_LLVM_LINK_LIBS})
@@ -444,26 +443,22 @@ target_include_directories(cc PRIVATE src)
 target_compile_definitions(cc PRIVATE CT_VERSION="${PROJECT_VERSION}")
 coretrace_force_msvc_runtime(cc)
 
-foreach(tgt compilerlib_objects cc)
-  if(TARGET ${tgt})
-    target_compile_definitions(${tgt}
-      PRIVATE
-        CLANG_RESOURCE_DIR=\"${CLANG_RESOURCE_DIR}\"
-    )
-    if(_LLVM_BIN_DIR)
-      target_compile_definitions(${tgt}
-        PRIVATE
-          CT_LLVM_BIN_DIR=\"${_LLVM_BIN_DIR}\"
-      )
-    endif()
-    if(CLANG_EXECUTABLE)
-      target_compile_definitions(${tgt}
-        PRIVATE
-          CT_CLANG_EXECUTABLE=\"${CLANG_EXECUTABLE}\"
-      )
-    endif()
-  endif()
-endforeach()
+# The paths the driver looks up, of the toolchain and of the runtime archives, on the one
+# source that reads them: they differ from one build directory to another, so on every
+# source they recompiled all of compilerlib when they changed, and kept a compiler cache
+# from reusing its objects across build directories.
+set(CT_TOOLCHAIN_DEFINITIONS
+  ${CT_RUNTIME_DEFINITIONS}
+  CLANG_RESOURCE_DIR=\"${CLANG_RESOURCE_DIR}\"
+)
+if(_LLVM_BIN_DIR)
+  list(APPEND CT_TOOLCHAIN_DEFINITIONS CT_LLVM_BIN_DIR=\"${_LLVM_BIN_DIR}\")
+endif()
+if(CLANG_EXECUTABLE)
+  list(APPEND CT_TOOLCHAIN_DEFINITIONS CT_CLANG_EXECUTABLE=\"${CLANG_EXECUTABLE}\")
+endif()
+set_property(SOURCE src/compilerlib/toolchain.cpp APPEND PROPERTY
+  COMPILE_DEFINITIONS ${CT_TOOLCHAIN_DEFINITIONS})
 
 coretrace_disable_rtti(cc)
 target_link_libraries(cc PRIVATE compilerlib_static ${CT_CLANG_LINK_LIBS} ${CT_LLVM_LINK_LIBS})
