@@ -24,25 +24,24 @@ jobs:
     - name: Compute next version (SemVer)
       run: python3 scripts/ci/semver_check.py
 
-  # The Docker test image builds and tests the project on amd64 and arm64 (under QEMU), in a
-  # job per architecture.
+  # The Docker test image builds and tests the project on amd64 and arm64, each on a runner of
+  # its own architecture. Not under QEMU: its user-mode emulation made sbrk() fail now and
+  # then (#233).
   docker:
     name: Docker tests (${{ matrix.arch }}, Linux)
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        arch: [ amd64, arm64 ]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
     - uses: actions/checkout@v4
-
-    - name: Set up QEMU
-      if: matrix.arch == 'arm64'
-      uses: docker/setup-qemu-action@v3
-      with:
-        platforms: arm64
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
