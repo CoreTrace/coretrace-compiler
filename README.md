@@ -87,6 +87,11 @@ neither fetched, built nor installed; `compilerlib`, `cc` and the compilerlib un
 `--instrument` then links a runtime built elsewhere, from the directory `CT_RUNTIME_LIB_DIR` names,
 and otherwise fails with "instrumentation runtime archives not found".
 
+Precompiled headers: with Clang (not AppleClang or clang-cl) and CMake 3.19 or later, the
+LLVM and Clang headers of compilerlib's sources are precompiled, which nearly halves the time
+compiling them. They are left out with a compiler launcher such as ccache, which does not reuse
+them; `-DCORETRACE_COMPILER_PCH=OFF` turns them off.
+
 ## Install
 
 ```zsh
