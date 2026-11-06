@@ -164,6 +164,32 @@ define i32 @f(ptr %first, ptr %second) {
         EXPECT_EQ(checkedBase(*func, "p"), "p");
     }
 
+    // A slot that becomes the base of a check, here of a 16-byte load from the 8-byte slot,
+    // has a user other than its loads and its store from then on: the pass resolves the
+    // pointers loaded from it before that check, and not those loaded after it.
+    TEST_F(BoundsPassTest, SlotBecomesItsPointersBaseOnceACheckUsesIt)
+    {
+        llvm::Function* func = instrument(R"(
+define i32 @f(ptr %block) {
+  %slot = alloca ptr, align 8
+  store ptr %block, ptr %slot, align 8
+  %before = load ptr, ptr %slot, align 8
+  %first = getelementptr inbounds i32, ptr %before, i64 1
+  %a = load i32, ptr %first, align 4
+  %wide = load <4 x i32>, ptr %slot, align 8
+  %after = load ptr, ptr %slot, align 8
+  %second = getelementptr inbounds i32, ptr %after, i64 2
+  %b = load i32, ptr %second, align 4
+  %sum = add i32 %a, %b
+  ret i32 %sum
+}
+)");
+        ASSERT_NE(func, nullptr);
+        EXPECT_EQ(checkedBase(*func, "first"), "block");
+        EXPECT_EQ(checkedBase(*func, "slot"), "slot");
+        EXPECT_EQ(checkedBase(*func, "second"), "after");
+    }
+
     // A callee that receives the slot's address may store another pointer in it.
     TEST_F(BoundsPassTest, PointerLoadedFromASlotACalleeMayWriteIsItsOwnBase)
     {
