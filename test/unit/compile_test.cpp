@@ -1813,4 +1813,42 @@ int drain(int status)
         ASSERT_TRUE(result.success) << result.diagnostics;
         EXPECT_NE(result.llvmIR.find("__ct_check_bounds"), std::string::npos) << result.llvmIR;
     }
+
+    // --ct-optnone reaches the functions declared in namespaces and in extern "C" blocks,
+    // which the frontend hands over whole.
+    TEST_F(CompileTest, OptNoneReachesNamespacesAndLinkageBlocks)
+    {
+        const char* source = R"(namespace outer
+{
+    namespace inner
+    {
+        int twice(int x) { return x * 2; }
+    }
+}
+
+extern "C"
+{
+    int thrice(int x) { return x * 3; }
+}
+
+int once(int x) { return x; }
+)";
+        compilerlib::CompileResult result =
+            compilerlib::compile({kElfTarget, "-O2", "-S", "-emit-llvm", "--ct-optnone",
+                                  writeSource("unit.cpp", source)},
+                                 compilerlib::OutputMode::ToMemory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+
+        llvm::LLVMContext context;
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> module =
+            llvm::parseAssemblyString(result.llvmIR, error, context);
+        ASSERT_NE(module, nullptr) << error.getMessage().str();
+        for (const char* name : {"_ZN5outer5inner5twiceEi", "thrice", "_Z4oncei"})
+        {
+            const llvm::Function* function = module->getFunction(name);
+            ASSERT_NE(function, nullptr) << name;
+            EXPECT_TRUE(function->hasFnAttribute(llvm::Attribute::OptimizeNone)) << name;
+        }
+    }
 } // namespace

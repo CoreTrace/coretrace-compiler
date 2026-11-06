@@ -3,6 +3,7 @@
 
 #include <clang/AST/Attr.h>
 #include <clang/AST/Decl.h>
+#include <clang/AST/DeclCXX.h>
 #include <clang/AST/RecursiveASTVisitor.h>
 #include <clang/Basic/SourceManager.h>
 
@@ -41,6 +42,8 @@ namespace compilerlib::frontend
             }
 
           private:
+            // A namespace or a linkage specification reaches the consumer whole, with the
+            // functions it declares.
             void annotateDecl(clang::Decl* decl)
             {
                 if (!decl)
@@ -48,6 +51,15 @@ namespace compilerlib::frontend
                 if (auto* fn = clang::dyn_cast<clang::FunctionDecl>(decl))
                 {
                     annotateFunction(fn);
+                    return;
+                }
+                if (clang::isa<clang::NamespaceDecl>(decl) ||
+                    clang::isa<clang::LinkageSpecDecl>(decl))
+                {
+                    for (clang::Decl* inner : clang::cast<clang::DeclContext>(decl)->decls())
+                    {
+                        annotateDecl(inner);
+                    }
                 }
             }
 
