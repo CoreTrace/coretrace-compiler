@@ -119,7 +119,8 @@ skip_reason() {
 }
 
 # sbrk cannot grow the program break everywhere: the runtime refuses it outside
-# Linux, and QEMU user-mode emulation (arm64 Docker image) fails it intermittently.
+# Linux, and QEMU user-mode emulation, as when the arm64 Docker image is built on an
+# amd64 host, fails it intermittently.
 # The decision is taken from the fixture's own run log, so a run where sbrk did
 # return -1 is reported as a skip with its reason instead of a failure.
 skip_reason_after_run() {
