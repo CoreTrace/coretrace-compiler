@@ -111,6 +111,11 @@ pull request.
 - When `sbrk()` fails in the sbrk test of the full allocation table, the test reports `errno`,
   the program break and the mapping above it, `RLIMIT_DATA`, and the memory of the process and
   of the system (#239, #233).
+- The Docker tests build and test the image in a job per architecture, each on a runner of its
+  own architecture: arm64 on `ubuntu-24.04-arm` instead of under QEMU on an amd64 runner. Under
+  QEMU's user-mode emulation, `sbrk()` failed now and then in the sbrk test of the full
+  allocation table: the page above the program break was taken by a mapping that the process
+  does not list (#233).
 
 ## v0.12.0 (2026-10-22)
 
