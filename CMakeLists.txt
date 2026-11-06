@@ -308,6 +308,20 @@ add_library(compilerlib_objects OBJECT ${LIB_SOURCES})
 set_target_properties(compilerlib_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
 coretrace_force_msvc_runtime(compilerlib_objects)
 
+# The headers of LLVM and Clang take most of the time compiling each source: they are
+# precompiled once (src/compilerlib/pch.hpp). Only with Clang: GCC compiles slower with them,
+# CMake does not instantiate their templates once with AppleClang, which is where the gain
+# is, clang-cl is untested, and a compiler launcher such as ccache does not reuse
+# precompiled headers. CMake 3.19 is the first to instantiate templates in the PCH.
+option(CORETRACE_COMPILER_PCH "Precompile the LLVM and Clang headers of compilerlib's sources (Clang)" ON)
+if(CORETRACE_COMPILER_PCH
+   AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+   AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+   AND NOT CMAKE_CXX_COMPILER_LAUNCHER
+   AND NOT CMAKE_VERSION VERSION_LESS 3.19)
+  target_precompile_headers(compilerlib_objects PRIVATE src/compilerlib/pch.hpp)
+endif()
+
 add_library(compilerlib_static STATIC $<TARGET_OBJECTS:compilerlib_objects>)
 coretrace_force_msvc_runtime(compilerlib_static)
 
