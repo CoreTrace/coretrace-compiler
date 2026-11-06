@@ -157,6 +157,7 @@ namespace
     // it. The TLS callback below starts the watch when the module that holds this copy of the
     // runtime attaches, and stops it when it detaches. The members that are not atomic are used
     // with the DbgHelp lock held. Constant-initialized and trivially destroyed.
+    using CtUnregisterNotification = LONG(NTAPI*)(PVOID);
     struct CtModuleChanges
     {
         static constexpr unsigned long kUnloadedBases = 64;
@@ -164,6 +165,10 @@ namespace
         std::atomic<unsigned long> unloads{0};
         std::atomic<ULONG_PTR> unloaded[kUnloadedBases] = {};
         std::atomic<PVOID> cookie{nullptr};
+        // LdrUnregisterDllNotification, looked up with LdrRegisterDllNotification when the module
+        // attaches, so that the stop at detach does not ask the loader for it (#231). Set before
+        // `cookie`.
+        std::atomic<CtUnregisterNotification> unregister{nullptr};
         // The loader took the callback at attach. Still true once the watch has stopped at
         // detach: the lookups that come after, from the module's destructors, use what it
         // recorded, without listing every module again.
@@ -202,17 +207,22 @@ namespace
         changes.changes.fetch_add(1, std::memory_order_release);
     }
 
-    // Asks the loader to report the modules it loads and unloads to ct_module_notification.
+    // Asks the loader to report the modules it loads and unloads to ct_module_notification, only
+    // where the stop can take the callback out again.
     CT_NOINSTR void ct_module_changes_watch()
     {
         using Notification = VOID(CALLBACK*)(ULONG, const CtDllNotificationData*, PVOID);
         using RegisterFn = LONG(NTAPI*)(ULONG, Notification, PVOID, PVOID*);
-        auto* register_notification = reinterpret_cast<RegisterFn>(
-            GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "LdrRegisterDllNotification"));
+        const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        auto* register_notification =
+            reinterpret_cast<RegisterFn>(GetProcAddress(ntdll, "LdrRegisterDllNotification"));
+        auto* unregister_notification = reinterpret_cast<CtUnregisterNotification>(
+            GetProcAddress(ntdll, "LdrUnregisterDllNotification"));
         PVOID cookie = nullptr;
-        if (register_notification &&
+        if (register_notification && unregister_notification &&
             register_notification(0, &ct_module_notification, nullptr, &cookie) >= 0)
         {
+            ct_module_changes.unregister.store(unregister_notification);
             ct_module_changes.cookie.store(cookie);
             ct_module_changes.watched.store(true);
         }
@@ -230,12 +240,9 @@ namespace
     CT_NOINSTR void ct_module_changes_stop()
     {
         PVOID cookie = ct_module_changes.cookie.exchange(nullptr);
-        using UnregisterFn = LONG(NTAPI*)(PVOID);
-        auto* unregister_notification = reinterpret_cast<UnregisterFn>(
-            GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "LdrUnregisterDllNotification"));
-        if (cookie && unregister_notification)
+        if (cookie)
         {
-            (void)unregister_notification(cookie);
+            (void)ct_module_changes.unregister.load()(cookie);
         }
     }
 
