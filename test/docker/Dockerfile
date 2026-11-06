@@ -36,9 +36,10 @@ RUN rm -rf build \
 
 RUN ctest --test-dir build --output-on-failure
 
-# The image is also built for arm64 under QEMU, where a fixture can run longer than the
-# runners' default limit of 60 s. This step alone gives each run 300 s, as the coverage
-# and ThreadSanitizer jobs do; a run that exceeds it still fails its suite.
+# This step alone gives each fixture run 300 s instead of the runners' default limit of 60 s,
+# as the coverage and ThreadSanitizer jobs do; a run that exceeds it still fails its suite.
+# The limit was raised while CI built the arm64 image under QEMU, where a fixture could run
+# longer than 60 s (#202).
 RUN export RUN_TIMEOUT_SECONDS=300 \
     && bash test/scripts/linux_compile.sh \
     && bash test/run_autofree_tests.sh /tmp/ct_autofree_tests \
