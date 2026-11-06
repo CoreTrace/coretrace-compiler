@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "compilerlib/frontend/no_instrument_action.hpp"
+#include "compilerlib/frontend/no_instrument_consumer.hpp"
 
+#include <clang/AST/ASTConsumer.h>
 #include <clang/AST/Attr.h>
 #include <clang/AST/Decl.h>
 #include <clang/AST/DeclCXX.h>

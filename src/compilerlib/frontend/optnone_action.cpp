@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "compilerlib/frontend/optnone_action.hpp"
+#include "compilerlib/frontend/optnone_consumer.hpp"
 
+#include <clang/AST/ASTConsumer.h>
+#include <clang/AST/ASTContext.h>
 #include <clang/AST/Attr.h>
 #include <clang/AST/Decl.h>
 #include <clang/AST/DeclCXX.h>
-#include <clang/AST/RecursiveASTVisitor.h>
+#include <clang/AST/DeclGroup.h>
 #include <clang/Basic/SourceManager.h>
 
 namespace compilerlib::frontend
