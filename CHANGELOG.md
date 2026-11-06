@@ -107,13 +107,14 @@ pull request.
   holds a copy of the runtime detached, at `FreeLibrary` or at process termination, the copy
   called `GetModuleHandleW(nullptr)` to tell the executable from a DLL, and
   `GetModuleHandleW(L"ntdll.dll")` then `GetProcAddress` to find `LdrUnregisterDllNotification`.
-  Each copy now reads both when the module attaches, and keeps them. The change is preventive: a
-  report for Microsoft's WIL library describes a `GetModuleHandleW` call that hung at process
-  termination, but no hang of the runtime has been reproduced. A virtual call box that a
-  destructor prints at detach still calls DbgHelp, and with `--ct-vtable-diag`
-  `GetModuleHandleExA`, `GetModuleFileNameA` and `GetModuleHandleA`, and for an address that no
-  module holds, it looks `GetCurrentThreadStackLimits` up once. A test checks the lookups that
-  each copy makes at detach (#231).
+  Each copy now reads both when the module attaches, and keeps them; it still calls
+  `LdrUnregisterDllNotification` at detach, to stop its watch of the loader. The change is
+  preventive: a report for Microsoft's WIL library describes a `GetModuleHandleW` call that hung
+  at process termination, but no hang of the runtime has been reproduced. A virtual call box that
+  a destructor prints at detach still calls DbgHelp. With `--ct-vtable-diag`, it also calls
+  `GetModuleHandleExA`, `GetModuleFileNameA` and `GetModuleHandleA`, and looks
+  `GetCurrentThreadStackLimits` up the first time an address lies in no module. A test checks
+  that neither the executable's copy nor a DLL's makes the removed lookups at detach (#231).
 
 ### Tests and CI
 
