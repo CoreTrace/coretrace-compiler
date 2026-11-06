@@ -1770,4 +1770,16 @@ int main()
             EXPECT_TRUE(result.success) << autofree << "\n" << result.diagnostics;
         }
     }
+
+    // The trace prints a double: a wider return value, such as long double on x86-64, is
+    // truncated. Extending it gave invalid IR, and the compilation failed.
+    TEST_F(CompileTest, TracedLongDoubleReturnIsTruncated)
+    {
+        compilerlib::CompileResult result = compilerlib::compile(
+            {kElfTarget, "-S", "-emit-llvm", "--ct-modules=trace",
+             writeSource("unit.c", "long double half(long double x) { return x / 2; }\n")},
+            compilerlib::OutputMode::ToMemory, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(result.llvmIR.find("fptrunc x86_fp80"), std::string::npos) << result.llvmIR;
+    }
 } // namespace
