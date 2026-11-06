@@ -165,6 +165,8 @@ namespace
         return true;
     }
 
+    // Looks GetCurrentThreadStackLimits up the first time, from the diagnostics of a call, which
+    // a destructor may name while the module that holds this copy of the runtime detaches (#231).
     CT_NODISCARD CT_NOINSTR bool ct_address_on_stack(const void* addr)
     {
         if (!addr)
@@ -188,6 +190,9 @@ namespace
         return value >= low && value < high;
     }
 
+    // Asks the loader for the module at an address, its path and the executable's module, for the
+    // diagnostics of a call: while the module that holds this copy of the runtime detaches too,
+    // when a destructor names one (#231).
     CT_NODISCARD CT_NOINSTR bool ct_resolve_module(const void* addr, CtModuleInfo& out)
     {
         if (!addr)
