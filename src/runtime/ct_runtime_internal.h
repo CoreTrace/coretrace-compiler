@@ -453,6 +453,10 @@ enum class CtProcessShutdown
 };
 CT_NODISCARD CT_NOINSTR CtProcessShutdown ct_process_shutdown(void);
 
+// The executable's module, read when the module that holds this copy of the runtime attaches,
+// for the code that runs while it detaches (#231): null before.
+CT_NODISCARD CT_NOINSTR HMODULE ct_executable_module(void);
+
 // Whether the code that runs while the module that holds this copy of the runtime detaches frees
 // what the copy holds: when FreeLibrary unloads a DLL. The executable's copy keeps it until the
 // process ends, and a DLL's copy frees nothing when the process terminates, nor when it cannot
