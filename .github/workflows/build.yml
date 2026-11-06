@@ -24,16 +24,22 @@ jobs:
     - name: Compute next version (SemVer)
       run: python3 scripts/ci/semver_check.py
 
-  # The Docker test image builds and tests the project on amd64 and arm64 (under QEMU).
+  # The Docker test image builds and tests the project on amd64 and arm64 (under QEMU), in a
+  # job per architecture.
   docker:
-    name: Docker tests (multi-arch, Linux)
+    name: Docker tests (${{ matrix.arch }}, Linux)
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [ amd64, arm64 ]
 
     steps:
     - uses: actions/checkout@v4
 
     - name: Set up QEMU
+      if: matrix.arch == 'arm64'
       uses: docker/setup-qemu-action@v3
       with:
         platforms: arm64
@@ -41,10 +47,8 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Docker tests (multi-arch)
-      run: |
-        docker buildx build --platform linux/amd64 -f test/docker/Dockerfile . --progress=plain --output=type=cacheonly
-        docker buildx build --platform linux/arm64 -f test/docker/Dockerfile . --progress=plain --output=type=cacheonly
+    - name: Docker tests
+      run: docker buildx build --platform linux/${{ matrix.arch }} -f test/docker/Dockerfile . --progress=plain --output=type=cacheonly
 
   # Consumers that only embed compilerlib build it without the instrumentation runtime
   # (CORETRACE_COMPILER_BUILD_RUNTIME=OFF): no coretrace-log fetch, and --instrument
