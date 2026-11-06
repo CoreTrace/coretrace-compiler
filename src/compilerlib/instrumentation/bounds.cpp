@@ -182,13 +182,19 @@ namespace compilerlib
             return stored;
         }
 
+        // findSingleStoredValue of each slot of a function, computed once: it reads every user
+        // of the slot, and a function accesses memory through the same slots again and again
+        // (a pointer parameter's, at -O0).
+        using SingleStoreCache = llvm::DenseMap<const llvm::AllocaInst*, llvm::Value*>;
+
         // The base of the object `ptr` points into, for the check of `access`. A pointer loaded
         // from a slot written once is replaced by the value stored there, when that value is
         // defined wherever the access runs: the store can sit on a path that does not lead to
         // the access, such as the right operand of && in a loop condition.
         CT_NODISCARD llvm::Value*
         resolveBasePointer(llvm::Value* ptr, const llvm::Instruction& access,
-                           llvm::function_ref<const llvm::DominatorTree&()> dominators)
+                           llvm::function_ref<const llvm::DominatorTree&()> dominators,
+                           SingleStoreCache& singleStores)
         {
             llvm::Value* base = stripPointerCastsAndGEPs(ptr);
             auto* load = llvm::dyn_cast<llvm::LoadInst>(base);
@@ -206,7 +212,10 @@ namespace compilerlib
                 return base ? base : ptr;
             }
 
-            llvm::Value* stored = findSingleStoredValue(alloca);
+            auto [cached, inserted] = singleStores.try_emplace(alloca, nullptr);
+            if (inserted)
+                cached->second = findSingleStoredValue(alloca);
+            llvm::Value* stored = cached->second;
             if (!stored || stored->getType() != load->getType())
             {
                 return base ? base : ptr;
@@ -476,6 +485,7 @@ namespace compilerlib
                 return *dominatorTree;
             };
 
+            SingleStoreCache singleStores;
             llvm::SmallVector<llvm::Instruction*, 64> accesses;
             for (llvm::Instruction& inst : llvm::instructions(func))
             {
@@ -494,49 +504,63 @@ namespace compilerlib
 
                 // Checks one access, unless its base is a stack object it provably stays
                 // inside; a stack object that is the base of a check gets registered.
-                auto check = [&](llvm::Value* ptr, llvm::Value* sizeVal, bool isWrite)
+                // `sizeVal` is the size of a memory intrinsic; null for the other accesses,
+                // whose size, `accessSize`, becomes a constant only if a check is emitted.
+                auto check =
+                    [&](llvm::Value* ptr, llvm::Value* sizeVal, uint64_t accessSize, bool isWrite)
                 {
-                    llvm::Value* base = resolveBasePointer(ptr, *inst, dominators);
+                    llvm::Value* base = resolveBasePointer(ptr, *inst, dominators, singleStores);
                     if (auto* object = llvm::dyn_cast<llvm::AllocaInst>(base))
                     {
                         if (std::optional<uint64_t> objectSize = stackObjectSize(*object, layout))
                         {
-                            auto* constantSize = llvm::dyn_cast<llvm::ConstantInt>(sizeVal);
-                            if (constantSize && staysInside(ptr, constantSize->getZExtValue(),
-                                                            *object, *objectSize, layout))
+                            std::optional<uint64_t> knownSize;
+                            if (!sizeVal)
+                                knownSize = accessSize;
+                            else if (auto* constant = llvm::dyn_cast<llvm::ConstantInt>(sizeVal))
+                                knownSize = constant->getZExtValue();
+                            if (knownSize &&
+                                staysInside(ptr, *knownSize, *object, *objectSize, layout))
                             {
                                 return;
                             }
                             stackObjects.insert(object);
                         }
                     }
+                    if (!sizeVal)
+                        sizeVal = llvm::ConstantInt::get(sizeTy, accessSize);
                     llvm::Value* site = getSiteString(module, *inst, siteCache, unknownSite);
                     emitBoundsCheck(builder, checkFn, base, ptr, sizeVal, site, isWrite, voidPtrTy,
                                     intTy);
+                    // The check uses these values: a slot among them has a user other than its
+                    // loads and its store from now on, as a fresh findSingleStoredValue sees.
+                    for (llvm::Value* operand : {base, ptr})
+                        if (auto* slot = llvm::dyn_cast<llvm::AllocaInst>(operand))
+                            singleStores[slot] = nullptr;
                 };
-                auto storeSize = [&](llvm::Type* type)
-                { return llvm::ConstantInt::get(sizeTy, layout.getTypeStoreSize(type)); };
+                auto storeSize = [&](llvm::Type* type) -> uint64_t
+                { return layout.getTypeStoreSize(type); };
 
                 if (auto* load = llvm::dyn_cast<llvm::LoadInst>(inst))
                 {
-                    check(load->getPointerOperand(), storeSize(load->getType()), false);
+                    check(load->getPointerOperand(), nullptr, storeSize(load->getType()), false);
                     continue;
                 }
                 if (auto* store = llvm::dyn_cast<llvm::StoreInst>(inst))
                 {
-                    check(store->getPointerOperand(),
+                    check(store->getPointerOperand(), nullptr,
                           storeSize(store->getValueOperand()->getType()), true);
                     continue;
                 }
                 if (auto* atomic = llvm::dyn_cast<llvm::AtomicRMWInst>(inst))
                 {
-                    check(atomic->getPointerOperand(),
+                    check(atomic->getPointerOperand(), nullptr,
                           storeSize(atomic->getValOperand()->getType()), true);
                     continue;
                 }
                 if (auto* cmpx = llvm::dyn_cast<llvm::AtomicCmpXchgInst>(inst))
                 {
-                    check(cmpx->getPointerOperand(),
+                    check(cmpx->getPointerOperand(), nullptr,
                           storeSize(cmpx->getCompareOperand()->getType()), true);
                     continue;
                 }
@@ -557,13 +581,13 @@ namespace compilerlib
 
                     if (auto* memSet = llvm::dyn_cast<llvm::MemSetInst>(mem))
                     {
-                        check(memSet->getDest(), len, true);
+                        check(memSet->getDest(), len, 0, true);
                         continue;
                     }
                     if (auto* memTransfer = llvm::dyn_cast<llvm::MemTransferInst>(mem))
                     {
-                        check(memTransfer->getDest(), len, true);
-                        check(memTransfer->getSource(), len, false);
+                        check(memTransfer->getDest(), len, 0, true);
+                        check(memTransfer->getSource(), len, 0, false);
                         continue;
                     }
                 }
