@@ -132,6 +132,12 @@ pull request.
   allocation table: the page above the program break was taken by a mapping that the process
   does not list (#233).
 
+### Documentation
+
+- `NOTICE` dates the copyright from 2025, when the code began, credits the CoreTrace
+  contributors alongside Hugo Payet and links the repository. It keeps only these
+  attribution notices, without the license header meant for source files (#248).
+
 ## v0.12.0 (2026-10-22)
 
 Release traces name the kind and the allocation site of each block, and the Windows runtime
