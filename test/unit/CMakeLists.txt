@@ -288,3 +288,9 @@ if(TARGET runtime_log_fallback_tests)
   # destructor, past the test's own wait.
   gtest_discover_tests(runtime_log_fallback_tests PROPERTIES TIMEOUT 120)
 endif()
+# Every install carries LICENSE and NOTICE (#249). Their component installs them alone, without
+# building anything.
+add_test(NAME Install.ShipsLicenseAndNotice
+  COMMAND ${CMAKE_COMMAND} -DBUILD_DIR=${CMAKE_BINARY_DIR} -DCONFIG=$<CONFIG>
+    -DPREFIX=${CMAKE_CURRENT_BINARY_DIR}/license-install -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_installed_licenses.cmake)

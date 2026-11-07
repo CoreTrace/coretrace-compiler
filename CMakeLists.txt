@@ -473,6 +473,9 @@ if(CORETRACE_COMPILER_BUILD_RUNTIME)
   install(FILES $<TARGET_FILE:coretrace_logger> DESTINATION lib)
 endif()
 install(DIRECTORY include/ DESTINATION include)
+# Apache-2.0 asks redistributions to carry the license and the attribution notices of NOTICE
+# (section 4): every install tree carries both (#249).
+install(FILES LICENSE NOTICE DESTINATION share/doc/coretrace-compiler COMPONENT licenses)
 
 set(USE_SHARED_LIB OFF CACHE BOOL "Link with shared compilerlib")
 
