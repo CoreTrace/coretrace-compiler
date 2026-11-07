@@ -100,6 +100,9 @@ pull request.
   for that lock, which its own thread held, and the unmap never returned: a test DLL whose
   operators new and delete go through the runtime hung in each of the four Windows jobs. `munmap`
   now drops the record as the runtime's own work (#243).
+- **`LICENSE` and `NOTICE` in the install prefix.** `cmake --install` installed neither, which
+  Apache-2.0 asks redistributions to carry. Both now go to `share/doc/coretrace-compiler/`, in
+  the `licenses` component (#249, #250).
 
 ### Internal
 
