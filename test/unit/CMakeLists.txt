@@ -294,5 +294,3 @@ add_test(NAME Install.ShipsLicenseAndNotice
   COMMAND ${CMAKE_COMMAND} -DBUILD_DIR=${CMAKE_BINARY_DIR} -DCONFIG=$<CONFIG>
     -DPREFIX=${CMAKE_CURRENT_BINARY_DIR}/license-install -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_installed_licenses.cmake)
-# Until the install rules carry them.
-set_tests_properties(Install.ShipsLicenseAndNotice PROPERTIES WILL_FAIL TRUE)
