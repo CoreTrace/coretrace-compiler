@@ -196,6 +196,15 @@ if(TARGET ct_instrument_runtime)
     foreach(target ct_leak_dll dll_leak_report_main)
       coretrace_force_msvc_runtime(${target})
     endforeach()
+    # The lookups of the loader that the copies of the runtime of an executable and of a DLL make
+    # while they detach (#231).
+    add_executable(detach_lookups_main detach_lookups_main.cpp)
+    target_link_libraries(detach_lookups_main PRIVATE ct_instrument_runtime coretrace_logger)
+    target_compile_definitions(detach_lookups_main PRIVATE
+      CT_RUNTIME_LIBRARY="$<TARGET_FILE:ct_runtime_library>"
+      CT_DLLMAIN_LIBRARY="$<TARGET_FILE:ct_dllmain_library>")
+    add_dependencies(detach_lookups_main ct_runtime_library ct_dllmain_library)
+    coretrace_force_msvc_runtime(detach_lookups_main)
   endif()
   if(APPLE)
     # Objective-C object tracking: pulls ct_runtime_objc.cpp, which calls into libobjc.
@@ -252,6 +261,24 @@ if(TARGET dll_leak_report_main)
     COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:dll_leak_report_main> -DARGS=free
       "-DEXPECT=dll_leak_report_main: done" "-DFORBID=ct: leaks detected"
       -P ${CMAKE_CURRENT_SOURCE_DIR}/check_program_output.cmake)
+endif()
+if(TARGET detach_lookups_main)
+  # The DLL's copy names its destructor's call, and the executable's replacement is in place when
+  # its copy detaches; neither copy looks LdrUnregisterDllNotification up then, nor asks for the
+  # executable's module, which they read when they attach.
+  set(CT_DETACH_LOOKUPS_SEEN
+    "detach_lookups: dll SymFromAddr.*detach_lookups: exe GetModuleHandleW\\(detach-lookups-control\\)")
+  set(CT_DETACH_LOOKUPS_REMOVED
+    "detach_lookups: (dll|exe) (GetModuleHandleW\\((null|ntdll\\.dll)\\)|GetProcAddress\\(LdrUnregisterDllNotification\\))")
+  foreach(case "WhenFreeLibraryUnloadsTheDll;free" "WhenMainReturns;return"
+                "WhenTheProgramCallsExitProcess;exitprocess")
+    list(GET case 0 name)
+    list(GET case 1 how)
+    add_test(NAME DetachLookups.UseWhatAttachRead${name}
+      COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:detach_lookups_main> -DARGS=${how}
+        "-DEXPECT=${CT_DETACH_LOOKUPS_SEEN}" "-DFORBID=${CT_DETACH_LOOKUPS_REMOVED}"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/check_program_output.cmake)
+  endforeach()
 endif()
 if(TARGET runtime_scan_threads_tests)
   gtest_discover_tests(runtime_scan_threads_tests PROPERTIES ENVIRONMENT CT_AUTOFREE_SCAN=1)

@@ -1352,14 +1352,15 @@ namespace
 
     // The executable detaches only when the process exits: it reports then. A DLL reports here
     // when its own exit() has already run its exit-time code, terminators included. A DLL's TLS
-    // callbacks run before its exit-time code otherwise.
+    // callbacks run before its exit-time code otherwise. The executable's module is the one read
+    // when the module attached (#231).
     CT_NOINSTR void NTAPI ct_report_leaks_at_exit(PVOID module, DWORD reason, PVOID)
     {
         if (reason != DLL_PROCESS_DETACH)
         {
             return;
         }
-        if (module == GetModuleHandleW(nullptr))
+        if (module == ct_executable_module())
         {
             (void)ct_report_leaks();
             return;
