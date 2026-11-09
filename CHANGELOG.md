@@ -116,6 +116,9 @@ pull request.
   hands a namespace or a linkage block to its consumers whole, and `--ct-optnone` only annotated
   the functions it received directly: the functions inside kept being optimized. They now get
   `optnone` too, so fewer functions are optimized at -O1 and above (#251).
+- **`CT_DEBUG_AUTOFREE` read from several threads.** The allocation pass read the variable into
+  two plain statics on its first use, on which two threads instrumenting modules at once raced.
+  It is now read once, into a constant (#251).
 
 ### Internal
 
