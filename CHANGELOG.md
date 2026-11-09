@@ -103,6 +103,11 @@ pull request.
 - **`LICENSE` and `NOTICE` in the install prefix.** `cmake --install` installed neither, which
   Apache-2.0 asks redistributions to carry. Both now go to `share/doc/coretrace-compiler/`, in
   the `licenses` component (#249, #250).
+- **Functions that return a `long double`, with the trace module.** The trace pass extended every
+  floating-point return value to the `double` it prints. A `long double` is wider on x86-64
+  (x86_fp80) and on AArch64 Linux (fp128), so the instrumented module was invalid: with the
+  default modules, a function that returns one failed to compile with "CoreTrace bug: DestTy too
+  small for FPExt". The value is now truncated (#251).
 
 ### Internal
 
