@@ -138,6 +138,10 @@ pull request.
 - **Clang's frontend headers.** `args.cpp`, `toolchain.cpp` and the consumers of `--ct-optnone`
   and `no_instrument_function` no longer include Clang's frontend headers, which they do not use
   (#251).
+- **The toolchain and runtime paths.** They are defined on `toolchain.cpp` alone, the only source
+  that reads them, instead of on every source of compilerlib and `cc`: changing them recompiles
+  `toolchain.cpp` alone, and a compiler cache can reuse the other objects across build
+  directories (#251).
 
 ### Internal
 
