@@ -177,6 +177,10 @@ pull request.
   QEMU's user-mode emulation, `sbrk()` failed now and then in the sbrk test of the full
   allocation table: the page above the program break was taken by a mapping that the process
   does not list (#233).
+- Unit tests compile a function that returns a `long double` with the trace module, a pointer
+  assigned in the right operand of `&&` at -O0 with the default modules, and functions in a
+  namespace and an `extern "C"` block with `--ct-optnone`. A test of the bounds pass checks that
+  a variable stops being resolved to its stored pointer once a check uses it (#251).
 
 ### Documentation
 
