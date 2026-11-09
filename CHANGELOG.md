@@ -112,6 +112,10 @@ pull request.
   pointer loaded from a variable written once by the value stored there, even where that value is
   not defined: `while (s && (p = find()) != 0) p->x = 1;` failed with "Instruction does not
   dominate all uses". The stored value is now used only where it dominates the access (#251).
+- **`--ct-optnone` and the functions of a namespace or an `extern "C"` block.** The frontend
+  hands a namespace or a linkage block to its consumers whole, and `--ct-optnone` only annotated
+  the functions it received directly: the functions inside kept being optimized. They now get
+  `optnone` too, so fewer functions are optimized at -O1 and above (#251).
 
 ### Internal
 
