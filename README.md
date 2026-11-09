@@ -88,8 +88,8 @@ neither fetched, built nor installed; `compilerlib`, `cc` and the compilerlib un
 and otherwise fails with "instrumentation runtime archives not found".
 
 Precompiled headers: with Clang (not AppleClang or clang-cl) and CMake 3.19 or later, the
-LLVM and Clang headers of compilerlib's sources are precompiled, which nearly halves the time
-compiling them. They are left out with a compiler launcher such as ccache, which does not reuse
+LLVM and Clang headers of compilerlib's sources are precompiled, which nearly halves the CPU
+time compiling them. They are left out with a compiler launcher such as ccache, which does not reuse
 them; `-DCORETRACE_COMPILER_PCH=OFF` turns them off.
 
 ## Install
