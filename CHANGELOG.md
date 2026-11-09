@@ -108,6 +108,10 @@ pull request.
   (x86_fp80) and on AArch64 Linux (fp128), so the instrumented module was invalid: with the
   default modules, a function that returns one failed to compile with "CoreTrace bug: DestTy too
   small for FPExt". The value is now truncated (#251).
+- **Bounds checks of a pointer assigned in a condition, at -O0.** The bounds pass replaced a
+  pointer loaded from a variable written once by the value stored there, even where that value is
+  not defined: `while (s && (p = find()) != 0) p->x = 1;` failed with "Instruction does not
+  dominate all uses". The stored value is now used only where it dominates the access (#251).
 
 ### Internal
 
