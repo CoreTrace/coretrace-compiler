@@ -130,6 +130,11 @@ pull request.
   users of those operators. On four cores with LLVM 18, the bounds pass ran 3.4 times faster on
   functions of 1,000 statements and 14 times faster on 4,000, and the allocation pass about 3
   times faster on 2,000 functions (#251).
+- **compilerlib compiled once for both libraries.** `compilerlib_static` and `compilerlib_shared`
+  each compiled compilerlib's sources. They now take the objects of one object library,
+  `compilerlib_objects`, which are position-independent in both. A project that fetches this one
+  with FetchContent, as the analyzers do, builds both libraries by default: it compiles 14
+  objects instead of 28 (#251).
 
 ### Internal
 
