@@ -135,6 +135,9 @@ pull request.
   `compilerlib_objects`, which are position-independent in both. A project that fetches this one
   with FetchContent, as the analyzers do, builds both libraries by default: it compiles 14
   objects instead of 28 (#251).
+- **Clang's frontend headers.** `args.cpp`, `toolchain.cpp` and the consumers of `--ct-optnone`
+  and `no_instrument_function` no longer include Clang's frontend headers, which they do not use
+  (#251).
 
 ### Internal
 
