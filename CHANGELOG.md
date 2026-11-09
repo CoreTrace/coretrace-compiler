@@ -120,6 +120,17 @@ pull request.
   two plain statics on its first use, on which two threads instrumenting modules at once raced.
   It is now read once, into a constant (#251).
 
+### Performance
+
+- **Instrumentation passes.** At -O0, the bounds pass read every use of a pointer variable again
+  at each access through it, which made it quadratic in the length of a function: it now finds
+  the single store of each variable once per function. The allocation pass went through every
+  allocation site of the module for each function, and through every instruction of the module
+  for the calls to `operator new` and `delete`: it now reads the sites of the function, and the
+  users of those operators. On four cores with LLVM 18, the bounds pass ran 3.4 times faster on
+  functions of 1,000 statements and 14 times faster on 4,000, and the allocation pass about 3
+  times faster on 2,000 functions (#251).
+
 ### Internal
 
 - **Fewer lookups of the loader while a module detaches, on Windows.** When the module that
