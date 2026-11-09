@@ -142,6 +142,10 @@ pull request.
   that reads them, instead of on every source of compilerlib and `cc`: changing them recompiles
   `toolchain.cpp` alone, and a compiler cache can reuse the other objects across build
   directories (#251).
+- **Precompiled headers with Clang.** With Clang and CMake 3.19 or later, the LLVM and Clang
+  headers of compilerlib's sources are precompiled, which nearly halves the CPU time compiling
+  them. They are left out with GCC, AppleClang, clang-cl and a compiler launcher such as ccache;
+  `-DCORETRACE_COMPILER_PCH=OFF` turns them off (#251).
 
 ### Internal
 
