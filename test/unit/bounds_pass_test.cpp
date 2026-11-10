@@ -190,6 +190,36 @@ define i32 @f(ptr %block) {
         EXPECT_EQ(checkedBase(*func, "second"), "after");
     }
 
+    // A call result stored in a slot is defined only after the call: a pointer loaded from
+    // the slot earlier in the same block is its own base, and those loaded after the call are
+    // checked against its result. The check inserted before each access changes neither.
+    TEST_F(BoundsPassTest, CallResultInASlotIsTheBaseOfTheAccessesAfterTheCall)
+    {
+        llvm::Function* func = instrument(R"(
+declare ptr @allocate()
+
+define i32 @f() {
+  %slot = alloca ptr, align 8
+  %early = load ptr, ptr %slot, align 8
+  %a = load i32, ptr %early, align 4
+  %block = call ptr @allocate()
+  store ptr %block, ptr %slot, align 8
+  %first = load ptr, ptr %slot, align 8
+  %b = load i32, ptr %first, align 4
+  %later = load ptr, ptr %slot, align 8
+  %element = getelementptr inbounds i32, ptr %later, i64 1
+  %c = load i32, ptr %element, align 4
+  %ab = add i32 %a, %b
+  %sum = add i32 %ab, %c
+  ret i32 %sum
+}
+)");
+        ASSERT_NE(func, nullptr);
+        EXPECT_EQ(checkedBase(*func, "early"), "early");
+        EXPECT_EQ(checkedBase(*func, "first"), "block");
+        EXPECT_EQ(checkedBase(*func, "element"), "block");
+    }
+
     // A callee that receives the slot's address may store another pointer in it.
     TEST_F(BoundsPassTest, PointerLoadedFromASlotACalleeMayWriteIsItsOwnBase)
     {
