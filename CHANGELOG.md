@@ -127,9 +127,10 @@ pull request.
   the single store of each variable once per function. The allocation pass went through every
   allocation site of the module for each function, and through every instruction of the module
   for the calls to `operator new` and `delete`: it now reads the sites of the function, and the
-  users of those operators. On four cores with LLVM 18, the bounds pass ran 3.4 times faster on
-  functions of 1,000 statements and 14 times faster on 4,000, and the allocation pass about 3
-  times faster on 2,000 functions (#251).
+  users of those operators. On macOS arm64 with LLVM 20, instrumenting 16,000 writes through one
+  pointer at -O0 takes 25 ms instead of 694 ms when a call returned the pointer, and 21 ms
+  instead of 732 ms when it is a parameter (`scripts/bench/instrument_time.py`). On four cores
+  with LLVM 18, the allocation pass ran about 3 times faster on 2,000 functions (#251).
 - **compilerlib compiled once for both libraries.** `compilerlib_static` and `compilerlib_shared`
   each compiled compilerlib's sources. They now take the objects of one object library,
   `compilerlib_objects`, which are position-independent in both. A project that fetches this one
