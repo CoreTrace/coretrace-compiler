@@ -182,6 +182,9 @@ pull request.
   assigned in the right operand of `&&` at -O0 with the default modules, and functions in a
   namespace and an `extern "C"` block with `--ct-optnone`. A test of the bounds pass checks that
   a variable stops being resolved to its stored pointer once a check uses it (#251).
+- Tests of the bounds pass check that a call result stored in a variable is the base of the
+  accesses after the call, and not of those before it in the same block, but is the base of every
+  access of a block that no path reaches (#251).
 
 ### Documentation
 
