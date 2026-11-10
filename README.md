@@ -31,7 +31,9 @@ fixture suites with programs built with `-fsanitize=thread`: a data race in the 
 The Benchmarks workflow measures the run-time overhead of instrumentation, on demand: it builds
 the programs in `bench/` without instrumentation and with several sets of modules, and writes
 the median time of each, as a multiple of the plain build's, to its summary. Locally:
-`python3 scripts/bench/overhead.py --cc build/cc`.
+`python3 scripts/bench/overhead.py --cc build/cc`. It also measures how the time of
+instrumentation grows with the writes of a function through one pointer, which a call returned
+or a parameter holds: `python3 scripts/bench/instrument_time.py --cc build/cc`.
 
 Quick build:
 
@@ -86,6 +88,11 @@ pass `-DCORETRACE_COMPILER_BUILD_RUNTIME=OFF`. The runtime and its logger, coret
 neither fetched, built nor installed; `compilerlib`, `cc` and the compilerlib unit tests still build.
 `--instrument` then links a runtime built elsewhere, from the directory `CT_RUNTIME_LIB_DIR` names,
 and otherwise fails with "instrumentation runtime archives not found".
+
+Precompiled headers: with Clang (not AppleClang or clang-cl) and CMake 3.19 or later, the
+LLVM and Clang headers of compilerlib's sources are precompiled, which nearly halves the CPU
+time compiling them. They are left out with a compiler launcher such as ccache, which does not reuse
+them; `-DCORETRACE_COMPILER_PCH=OFF` turns them off.
 
 ## Install
 

@@ -38,29 +38,14 @@
 #include <clang/Driver/Options.h>
 #endif
 
+#include "clang_driver_compat.hpp"
+
 #include <memory>
 #include <string>
 #include <utility>
 
 namespace compilerlib::clang_compat
 {
-    // The driver's option identifiers (OPT_*), which LLVM 22 moved out of the driver.
-#if LLVM_VERSION_MAJOR >= 22
-    namespace options = clang::options;
-#else
-    namespace options = clang::driver::options;
-#endif
-
-    // The driver's option table, which LLVM 22 moved out of the driver too.
-    inline const llvm::opt::OptTable& driverOptTable()
-    {
-#if LLVM_VERSION_MAJOR >= 22
-        return clang::getDriverOptTable();
-#else
-        return clang::driver::getDriverOptTable();
-#endif
-    }
-
     // The optimization record of -fsave-optimization-record, set up on a context: the file,
     // which keeps the remarks only once kept, and the streamer that writes them. LLVM 22
     // returns a handle that removes the streamer itself when it is destroyed.
@@ -174,16 +159,6 @@ namespace compilerlib::clang_compat
         clang::EmitBackendOutput(ci.getDiagnostics(), ci.getHeaderSearchOpts(), options,
                                  ci.getTargetOpts(), ci.getLangOpts(), layout, &module, action,
                                  std::move(stream));
-#endif
-    }
-
-    // The resource directory of the clang at clangPath, as that clang computes it.
-    inline std::string resourcesPath(llvm::StringRef clangPath)
-    {
-#if LLVM_VERSION_MAJOR >= 22
-        return clang::GetResourcesPath(clangPath);
-#else
-        return clang::driver::Driver::GetResourcesPath(clangPath);
 #endif
     }
 

@@ -103,6 +103,50 @@ pull request.
 - **`LICENSE` and `NOTICE` in the install prefix.** `cmake --install` installed neither, which
   Apache-2.0 asks redistributions to carry. Both now go to `share/doc/coretrace-compiler/`, in
   the `licenses` component (#249, #250).
+- **Functions that return a `long double`, with the trace module.** The trace pass extended every
+  floating-point return value to the `double` it prints. A `long double` is wider on x86-64
+  (x86_fp80) and on AArch64 Linux (fp128), so the instrumented module was invalid: with the
+  default modules, a function that returns one failed to compile with "CoreTrace bug: DestTy too
+  small for FPExt". The value is now truncated (#251).
+- **Bounds checks of a pointer assigned in a condition, at -O0.** The bounds pass replaced a
+  pointer loaded from a variable written once by the value stored there, even where that value is
+  not defined: `while (s && (p = find()) != 0) p->x = 1;` failed with "Instruction does not
+  dominate all uses". The stored value is now used only where it dominates the access (#251).
+- **`--ct-optnone` and the functions of a namespace or an `extern "C"` block.** The frontend
+  hands a namespace or a linkage block to its consumers whole, and `--ct-optnone` only annotated
+  the functions it received directly: the functions inside kept being optimized. They now get
+  `optnone` too, so fewer functions are optimized at -O1 and above (#251).
+- **`CT_DEBUG_AUTOFREE` read from several threads.** The allocation pass read the variable into
+  two plain statics on its first use, on which two threads instrumenting modules at once raced.
+  It is now read once, into a constant (#251).
+
+### Performance
+
+- **Instrumentation passes.** At -O0, the bounds pass read every use of a pointer variable again
+  at each access through it, which made it quadratic in the length of a function: it now finds
+  the single store of each variable once per function. The allocation pass went through every
+  allocation site of the module for each function, and through every instruction of the module
+  for the calls to `operator new` and `delete`: it now reads the sites of the function, and the
+  users of those operators. On macOS arm64 with LLVM 20, instrumenting 16,000 writes through one
+  pointer at -O0 takes 25 ms instead of 694 ms when a call returned the pointer, and 21 ms
+  instead of 732 ms when it is a parameter (`scripts/bench/instrument_time.py`). On four cores
+  with LLVM 18, the allocation pass ran about 3 times faster on 2,000 functions (#251).
+- **compilerlib compiled once for both libraries.** `compilerlib_static` and `compilerlib_shared`
+  each compiled compilerlib's sources. They now take the objects of one object library,
+  `compilerlib_objects`, which are position-independent in both. A project that fetches this one
+  with FetchContent, as the analyzers do, builds both libraries by default: it compiles 14
+  objects instead of 28 (#251).
+- **Clang's frontend headers.** `args.cpp`, `toolchain.cpp` and the consumers of `--ct-optnone`
+  and `no_instrument_function` no longer include Clang's frontend headers, which they do not use
+  (#251).
+- **The toolchain and runtime paths.** They are defined on `toolchain.cpp` alone, the only source
+  that reads them, instead of on every source of compilerlib and `cc`: changing them recompiles
+  `toolchain.cpp` alone, and a compiler cache can reuse the other objects across build
+  directories (#251).
+- **Precompiled headers with Clang.** With Clang and CMake 3.19 or later, the LLVM and Clang
+  headers of compilerlib's sources are precompiled, which nearly halves the CPU time compiling
+  them. They are left out with GCC, AppleClang, clang-cl and a compiler launcher such as ccache;
+  `-DCORETRACE_COMPILER_PCH=OFF` turns them off (#251).
 
 ### Internal
 
@@ -134,6 +178,16 @@ pull request.
   QEMU's user-mode emulation, `sbrk()` failed now and then in the sbrk test of the full
   allocation table: the page above the program break was taken by a mapping that the process
   does not list (#233).
+- Unit tests compile a function that returns a `long double` with the trace module, a pointer
+  assigned in the right operand of `&&` at -O0 with the default modules, and functions in a
+  namespace and an `extern "C"` block with `--ct-optnone`. A test of the bounds pass checks that
+  a variable stops being resolved to its stored pointer once a check uses it (#251).
+- Tests of the bounds pass check that a call result stored in a variable is the base of the
+  accesses after the call, and not of those before it in the same block, but is the base of every
+  access of a block that no path reaches (#251).
+- `scripts/bench/instrument_time.py`, which the Benchmarks workflow runs, measures how the time
+  of instrumentation grows with the writes of a function through one pointer, which a call
+  returned or a parameter holds (#251).
 
 ### Documentation
 

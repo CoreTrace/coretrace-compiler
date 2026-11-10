@@ -115,9 +115,11 @@ namespace compilerlib
 
                 if (retTy->isFloatingPointTy())
                 {
+                    // Extended from a narrower type, truncated from a wider one, such as
+                    // long double on x86-64 (x86_fp80) or AArch64 Linux (fp128).
                     if (retVal->getType() != doubleTy)
                     {
-                        retVal = retBuilder.CreateFPExt(retVal, doubleTy);
+                        retVal = retBuilder.CreateFPCast(retVal, doubleTy);
                     }
                     retBuilder.CreateCall(exitF64Fn, {funcName, retVal});
                     continue;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "compilerlib/toolchain.hpp"
-#include "clang_compat.hpp"
+#include "clang_driver_compat.hpp"
 #include "toolchain_internal.hpp"
 
 #include <llvm/ADT/StringRef.h>

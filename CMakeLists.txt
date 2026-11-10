@@ -302,7 +302,27 @@ else()
   )
 endif()
 
-add_library(compilerlib_static STATIC ${LIB_SOURCES})
+# compilerlib's sources, compiled once for the static and the shared library, which both
+# take these objects: position-independent, as the shared library needs them.
+add_library(compilerlib_objects OBJECT ${LIB_SOURCES})
+set_target_properties(compilerlib_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
+coretrace_force_msvc_runtime(compilerlib_objects)
+
+# The headers of LLVM and Clang take most of the time compiling each source: they are
+# precompiled once (src/compilerlib/pch.hpp). Only with Clang: GCC compiles slower with them,
+# CMake does not instantiate their templates once with AppleClang, which is where the gain
+# is, clang-cl is untested, and a compiler launcher such as ccache does not reuse
+# precompiled headers. CMake 3.19 is the first to instantiate templates in the PCH.
+option(CORETRACE_COMPILER_PCH "Precompile the LLVM and Clang headers of compilerlib's sources (Clang)" ON)
+if(CORETRACE_COMPILER_PCH
+   AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+   AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+   AND NOT CMAKE_CXX_COMPILER_LAUNCHER
+   AND NOT CMAKE_VERSION VERSION_LESS 3.19)
+  target_precompile_headers(compilerlib_objects PRIVATE src/compilerlib/pch.hpp)
+endif()
+
+add_library(compilerlib_static STATIC $<TARGET_OBJECTS:compilerlib_objects>)
 coretrace_force_msvc_runtime(compilerlib_static)
 
 # Generic detection of Clang resource directory.
@@ -400,6 +420,10 @@ else()
   endif()
 endif()
 
+coretrace_disable_rtti(compilerlib_objects)
+# The usage requirements of Clang and LLVM, as the libraries that link them.
+target_link_libraries(compilerlib_objects PRIVATE ${CT_CLANG_LINK_LIBS} ${CT_LLVM_LINK_LIBS})
+
 target_include_directories(compilerlib_static
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -407,14 +431,12 @@ target_include_directories(compilerlib_static
 )
 add_library(cc::compilerlib_static ALIAS compilerlib_static)
 
-target_compile_definitions(compilerlib_static PRIVATE ${CT_RUNTIME_DEFINITIONS})
 if(CORETRACE_COMPILER_BUILD_RUNTIME)
   add_dependencies(compilerlib_static ct_instrument_runtime)
 endif()
-coretrace_disable_rtti(compilerlib_static)
 target_link_libraries(compilerlib_static PUBLIC ${CT_CLANG_LINK_LIBS} ${CT_LLVM_LINK_LIBS})
 
-add_library(compilerlib_shared SHARED ${LIB_SOURCES})
+add_library(compilerlib_shared SHARED $<TARGET_OBJECTS:compilerlib_objects>)
 set_target_properties(compilerlib_shared PROPERTIES OUTPUT_NAME "compilerlib")
 coretrace_force_msvc_runtime(compilerlib_shared)
 
@@ -425,11 +447,9 @@ target_include_directories(compilerlib_shared
 )
 add_library(cc::compilerlib_shared ALIAS compilerlib_shared)
 
-target_compile_definitions(compilerlib_shared PRIVATE ${CT_RUNTIME_DEFINITIONS})
 if(CORETRACE_COMPILER_BUILD_RUNTIME)
   add_dependencies(compilerlib_shared ct_instrument_runtime)
 endif()
-coretrace_disable_rtti(compilerlib_shared)
 target_link_libraries(compilerlib_shared PRIVATE ${CT_CLANG_LINK_LIBS} ${CT_LLVM_LINK_LIBS})
 
 add_executable(cc src/cli/main.cc src/cli/help.cc src/cli/args.cc)
@@ -437,26 +457,22 @@ target_include_directories(cc PRIVATE src)
 target_compile_definitions(cc PRIVATE CT_VERSION="${PROJECT_VERSION}")
 coretrace_force_msvc_runtime(cc)
 
-foreach(tgt compilerlib_static compilerlib_shared cc)
-  if(TARGET ${tgt})
-    target_compile_definitions(${tgt}
-      PRIVATE
-        CLANG_RESOURCE_DIR=\"${CLANG_RESOURCE_DIR}\"
-    )
-    if(_LLVM_BIN_DIR)
-      target_compile_definitions(${tgt}
-        PRIVATE
-          CT_LLVM_BIN_DIR=\"${_LLVM_BIN_DIR}\"
-      )
-    endif()
-    if(CLANG_EXECUTABLE)
-      target_compile_definitions(${tgt}
-        PRIVATE
-          CT_CLANG_EXECUTABLE=\"${CLANG_EXECUTABLE}\"
-      )
-    endif()
-  endif()
-endforeach()
+# The paths the driver looks up, of the toolchain and of the runtime archives, on the one
+# source that reads them: they differ from one build directory to another, so on every
+# source they recompiled all of compilerlib when they changed, and kept a compiler cache
+# from reusing its objects across build directories.
+set(CT_TOOLCHAIN_DEFINITIONS
+  ${CT_RUNTIME_DEFINITIONS}
+  CLANG_RESOURCE_DIR=\"${CLANG_RESOURCE_DIR}\"
+)
+if(_LLVM_BIN_DIR)
+  list(APPEND CT_TOOLCHAIN_DEFINITIONS CT_LLVM_BIN_DIR=\"${_LLVM_BIN_DIR}\")
+endif()
+if(CLANG_EXECUTABLE)
+  list(APPEND CT_TOOLCHAIN_DEFINITIONS CT_CLANG_EXECUTABLE=\"${CLANG_EXECUTABLE}\")
+endif()
+set_property(SOURCE src/compilerlib/toolchain.cpp APPEND PROPERTY
+  COMPILE_DEFINITIONS ${CT_TOOLCHAIN_DEFINITIONS})
 
 coretrace_disable_rtti(cc)
 target_link_libraries(cc PRIVATE compilerlib_static ${CT_CLANG_LINK_LIBS} ${CT_LLVM_LINK_LIBS})

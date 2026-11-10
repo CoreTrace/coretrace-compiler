@@ -1770,4 +1770,85 @@ int main()
             EXPECT_TRUE(result.success) << autofree << "\n" << result.diagnostics;
         }
     }
+
+    // The trace prints a double: a wider return value, such as long double on x86-64, is
+    // truncated. Extending it gave invalid IR, and the compilation failed.
+    TEST_F(CompileTest, TracedLongDoubleReturnIsTruncated)
+    {
+        compilerlib::CompileResult result = compilerlib::compile(
+            {kElfTarget, "-S", "-emit-llvm", "--ct-modules=trace",
+             writeSource("unit.c", "long double half(long double x) { return x / 2; }\n")},
+            compilerlib::OutputMode::ToMemory, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(result.llvmIR.find("fptrunc x86_fp80"), std::string::npos) << result.llvmIR;
+    }
+
+    // At -O0, `entry` lives in a slot written once, in the right operand of &&, which does not
+    // dominate the loop body. The body's check uses the pointer loaded from the slot: the value
+    // stored there is not defined on every path to it, and using it gave invalid IR.
+    TEST_F(CompileTest, BoundsCheckOfAPointerAssignedInAConditionIsValid)
+    {
+        const char* source = R"(struct entry
+{
+    int status;
+    struct entry* next;
+};
+
+struct entry* find(void);
+
+int drain(int status)
+{
+    struct entry* entry;
+    while (status && (entry = find()) != 0)
+    {
+        entry->status = status;
+        status = 0;
+    }
+    return status;
+}
+)";
+        compilerlib::CompileResult result = compilerlib::compile(
+            {kElfTarget, "-O0", "-S", "-emit-llvm", writeSource("unit.c", source)},
+            compilerlib::OutputMode::ToMemory, /*instrument=*/true);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(result.llvmIR.find("__ct_check_bounds"), std::string::npos) << result.llvmIR;
+    }
+
+    // --ct-optnone reaches the functions declared in namespaces and in extern "C" blocks,
+    // which the frontend hands over whole.
+    TEST_F(CompileTest, OptNoneReachesNamespacesAndLinkageBlocks)
+    {
+        const char* source = R"(namespace outer
+{
+    namespace inner
+    {
+        int twice(int x) { return x * 2; }
+    }
+}
+
+extern "C"
+{
+    int thrice(int x) { return x * 3; }
+}
+
+int once(int x) { return x; }
+)";
+        compilerlib::CompileResult result =
+            compilerlib::compile({kElfTarget, "-O2", "-S", "-emit-llvm", "--ct-optnone",
+                                  writeSource("unit.cpp", source)},
+                                 compilerlib::OutputMode::ToMemory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+
+        llvm::LLVMContext context;
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> module =
+            llvm::parseAssemblyString(result.llvmIR, error, context);
+        ASSERT_NE(module, nullptr) << error.getMessage().str();
+        for (const char* name : {"_ZN5outer5inner5twiceEi", "thrice", "_Z4oncei"})
+        {
+            const llvm::Function* function = module->getFunction(name);
+            ASSERT_NE(function, nullptr) << name;
+            EXPECT_TRUE(function->hasFnAttribute(llvm::Attribute::OptimizeNone)) << name;
+        }
+    }
 } // namespace

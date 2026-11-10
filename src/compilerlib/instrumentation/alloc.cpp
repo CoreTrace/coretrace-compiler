@@ -30,6 +30,8 @@
 
 #include <cstdlib>
 #include <functional>
+#include <optional>
+#include <utility>
 
 namespace compilerlib
 {
@@ -1136,13 +1138,8 @@ namespace compilerlib
 
         CT_NODISCARD bool debugAutofreeEnabled(void)
         {
-            static int initialized = 0;
-            static bool enabled = false;
-            if (!initialized)
-            {
-                enabled = std::getenv("CT_DEBUG_AUTOFREE") != nullptr;
-                initialized = 1;
-            }
+            // Initialized once, even when several threads instrument modules at once.
+            static const bool enabled = std::getenv("CT_DEBUG_AUTOFREE") != nullptr;
             return enabled;
         }
 
@@ -1525,30 +1522,32 @@ namespace compilerlib
 
     void keepTrackedAllocationCalls(llvm::Module& module)
     {
-        for (llvm::Function& func : module)
+        // The calls to operator new and delete are among the users of those functions, or of
+        // a constant expression of them, which getCalledFunction looks through: reading the
+        // users avoids reading every instruction of the module.
+        for (llvm::Function& callee : module)
         {
-            for (llvm::BasicBlock& block : func)
+            bool isArray = false;
+            OperatorNewKind newKind = OperatorNewKind::Normal;
+            OperatorDeleteKind deleteKind = OperatorDeleteKind::Normal;
+            if (!isOperatorNewName(callee.getName(), isArray, newKind) &&
+                !isOperatorDeleteName(callee.getName(), isArray, deleteKind))
             {
-                for (llvm::Instruction& inst : block)
+                continue;
+            }
+            llvm::SmallVector<llvm::User*, 16> users(callee.users());
+            for (size_t i = 0; i < users.size(); ++i)
+            {
+                if (auto* expression = llvm::dyn_cast<llvm::ConstantExpr>(users[i]))
                 {
-                    auto* call = llvm::dyn_cast<llvm::CallBase>(&inst);
-                    if (!call || !call->getAttributes().hasFnAttr(llvm::Attribute::Builtin))
-                    {
-                        continue;
-                    }
-                    llvm::Function* callee = getCalledFunction(*call);
-                    if (!callee)
-                    {
-                        continue;
-                    }
-                    bool isArray = false;
-                    OperatorNewKind newKind = OperatorNewKind::Normal;
-                    OperatorDeleteKind deleteKind = OperatorDeleteKind::Normal;
-                    if (isOperatorNewName(callee->getName(), isArray, newKind) ||
-                        isOperatorDeleteName(callee->getName(), isArray, deleteKind))
-                    {
-                        call->removeFnAttr(llvm::Attribute::Builtin);
-                    }
+                    users.append(expression->user_begin(), expression->user_end());
+                    continue;
+                }
+                auto* call = llvm::dyn_cast<llvm::CallBase>(users[i]);
+                if (call && getCalledFunction(*call) == &callee &&
+                    call->getAttributes().hasFnAttr(llvm::Attribute::Builtin))
+                {
+                    call->removeFnAttr(llvm::Attribute::Builtin);
                 }
             }
         }
@@ -1633,6 +1632,9 @@ namespace compilerlib
             ReturnAllocKind kind = ReturnAllocKind::None;
         };
         llvm::SmallVector<AllocSite, 32> allocSites;
+        // The sites of each function, allocSites[first, second): the collection appends them
+        // function by function.
+        llvm::DenseMap<const llvm::Function*, std::pair<size_t, size_t>> sitesOfFunction;
         llvm::SmallVector<llvm::CallBase*, 16> unusedResultCalls;
         llvm::DenseMap<const llvm::Function*, ReturnAllocKind> returnsOwned;
         llvm::SmallPtrSet<const llvm::Value*, 32> instantAutoFreeValues;
@@ -1656,6 +1658,7 @@ namespace compilerlib
             {
                 continue;
             }
+            const size_t firstSite = allocSites.size();
             for (llvm::BasicBlock& bb : func)
             {
                 for (llvm::Instruction& inst : bb)
@@ -1843,6 +1846,8 @@ namespace compilerlib
                     }
                 }
             }
+            if (allocSites.size() != firstSite)
+                sitesOfFunction[&func] = {firstSite, allocSites.size()};
         }
 
         for (llvm::CallBase* call : unusedResultCalls)
@@ -1901,8 +1906,13 @@ namespace compilerlib
             {
                 continue;
             }
+            auto range = sitesOfFunction.find(&func);
+            if (range == sitesOfFunction.end())
+                continue;
             llvm::SmallVector<AllocSite, 16> localSites;
-            for (const auto& site : allocSites)
+            for (const auto& site :
+                 llvm::ArrayRef<AllocSite>(allocSites)
+                     .slice(range->second.first, range->second.second - range->second.first))
             {
                 if (site.value)
                 {
@@ -1941,7 +1951,14 @@ namespace compilerlib
             if (returns.empty())
                 continue;
 
-            const llvm::DominatorTree dominators(func);
+            // Only a site that stays local asks for the tree: built then, once.
+            std::optional<llvm::DominatorTree> dominators;
+            auto dominatorTree = [&]() -> const llvm::DominatorTree&
+            {
+                if (!dominators)
+                    dominators.emplace(func);
+                return *dominators;
+            };
             for (const auto& site : localSites)
             {
                 EscapeState state = EscapeState::ReachableLocal;
@@ -1975,7 +1992,7 @@ namespace compilerlib
                     // The release uses the allocation, which must then be on every path to
                     // the return. One made in a branch or a loop is left to the leak report.
                     if (site.value &&
-                        !dominators.dominates(llvm::cast<llvm::Instruction>(site.value), ret))
+                        !dominatorTree().dominates(llvm::cast<llvm::Instruction>(site.value), ret))
                     {
                         continue;
                     }

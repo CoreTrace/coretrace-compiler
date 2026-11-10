@@ -3,11 +3,10 @@
 #define COMPILERLIB_FRONTEND_OPTNONE_ACTION_HPP
 
 #include "compilerlib/frontend/consumer_action.hpp"
+#include "compilerlib/frontend/optnone_consumer.hpp"
 
 namespace compilerlib::frontend
 {
-
-    std::unique_ptr<clang::ASTConsumer> makeOptNoneConsumer(clang::ASTContext& ctx);
 
     template <typename BaseAction>
     using OptNoneAction = PrependConsumerAction<BaseAction, makeOptNoneConsumer>;

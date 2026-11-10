@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "args_internal.hpp"
-#include "clang_compat.hpp"
+#include "clang_driver_compat.hpp"
 
 #include <llvm/Config/llvm-config.h>
 #include <llvm/Option/ArgList.h>
