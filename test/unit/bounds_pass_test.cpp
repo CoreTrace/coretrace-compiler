@@ -220,6 +220,31 @@ define i32 @f() {
         EXPECT_EQ(checkedBase(*func, "element"), "block");
     }
 
+    // Every value dominates a block that no path reaches, for DominatorTree::dominates and
+    // the verifier alike: there, even a pointer loaded before the call is checked against
+    // the call's result, as before.
+    TEST_F(BoundsPassTest, CallResultInASlotIsTheBaseOfEveryAccessOfAnUnreachableBlock)
+    {
+        llvm::Function* func = instrument(R"(
+declare ptr @allocate()
+
+define i32 @f() {
+entry:
+  %slot = alloca ptr, align 8
+  ret i32 0
+
+dead:
+  %early = load ptr, ptr %slot, align 8
+  %a = load i32, ptr %early, align 4
+  %block = call ptr @allocate()
+  store ptr %block, ptr %slot, align 8
+  ret i32 %a
+}
+)");
+        ASSERT_NE(func, nullptr);
+        EXPECT_EQ(checkedBase(*func, "early"), "block");
+    }
+
     // A callee that receives the slot's address may store another pointer in it.
     TEST_F(BoundsPassTest, PointerLoadedFromASlotACalleeMayWriteIsItsOwnBase)
     {
