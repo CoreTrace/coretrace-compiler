@@ -185,6 +185,9 @@ pull request.
 - Tests of the bounds pass check that a call result stored in a variable is the base of the
   accesses after the call, and not of those before it in the same block, but is the base of every
   access of a block that no path reaches (#251).
+- `scripts/bench/instrument_time.py`, which the Benchmarks workflow runs, measures how the time
+  of instrumentation grows with the writes of a function through one pointer, which a call
+  returned or a parameter holds (#251).
 
 ### Documentation
 
