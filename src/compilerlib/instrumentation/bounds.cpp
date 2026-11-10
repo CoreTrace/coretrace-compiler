@@ -187,14 +187,67 @@ namespace compilerlib
         // (a pointer parameter's, at -O0).
         using SingleStoreCache = llvm::DenseMap<const llvm::AllocaInst*, llvm::Value*>;
 
+        // Whether a value is defined wherever an access runs, as DominatorTree::dominates
+        // answers, while the pass adds checks to the function. DominatorTree::dominates
+        // compares two instructions of one block by their order, which LLVM forgets at each
+        // insertion in the block and finds again by walking the block: with a check before
+        // each access, a block of many accesses would be walked once per access. Here, a
+        // block is numbered once; the checks inserted later leave the other instructions in
+        // the same order.
+        class AccessDominance
+        {
+          public:
+            explicit AccessDominance(llvm::Function& func) : func_(func) {}
+
+            CT_NODISCARD bool dominates(const llvm::Instruction& definition,
+                                        const llvm::Instruction& access)
+            {
+                const llvm::BasicBlock* block = access.getParent();
+                if (definition.getParent() != block)
+                    return tree().dominates(&definition, &access);
+                // As for DominatorTree::dominates, every value dominates a block that no path
+                // reaches.
+                if (!tree().isReachableFromEntry(block))
+                    return true;
+                return comesBefore(definition, access);
+            }
+
+          private:
+            // Built on the first query: the checks add no block, so it stays valid.
+            const llvm::DominatorTree& tree()
+            {
+                if (!tree_)
+                    tree_.emplace(func_);
+                return *tree_;
+            }
+
+            // Whether `first` comes before `second`, of the same block, which is numbered
+            // again when either has no position yet.
+            CT_NODISCARD bool comesBefore(const llvm::Instruction& first,
+                                          const llvm::Instruction& second)
+            {
+                if (!positions_.count(&first) || !positions_.count(&second))
+                {
+                    unsigned next = 0;
+                    for (const llvm::Instruction& inst : *first.getParent())
+                        positions_[&inst] = next++;
+                }
+                return positions_.lookup(&first) < positions_.lookup(&second);
+            }
+
+            llvm::Function& func_;
+            std::optional<llvm::DominatorTree> tree_;
+            llvm::DenseMap<const llvm::Instruction*, unsigned> positions_;
+        };
+
         // The base of the object `ptr` points into, for the check of `access`. A pointer loaded
         // from a slot written once is replaced by the value stored there, when that value is
         // defined wherever the access runs: the store can sit on a path that does not lead to
         // the access, such as the right operand of && in a loop condition.
-        CT_NODISCARD llvm::Value*
-        resolveBasePointer(llvm::Value* ptr, const llvm::Instruction& access,
-                           llvm::function_ref<const llvm::DominatorTree&()> dominators,
-                           SingleStoreCache& singleStores)
+        CT_NODISCARD llvm::Value* resolveBasePointer(llvm::Value* ptr,
+                                                     const llvm::Instruction& access,
+                                                     AccessDominance& dominance,
+                                                     SingleStoreCache& singleStores)
         {
             llvm::Value* base = stripPointerCastsAndGEPs(ptr);
             auto* load = llvm::dyn_cast<llvm::LoadInst>(base);
@@ -221,7 +274,7 @@ namespace compilerlib
                 return base ? base : ptr;
             }
             auto* definition = llvm::dyn_cast<llvm::Instruction>(stored);
-            if (definition && !dominators().dominates(definition, &access))
+            if (definition && !dominance.dominates(*definition, access))
             {
                 return base ? base : ptr;
             }
@@ -475,16 +528,7 @@ namespace compilerlib
                 }
             }
 
-            // Built on the first query. The checks only add instructions to the blocks, so
-            // the tree stays valid while they are emitted.
-            std::optional<llvm::DominatorTree> dominatorTree;
-            auto dominators = [&]() -> const llvm::DominatorTree&
-            {
-                if (!dominatorTree)
-                    dominatorTree.emplace(func);
-                return *dominatorTree;
-            };
-
+            AccessDominance dominance(func);
             SingleStoreCache singleStores;
             llvm::SmallVector<llvm::Instruction*, 64> accesses;
             for (llvm::Instruction& inst : llvm::instructions(func))
@@ -509,7 +553,7 @@ namespace compilerlib
                 auto check =
                     [&](llvm::Value* ptr, llvm::Value* sizeVal, uint64_t accessSize, bool isWrite)
                 {
-                    llvm::Value* base = resolveBasePointer(ptr, *inst, dominators, singleStores);
+                    llvm::Value* base = resolveBasePointer(ptr, *inst, dominance, singleStores);
                     if (auto* object = llvm::dyn_cast<llvm::AllocaInst>(base))
                     {
                         if (std::optional<uint64_t> objectSize = stackObjectSize(*object, layout))
