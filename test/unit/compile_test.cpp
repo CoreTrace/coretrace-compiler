@@ -622,12 +622,19 @@ int main(void)
     }
 
 #ifndef _WIN32
-    // No temporary file stands in for the output: the temporary directory stays empty.
+    // No temporary file stands in for the output: the temporary directory stays empty. On
+    // macOS, the first compilation of a process detects the SDK with xcrun, which has left its
+    // cache, xcrun_db, in TMPDIR (#253). That compilation runs before TMPDIR points at the
+    // watched directory, which then sees only the compilation under test.
     TEST_F(CompileTest, InMemoryBitcodeCreatesNoTemporaryFile)
     {
         const std::string source = writeSource("unit.c", kBitcodeUnit);
         const std::vector<std::string> args = {"-O0",  "-g", "-emit-llvm",   "-c",
                                                source, "-o", path("unit.bc")};
+        const compilerlib::CompileResult first =
+            compilerlib::compile(args, compilerlib::OutputMode::ToMemoryBitcode);
+        ASSERT_TRUE(first.success) << first.diagnostics;
+
         const fs::path temporary = path("tmp");
         fs::create_directories(temporary);
         const char* previous = std::getenv("TMPDIR");
