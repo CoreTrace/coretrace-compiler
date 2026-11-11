@@ -147,6 +147,13 @@ pull request.
   headers of compilerlib's sources are precompiled, which nearly halves the CPU time compiling
   them. They are left out with GCC, AppleClang, clang-cl and a compiler launcher such as ccache;
   `-DCORETRACE_COMPILER_PCH=OFF` turns them off (#251).
+- **Auto-free releases in the block of a return.** At -O0, the allocation pass took time
+  quadratic in the allocations that share a block with their function's return: before releasing
+  each of them there, it asked the dominator tree whether the allocation dominates the return, and
+  LLVM walked the block again to answer after each release inserted in it. A return ends its
+  block, so the pass now releases such an allocation without asking. On macOS arm64 with LLVM 20,
+  instrumenting 16,000 of them at -O0 takes 55 ms instead of 13.9 s
+  (`scripts/bench/instrument_time.py`); the instrumented IR is the same (#254, #252).
 
 ### Internal
 
