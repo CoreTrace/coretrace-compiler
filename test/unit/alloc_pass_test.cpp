@@ -554,6 +554,30 @@ more:
         EXPECT_EQ(calls[4]->getArgOperand(0), calls[2]);
     }
 
+    // As DominatorTree::dominates answers, an allocation in a block that no path reaches is
+    // released before the return of that block, and before no other.
+    TEST_F(AutoFreeTest, AllocationInABlockNoPathReachesIsReleasedBeforeItsReturn)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+
+define void @dead_code() {
+entry:
+  ret void
+
+dead:
+  %block = call ptr @malloc(i64 8)
+  store i8 1, ptr %block
+  ret void
+}
+)");
+        EXPECT_EQ(callees("dead_code"), (std::vector<std::string>{"__ct_malloc", "__ct_autofree"}));
+        const std::vector<llvm::CallBase*> calls = callsIn(*module_->getFunction("dead_code"));
+        ASSERT_EQ(calls.size(), 2u);
+        EXPECT_EQ(calls[1]->getParent()->getName(), "dead");
+        EXPECT_EQ(calls[1]->getArgOperand(0), calls[0]);
+    }
+
     // Clang marks a new-expression's operator new and delete calls builtin; before
     // optimization, the calls the pass tracks lose that mark. Aligned operator new is not
     // tracked, and keeps it.
