@@ -486,6 +486,41 @@ done:
         EXPECT_EQ(callees("conditional"), std::vector<std::string>{"__ct_malloc"});
     }
 
+    // The calls of `function`, in order.
+    std::vector<llvm::CallBase*> callsIn(llvm::Function& function)
+    {
+        std::vector<llvm::CallBase*> calls;
+        for (llvm::Instruction& inst : llvm::instructions(function))
+        {
+            if (auto* call = llvm::dyn_cast<llvm::CallBase>(&inst))
+                calls.push_back(call);
+        }
+        return calls;
+    }
+
+    // A return ends its block: every allocation of that block comes before it, and is
+    // released there, in the order of the allocations.
+    TEST_F(AutoFreeTest, AllocationsInTheBlockOfTheReturnAreReleasedInTheirOrder)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+
+define void @several() {
+  %first = call ptr @malloc(i64 8)
+  store i8 1, ptr %first
+  %second = call ptr @malloc(i64 8)
+  store i8 2, ptr %second
+  ret void
+}
+)");
+        EXPECT_EQ(callees("several"), (std::vector<std::string>{"__ct_malloc", "__ct_malloc",
+                                                                "__ct_autofree", "__ct_autofree"}));
+        const std::vector<llvm::CallBase*> calls = callsIn(*module_->getFunction("several"));
+        ASSERT_EQ(calls.size(), 4u);
+        EXPECT_EQ(calls[2]->getArgOperand(0), calls[0]);
+        EXPECT_EQ(calls[3]->getArgOperand(0), calls[1]);
+    }
+
     // Clang marks a new-expression's operator new and delete calls builtin; before
     // optimization, the calls the pass tracks lose that mark. Aligned operator new is not
     // tracked, and keeps it.
