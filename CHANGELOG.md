@@ -178,6 +178,10 @@ pull request.
   QEMU's user-mode emulation, `sbrk()` failed now and then in the sbrk test of the full
   allocation table: the page above the program break was taken by a mapping that the process
   does not list (#233).
+- On macOS, the test of in-memory bitcode that checks that no temporary file is created detects
+  the SDK before it points `TMPDIR` at the directory it checks. Under ctest, the detection ran
+  `xcrun` with that `TMPDIR`, and the test failed when `xcrun` left its cache, `xcrun_db`, there
+  (#255, #253).
 - Unit tests compile a function that returns a `long double` with the trace module, a pointer
   assigned in the right operand of `&&` at -O0 with the default modules, and functions in a
   namespace and an `extern "C"` block with `--ct-optnone`. A test of the bounds pass checks that
