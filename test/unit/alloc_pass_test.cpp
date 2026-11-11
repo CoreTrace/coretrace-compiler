@@ -521,6 +521,39 @@ define void @several() {
         EXPECT_EQ(calls[3]->getArgOperand(0), calls[1]);
     }
 
+    // An allocation made before a branch reaches the returns of both sides; one made in the
+    // block of a return reaches that return only.
+    TEST_F(AutoFreeTest, AllocationIsReleasedBeforeEachReturnItReachesOnEveryPath)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+
+define void @two_returns(i1 %early) {
+entry:
+  %first = call ptr @malloc(i64 8)
+  store i8 1, ptr %first
+  br i1 %early, label %leave, label %more
+
+leave:
+  ret void
+
+more:
+  %second = call ptr @malloc(i64 8)
+  store i8 2, ptr %second
+  ret void
+}
+)");
+        EXPECT_EQ(callees("two_returns"),
+                  (std::vector<std::string>{"__ct_malloc", "__ct_autofree", "__ct_malloc",
+                                            "__ct_autofree", "__ct_autofree"}));
+        const std::vector<llvm::CallBase*> calls = callsIn(*module_->getFunction("two_returns"));
+        ASSERT_EQ(calls.size(), 5u);
+        EXPECT_EQ(calls[1]->getParent()->getName(), "leave");
+        EXPECT_EQ(calls[1]->getArgOperand(0), calls[0]);
+        EXPECT_EQ(calls[3]->getArgOperand(0), calls[0]);
+        EXPECT_EQ(calls[4]->getArgOperand(0), calls[2]);
+    }
+
     // Clang marks a new-expression's operator new and delete calls builtin; before
     // optimization, the calls the pass tracks lose that mark. Aligned operator new is not
     // tracked, and keeps it.
