@@ -626,6 +626,8 @@ int main(void)
     TEST_F(CompileTest, InMemoryBitcodeCreatesNoTemporaryFile)
     {
         const std::string source = writeSource("unit.c", kBitcodeUnit);
+        const std::vector<std::string> args = {"-O0",  "-g", "-emit-llvm",   "-c",
+                                               source, "-o", path("unit.bc")};
         const fs::path temporary = path("tmp");
         fs::create_directories(temporary);
         const char* previous = std::getenv("TMPDIR");
@@ -633,8 +635,7 @@ int main(void)
         setenv("TMPDIR", temporary.c_str(), 1);
 
         compilerlib::CompileResult memory =
-            compilerlib::compile({"-O0", "-g", "-emit-llvm", "-c", source, "-o", path("unit.bc")},
-                                 compilerlib::OutputMode::ToMemoryBitcode);
+            compilerlib::compile(args, compilerlib::OutputMode::ToMemoryBitcode);
 
         if (previous != nullptr)
             setenv("TMPDIR", saved.c_str(), 1);
