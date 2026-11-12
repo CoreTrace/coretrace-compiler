@@ -260,6 +260,23 @@ namespace
                   inJobDirectory("a.dot"), "-fmodules-cache-path=" + inJobDirectory("modules")}));
     }
 
+    TEST(ResolveDriverOutputPaths, ResolvesTheFilesTheDriverWrites)
+    {
+        Args args{"-MJ", "a.json", "-MJb.json", "-gen-cdb-fragment-path", "fragments", "-c", "a.c"};
+        compilerlib::resolveDriverOutputPaths(args, jobDirectory());
+        EXPECT_EQ(args, (Args{"-MJ", inJobDirectory("a.json"), "-MJ", inJobDirectory("b.json"),
+                              "-gen-cdb-fragment-path", inJobDirectory("fragments"), "-c", "a.c"}));
+    }
+
+    // An absolute path, and the value of another option.
+    TEST(ResolveDriverOutputPaths, LeavesEverythingElseAlone)
+    {
+        Args args{"-MJ", inJobDirectory("a.json"), "-Xclang", "-MJ", "-o", "a.o", "-c", "a.c"};
+        const Args before = args;
+        compilerlib::resolveDriverOutputPaths(args, jobDirectory());
+        EXPECT_EQ(args, before);
+    }
+
     TEST(MergeDiagnostics, JoinsWithASingleNewline)
     {
         EXPECT_EQ(compilerlib::mergeDiagnostics("driver", "cc1"), "driver\ncc1");

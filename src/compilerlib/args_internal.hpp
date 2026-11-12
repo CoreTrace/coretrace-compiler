@@ -59,6 +59,12 @@ namespace compilerlib
     resolveCc1OutputPaths(const llvm::opt::ArgStringList& args, llvm::StringRef directory,
                           llvm::function_ref<const char*(llvm::StringRef)> save);
 
+    // Rewrites each option of a driver command line that names what the driver itself writes,
+    // `-MJ <file>` and `-gen-cdb-fragment-path <directory>`, into the two-argument form, with a
+    // relative path made absolute against `directory`. The driver writes them relative to the
+    // process's working directory, which clang itself moves to that directory first.
+    void resolveDriverOutputPaths(std::vector<std::string>& args, llvm::StringRef directory);
+
     // Appends `extra` to `out` with exactly one newline between them; no-op when empty.
     void appendDiagnostics(std::string& out, const std::string& extra);
 

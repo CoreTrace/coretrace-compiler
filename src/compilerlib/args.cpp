@@ -11,6 +11,7 @@
 
 #include <cstring>
 #include <map>
+#include <utility>
 
 namespace compilerlib
 {
@@ -214,6 +215,53 @@ namespace compilerlib
             }
         }
         return out;
+    }
+
+    void resolveDriverOutputPaths(std::vector<std::string>& args, llvm::StringRef directory)
+    {
+        std::vector<const char*> argv;
+        argv.reserve(args.size());
+        for (const auto& arg : args)
+            argv.push_back(arg.c_str());
+        unsigned missingIndex = 0;
+        unsigned missingCount = 0;
+        // The driver's own parse, as for -working-directory.
+        const llvm::opt::InputArgList parsed =
+            clang_compat::driverOptTable().ParseArgs(argv, missingIndex, missingCount);
+
+        // Index of each option, either spelling, with its spelling and its absolute path.
+        std::map<unsigned, std::pair<std::string, std::string>> resolved;
+        for (const llvm::opt::Arg* arg : parsed.filtered(
+                 clang_compat::options::OPT_MJ, clang_compat::options::OPT_gen_cdb_fragment_path))
+        {
+            const llvm::StringRef value = arg->getValue();
+            if (value.empty() || llvm::sys::path::is_absolute(value))
+                continue;
+            llvm::SmallString<256> path(directory);
+            llvm::sys::path::append(path, value);
+            resolved.emplace(arg->getIndex(),
+                             std::make_pair(arg->getSpelling().str(), path.str().str()));
+        }
+        if (resolved.empty())
+            return;
+
+        std::vector<std::string> out;
+        out.reserve(args.size() + resolved.size());
+        for (unsigned i = 0; i < args.size(); ++i)
+        {
+            auto found = resolved.find(i);
+            if (found == resolved.end())
+            {
+                out.push_back(std::move(args[i]));
+                continue;
+            }
+            // The separate spelling has its path in the next argument.
+            if (args[i] == found->second.first)
+                ++i;
+            out.push_back(std::move(found->second.first));
+            out.push_back(std::move(found->second.second));
+        }
+        args.swap(out);
     }
 
     void appendDiagnostics(std::string& out, const std::string& extra)
