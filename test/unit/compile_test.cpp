@@ -1893,4 +1893,19 @@ int once(int x) { return x; }
         EXPECT_TRUE(fs::exists(project / "program") || fs::exists(project / "program.exe"));
         EXPECT_EQ(fs::canonical(linkDirectory), fs::canonical(project));
     }
+
+    // The assembler runs as a program of its own too. An empty source, which every target
+    // assembles, gives its object in the directory.
+    TEST_F(WorkingDirectoryTest, AssemblingRunsInTheDirectory)
+    {
+        writeSource("project/empty.s", "");
+        const fs::path project = path("project");
+        const fs::path processDirectory = fs::current_path();
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-working-directory", project.string(), "-c", "empty.s", "-o", "empty.o"},
+            compilerlib::OutputMode::ToFile);
+        fs::current_path(processDirectory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(fs::exists(project / "empty.o"));
+    }
 } // namespace
