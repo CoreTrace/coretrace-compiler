@@ -237,6 +237,8 @@ pull request.
 - `NOTICE` dates the copyright from 2025, when the code began, credits the CoreTrace
   contributors alongside Hugo Payet and links the repository. It keeps only these
   attribution notices, without the license header meant for source files (#248).
+- The README and `compilerlib/compiler.h` describe compiling from several threads, with
+  `-working-directory`, and its limits (#262, #261).
 
 ## v0.12.0 (2026-10-22)
 
