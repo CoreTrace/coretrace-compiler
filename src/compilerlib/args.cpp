@@ -2,10 +2,13 @@
 #include "args_internal.hpp"
 #include "clang_driver_compat.hpp"
 
+#include <llvm/ADT/SmallString.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/Option/ArgList.h>
+#include <llvm/Support/VirtualFileSystem.h>
 
 #include <cstring>
+#include <map>
 
 namespace compilerlib
 {
@@ -105,6 +108,54 @@ namespace compilerlib
             out.push_back(std::move(arg));
         }
         args.swap(out);
+    }
+
+    std::string normalizeWorkingDirectoryArgs(std::vector<std::string>& args,
+                                              llvm::vfs::FileSystem& fs)
+    {
+        std::vector<const char*> argv;
+        argv.reserve(args.size());
+        for (const auto& arg : args)
+            argv.push_back(arg.c_str());
+        unsigned missingIndex = 0;
+        unsigned missingCount = 0;
+        // The driver's own parse: the value of another option, or an input after "--", is
+        // not an option.
+        const llvm::opt::InputArgList parsed =
+            clang_compat::driverOptTable().ParseArgs(argv, missingIndex, missingCount);
+
+        // Index of each -working-directory, either spelling, and its absolute directory.
+        std::map<unsigned, std::string> directories;
+        std::string last;
+        for (const llvm::opt::Arg* arg :
+             parsed.filtered(clang_compat::options::OPT_working_directory))
+        {
+            llvm::SmallString<256> directory(arg->getValue());
+            (void)fs.makeAbsolute(directory);
+            last = directory.str().str();
+            directories.emplace(arg->getIndex(), last);
+        }
+        if (directories.empty())
+            return {};
+
+        std::vector<std::string> out;
+        out.reserve(args.size() + directories.size());
+        for (unsigned i = 0; i < args.size(); ++i)
+        {
+            auto found = directories.find(i);
+            if (found == directories.end())
+            {
+                out.push_back(std::move(args[i]));
+                continue;
+            }
+            // The separate spelling has its directory in the next argument.
+            if (args[i] == "-working-directory")
+                ++i;
+            out.push_back("-working-directory");
+            out.push_back(std::move(found->second));
+        }
+        args.swap(out);
+        return last;
     }
 
     void appendDiagnostics(std::string& out, const std::string& extra)

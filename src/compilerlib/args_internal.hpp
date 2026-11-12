@@ -14,6 +14,11 @@
 #include <string>
 #include <vector>
 
+namespace llvm::vfs
+{
+    class FileSystem;
+} // namespace llvm::vfs
+
 namespace compilerlib
 {
     // Value of `opt` given either as a separate argument (`-o out`) or joined with
@@ -35,6 +40,12 @@ namespace compilerlib
 
     // Rewrites the `-o=path` and `-x=lang` spellings into the two-argument forms.
     void normalizeEqualsArgs(std::vector<std::string>& args);
+
+    // Rewrites each -working-directory of a driver command line, `-working-directory <dir>` or
+    // `-working-directory=<dir>`, into the two-argument form, with <dir> made absolute by `fs`.
+    // Returns the directory of the last one, which the driver uses; empty without one.
+    CT_NODISCARD std::string normalizeWorkingDirectoryArgs(std::vector<std::string>& args,
+                                                           llvm::vfs::FileSystem& fs);
 
     // Appends `extra` to `out` with exactly one newline between them; no-op when empty.
     void appendDiagnostics(std::string& out, const std::string& extra);

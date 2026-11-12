@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "compilerlib/args_internal.hpp"
 
+#include <llvm/ADT/SmallString.h>
 #include <llvm/Config/llvm-config.h>
+#include <llvm/Support/Path.h>
+#include <llvm/Support/VirtualFileSystem.h>
 #include <llvm/TargetParser/Triple.h>
 
 #include <gtest/gtest.h>
@@ -146,6 +149,34 @@ namespace
         Args args{"--ct-shadow=aggressive", "-DFOO=1", "-o", "app"};
         const Args before = args;
         compilerlib::normalizeEqualsArgs(args);
+        EXPECT_EQ(args, before);
+    }
+
+    // The directory that `fs` makes of `path`, as normalizeWorkingDirectoryArgs does.
+    std::string absoluteIn(llvm::vfs::FileSystem& fs, const char* path)
+    {
+        llvm::SmallString<256> directory(path);
+        EXPECT_FALSE(fs.makeAbsolute(directory));
+        return directory.str().str();
+    }
+
+    TEST(NormalizeWorkingDirectoryArgs, MakesEverySpellingAbsoluteAndReturnsTheLast)
+    {
+        auto fs = llvm::vfs::createPhysicalFileSystem();
+        Args args{"-working-directory", "one", "-c", "a.c", "-working-directory=two"};
+        const std::string last = compilerlib::normalizeWorkingDirectoryArgs(args, *fs);
+        EXPECT_EQ(last, absoluteIn(*fs, "two"));
+        EXPECT_TRUE(llvm::sys::path::is_absolute(last));
+        EXPECT_EQ(args, (Args{"-working-directory", absoluteIn(*fs, "one"), "-c", "a.c",
+                              "-working-directory", last}));
+    }
+
+    TEST(NormalizeWorkingDirectoryArgs, LeavesTheValuesOfOtherOptionsAlone)
+    {
+        auto fs = llvm::vfs::createPhysicalFileSystem();
+        Args args{"-Xclang", "-working-directory", "-Xclang", "dir", "-c", "a.c"};
+        const Args before = args;
+        EXPECT_EQ(compilerlib::normalizeWorkingDirectoryArgs(args, *fs), "");
         EXPECT_EQ(args, before);
     }
 
