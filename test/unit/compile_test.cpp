@@ -1859,4 +1859,38 @@ int once(int x) { return x; }
             EXPECT_TRUE(function->hasFnAttribute(llvm::Attribute::OptimizeNone)) << name;
         }
     }
+
+    // -working-directory, as clang reads it: the sources, the include directories and the
+    // files a compilation writes are relative to it.
+    class WorkingDirectoryTest : public CompileTest
+    {
+      protected:
+        // A project whose source includes its header through a relative include directory.
+        std::string writeProject(const std::string& name, int value) const
+        {
+            writeSource((name + "/inc/value.h").c_str(),
+                        ("#define VALUE " + std::to_string(value) + "\n").c_str());
+            writeSource((name + "/unit.c").c_str(),
+                        "#include \"value.h\"\nint value(void) { return VALUE; }\n");
+            return path(name.c_str());
+        }
+    };
+
+    // The linker runs as a program of its own, which starts in the process's working
+    // directory: as clang does, a link with -working-directory moves the process to that
+    // directory, and leaves it there. The test moves it back.
+    TEST_F(WorkingDirectoryTest, LinkingRunsInTheDirectory)
+    {
+        const fs::path project = writeProject("project", 0);
+        writeSource("project/main.c", "int value(void);\nint main(void) { return value(); }\n");
+        const fs::path processDirectory = fs::current_path();
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-working-directory", project.string(), "-Iinc", "unit.c", "main.c", "-o", "program"},
+            compilerlib::OutputMode::ToFile);
+        const fs::path linkDirectory = fs::current_path();
+        fs::current_path(processDirectory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(fs::exists(project / "program") || fs::exists(project / "program.exe"));
+        EXPECT_EQ(fs::canonical(linkDirectory), fs::canonical(project));
+    }
 } // namespace
