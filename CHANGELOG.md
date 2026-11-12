@@ -21,7 +21,8 @@ pull request.
   directory `-working-directory <dir>` moves while the process's stays. A host compiles each
   command of a compilation database in its directory that way, instead of moving the process
   under a lock. A compilation with a job that runs as a program, such as a link, and one that
-  passes `-mllvm` must not run while another one does (#262, #261).
+  passes `-mllvm`, `-mdebug-pass`, `-mlimit-float-precision` or `-ftime-report` must not run
+  while another one does (#262, #261).
 
 ### Behaviour changes
 
