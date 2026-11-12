@@ -14,6 +14,15 @@ pull request.
 
 ## Unreleased
 
+### Features
+
+- **Compilations from several threads.** `compilerlib::compile` may run from several threads at
+  once: each compilation reads and writes files through a file system of its own, whose working
+  directory `-working-directory <dir>` moves while the process's stays. A host compiles each
+  command of a compilation database in its directory that way, instead of moving the process
+  under a lock. A compilation with a job that runs as a program, such as a link, and one that
+  passes `-mllvm` must not run while another one does (#262, #261).
+
 ### Fixes
 
 - **A child of `fork()` and the vtable diagnostics, on Linux.** With `--ct-vtable-diag`, a
