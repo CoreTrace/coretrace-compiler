@@ -33,7 +33,8 @@ the programs in `bench/` without instrumentation and with several sets of module
 the median time of each, as a multiple of the plain build's, to its summary. Locally:
 `python3 scripts/bench/overhead.py --cc build/cc`. It also measures how the time of
 instrumentation grows with the writes of a function through one pointer, which a call returned
-or a parameter holds: `python3 scripts/bench/instrument_time.py --cc build/cc`.
+or a parameter holds, and with the allocations of a function released before its return:
+`python3 scripts/bench/instrument_time.py --cc build/cc`.
 
 Quick build:
 

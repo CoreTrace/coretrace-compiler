@@ -486,6 +486,98 @@ done:
         EXPECT_EQ(callees("conditional"), std::vector<std::string>{"__ct_malloc"});
     }
 
+    // The calls of `function`, in order.
+    std::vector<llvm::CallBase*> callsIn(llvm::Function& function)
+    {
+        std::vector<llvm::CallBase*> calls;
+        for (llvm::Instruction& inst : llvm::instructions(function))
+        {
+            if (auto* call = llvm::dyn_cast<llvm::CallBase>(&inst))
+                calls.push_back(call);
+        }
+        return calls;
+    }
+
+    // A return ends its block: every allocation of that block comes before it, and is
+    // released there, in the order of the allocations.
+    TEST_F(AutoFreeTest, AllocationsInTheBlockOfTheReturnAreReleasedInTheirOrder)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+
+define void @several() {
+  %first = call ptr @malloc(i64 8)
+  store i8 1, ptr %first
+  %second = call ptr @malloc(i64 8)
+  store i8 2, ptr %second
+  ret void
+}
+)");
+        EXPECT_EQ(callees("several"), (std::vector<std::string>{"__ct_malloc", "__ct_malloc",
+                                                                "__ct_autofree", "__ct_autofree"}));
+        const std::vector<llvm::CallBase*> calls = callsIn(*module_->getFunction("several"));
+        ASSERT_EQ(calls.size(), 4u);
+        EXPECT_EQ(calls[2]->getArgOperand(0), calls[0]);
+        EXPECT_EQ(calls[3]->getArgOperand(0), calls[1]);
+    }
+
+    // An allocation made before a branch reaches the returns of both sides; one made in the
+    // block of a return reaches that return only.
+    TEST_F(AutoFreeTest, AllocationIsReleasedBeforeEachReturnItReachesOnEveryPath)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+
+define void @two_returns(i1 %early) {
+entry:
+  %first = call ptr @malloc(i64 8)
+  store i8 1, ptr %first
+  br i1 %early, label %leave, label %more
+
+leave:
+  ret void
+
+more:
+  %second = call ptr @malloc(i64 8)
+  store i8 2, ptr %second
+  ret void
+}
+)");
+        EXPECT_EQ(callees("two_returns"),
+                  (std::vector<std::string>{"__ct_malloc", "__ct_autofree", "__ct_malloc",
+                                            "__ct_autofree", "__ct_autofree"}));
+        const std::vector<llvm::CallBase*> calls = callsIn(*module_->getFunction("two_returns"));
+        ASSERT_EQ(calls.size(), 5u);
+        EXPECT_EQ(calls[1]->getParent()->getName(), "leave");
+        EXPECT_EQ(calls[1]->getArgOperand(0), calls[0]);
+        EXPECT_EQ(calls[3]->getArgOperand(0), calls[0]);
+        EXPECT_EQ(calls[4]->getArgOperand(0), calls[2]);
+    }
+
+    // As DominatorTree::dominates answers, an allocation in a block that no path reaches is
+    // released before the return of that block, and before no other.
+    TEST_F(AutoFreeTest, AllocationInABlockNoPathReachesIsReleasedBeforeItsReturn)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+
+define void @dead_code() {
+entry:
+  ret void
+
+dead:
+  %block = call ptr @malloc(i64 8)
+  store i8 1, ptr %block
+  ret void
+}
+)");
+        EXPECT_EQ(callees("dead_code"), (std::vector<std::string>{"__ct_malloc", "__ct_autofree"}));
+        const std::vector<llvm::CallBase*> calls = callsIn(*module_->getFunction("dead_code"));
+        ASSERT_EQ(calls.size(), 2u);
+        EXPECT_EQ(calls[1]->getParent()->getName(), "dead");
+        EXPECT_EQ(calls[1]->getArgOperand(0), calls[0]);
+    }
+
     // Clang marks a new-expression's operator new and delete calls builtin; before
     // optimization, the calls the pass tracks lose that mark. Aligned operator new is not
     // tracked, and keeps it.

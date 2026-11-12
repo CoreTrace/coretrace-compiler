@@ -1991,10 +1991,18 @@ namespace compilerlib
                 {
                     // The release uses the allocation, which must then be on every path to
                     // the return. One made in a branch or a loop is left to the leak report.
-                    if (site.value &&
-                        !dominatorTree().dominates(llvm::cast<llvm::Instruction>(site.value), ret))
+                    // A return ends its block, so an allocation of that block comes before
+                    // it, unreachable blocks included: the tree is not asked, as it would
+                    // compare the two by their order, which LLVM finds again by walking the
+                    // block after each release inserted there.
+                    if (site.value)
                     {
-                        continue;
+                        auto* allocation = llvm::cast<llvm::Instruction>(site.value);
+                        if (allocation->getParent() != ret->getParent() &&
+                            !dominatorTree().dominates(allocation, ret))
+                        {
+                            continue;
+                        }
                     }
                     llvm::IRBuilder<> builder(ret);
                     llvm::Value* ptr = nullptr;

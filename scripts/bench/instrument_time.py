@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Measures how the time of instrumentation grows with the accesses of a function.
+"""Measures how the time of instrumentation grows with the accesses and allocations of a function.
 
 A generated C function writes each element of an array through one pointer, at -O0, where each
 write loads the pointer back from its variable: the pointer is either returned by a call
-(malloc) or a parameter. Each is compiled with --instrument and -ftime-trace, several times;
-the table gives the median time of CoreTrace's instrumentation, and how much it grew from the
-previous size. With sizes that double, about x2 is linear; about x4, quadratic.
-Informational: no threshold is enforced.
+(malloc) or a parameter. Another allocates blocks that stay in the function, in the block of its
+return, before which the allocation pass releases each of them. Each is compiled with
+--instrument and -ftime-trace, several times; the table gives the median time of CoreTrace's
+instrumentation, and how much it grew from the previous size. With sizes that double, about x2
+is linear; about x4, quadratic. Informational: no threshold is enforced.
 
 Usage: instrument_time.py --cc <path to cc> [--runs N] [--sizes N ...] [--out-dir DIR]
 """
@@ -36,10 +37,20 @@ def parameter_source(size):
     return f"int f(int *p)\n{{\n{writes}    return p[{size - 1}];\n}}\n"
 
 
-# Name, source of a function of `size` writes.
-POINTERS = [
-    ("returned by a call", call_source),
-    ("parameter", parameter_source),
+def allocation_source(size):
+    allocations = "".join(f"    char *p{i} = malloc(16);\n    p{i}[0] = 1;\n" for i in range(size))
+    return (
+        "extern void *malloc(unsigned long);\n\n"
+        "int f(void)\n{\n"
+        f"{allocations}    return 0;\n}}\n"
+    )
+
+
+# Name, source of a function of `size` writes or allocations.
+FUNCTIONS = [
+    ("writes through a pointer returned by a call", call_source),
+    ("writes through a pointer parameter", parameter_source),
+    ("allocations released at the return", allocation_source),
 ]
 
 
@@ -65,16 +76,16 @@ def main():
     parser.add_argument("--cc", required=True, help="the cc to measure")
     parser.add_argument("--runs", type=int, default=3, help="runs per size (default 3)")
     parser.add_argument("--sizes", type=int, nargs="+", default=[2000, 4000, 8000, 16000],
-                        help="writes per function (default 2000 4000 8000 16000)")
+                        help="writes or allocations per function (default 2000 4000 8000 16000)")
     parser.add_argument("--out-dir", help="where to compile (default: a temporary directory)")
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as temporary:
         out_dir = Path(args.out_dir or temporary).resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
-        print("| Pointer | writes | instrumentation (ms) | growth |")
+        print("| Function | size | instrumentation (ms) | growth |")
         print("| --- | ---: | ---: | ---: |")
-        for name, generate in POINTERS:
+        for name, generate in FUNCTIONS:
             previous = None
             for size in args.sizes:
                 source = out_dir / f"{generate.__name__}_{size}.c"

@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # The run-time overhead of instrumentation, on the programs in bench/, and how the time of
-# instrumentation grows with the accesses of a function: on demand, and when a pull request
-# changes the benchmarks. Informational: the tables go to the job's summary, and no threshold
-# is enforced.
+# instrumentation grows with the accesses and allocations of a function: on demand, and when a
+# pull request changes the benchmarks. Informational: the tables go to the job's summary, and no
+# threshold is enforced.
 name: Benchmarks
 
 on:
@@ -53,6 +53,6 @@ jobs:
       run: |
         python3 scripts/bench/instrument_time.py --cc build/cc | tee instrument_time.md
         {
-          echo '### Instrumentation time against the accesses of a function (Linux, LLVM 20)'
+          echo '### Instrumentation time against the accesses and allocations of a function (Linux, LLVM 20)'
           cat instrument_time.md
         } >> "${GITHUB_STEP_SUMMARY}"
