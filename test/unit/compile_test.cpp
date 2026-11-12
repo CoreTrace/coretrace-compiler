@@ -2012,6 +2012,22 @@ int once(int x) { return x; }
         EXPECT_TRUE(fs::exists(project / "unit.o"));
     }
 
+    // The driver itself writes the fragment of a compilation database that -MJ asks for: in
+    // the directory, as clang does.
+    TEST_F(WorkingDirectoryTest, CompilationDatabaseFragmentIsWrittenInTheDirectory)
+    {
+        const fs::path project = writeProject("project", 42);
+        const fs::path processDirectory = fs::current_path();
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-working-directory", project.string(), "-Iinc", "-c", "unit.c",
+                                  "-o", "unit.o", "-MJ", "unit.json"},
+                                 compilerlib::OutputMode::ToFile);
+        fs::current_path(processDirectory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(readFile((project / "unit.json").string()).find("\"unit.c\""), std::string::npos);
+        EXPECT_FALSE(fs::exists(processDirectory / "unit.json"));
+    }
+
     // The -cc1 job writes the statistics file of -save-stats=cwd: in the directory too.
     TEST_F(WorkingDirectoryTest, StatisticsAreWrittenInTheDirectory)
     {

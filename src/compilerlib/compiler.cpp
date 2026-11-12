@@ -270,6 +270,10 @@ namespace compilerlib
                 // gives the option to.
                 ctx_.working_directory =
                     normalizeWorkingDirectoryArgs(ctx_.filtered_args, *ctx_.fs);
+                // The driver writes the files of -MJ and -gen-cdb-fragment-path relative to the
+                // process's working directory, which stays where it is.
+                if (!ctx_.working_directory.empty())
+                    resolveDriverOutputPaths(ctx_.filtered_args, ctx_.working_directory);
                 if (ctx_.runtimeConfig.bounds_without_alloc)
                 {
                     ctx_.dc.os << "warning: ct: bounds instrumentation requires alloc tracking; "
