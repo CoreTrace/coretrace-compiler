@@ -221,6 +221,7 @@ pull request.
 
 ### Documentation
 
+- The README describes compiling to a module with `compileToModule` (#265, #263).
 - `NOTICE` dates the copyright from 2025, when the code began, credits the CoreTrace
   contributors alongside Hugo Payet and links the repository. It keeps only these
   attribution notices, without the license header meant for source files (#248).
