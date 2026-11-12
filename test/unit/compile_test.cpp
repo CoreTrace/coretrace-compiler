@@ -1951,4 +1951,30 @@ int once(int x) { return x; }
         ASSERT_TRUE(result.success) << result.diagnostics;
         EXPECT_NE(result.llvmIR.find("ret i32 42"), std::string::npos) << result.llvmIR;
     }
+
+    // Objects alone are read before the link, to choose between the C and C++ drivers: they
+    // are read in the directory too.
+    TEST_F(WorkingDirectoryTest, ObjectsAreLinkedFromTheDirectory)
+    {
+        const fs::path project = writeProject("project", 0);
+        writeSource("project/main.c", "int value(void);\nint main(void) { return value(); }\n");
+        const fs::path processDirectory = fs::current_path();
+        for (const char* name : {"unit", "main"})
+        {
+            const std::string source = std::string(name) + ".c";
+            const std::string object = std::string(name) + ".o";
+            compilerlib::CompileResult compiled = compilerlib::compile(
+                {"-working-directory", project.string(), "-Iinc", "-c", source, "-o", object},
+                compilerlib::OutputMode::ToFile);
+            fs::current_path(processDirectory);
+            ASSERT_TRUE(compiled.success) << compiled.diagnostics;
+        }
+
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-working-directory", project.string(), "unit.o", "main.o", "-o", "program"},
+            compilerlib::OutputMode::ToFile);
+        fs::current_path(processDirectory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(fs::exists(project / "program") || fs::exists(project / "program.exe"));
+    }
 } // namespace
