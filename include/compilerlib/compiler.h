@@ -38,9 +38,10 @@ namespace compilerlib
     /// compilation with a job that runs as a program of its own, as linking and assembling do,
     /// moves the whole process to `<dir>` instead, as clang does, and leaves it there.
     ///
-    /// Compilations may run from several threads at once. A compilation that moves the process,
-    /// or that passes `-mllvm`, whose options Clang sets for the whole process, must not run
-    /// while another compilation of the process does.
+    /// Compilations may run from several threads at once. A compilation that moves the process
+    /// must not run while another compilation of the process does, nor one that passes an
+    /// option that Clang applies to LLVM's state of the whole process: `-mllvm`, `-mdebug-pass`,
+    /// `-mlimit-float-precision` or `-ftime-report`.
     CompileResult compile(const std::vector<std::string>& args,
                           OutputMode mode = OutputMode::ToFile, bool instrument = false);
 
