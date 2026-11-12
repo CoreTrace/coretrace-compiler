@@ -1294,72 +1294,80 @@ namespace compilerlib
             return {true, mergeDiagnostics(ctx.driver_diagnostics, cc1_diags), {}};
         }
 
+        // The compilation `ctx` describes, from its arguments to its result.
+        CT_NODISCARD CompileResult runCompilation(CompileContext& ctx)
+        {
+            ArgBuilder argBuilder(ctx);
+            std::string error;
+
+            if (!argBuilder.build(error))
+                return {false, std::move(error), {}};
+
+            auto diags = createDriverDiagnostics(ctx);
+
+            DriverSession driver(ctx, *diags);
+            std::unique_ptr<clang::driver::Compilation> comp = driver.buildCompilation(error);
+            if (!comp)
+            {
+                if (error.empty())
+                    error = ctx.dc.message.empty() ? "failed to build compilation"
+                                                   : std::move(ctx.dc.message);
+                return {false, std::move(error), {}};
+            }
+
+            if (comp->getJobs().empty())
+                return {false,
+                        ctx.dc.message.empty() ? "no jobs to run" : std::move(ctx.dc.message),
+                        {}};
+
+            // Instrumented LTO is not supported (#163): the bitcode would be written without its
+            // summary, and the link-time pipeline would optimize the instrumented code again,
+            // which no test covers. The driver resolves -flto, -flto=<mode> and -fno-lto.
+            if (ctx.instrument && clang_compat::usesLto(*comp))
+                return {false,
+                        "error: ct: --instrument does not support -flto: compile instrumented code "
+                        "without link-time optimization",
+                        {}};
+
+            if (!ctx.instrument && ctx.mode == OutputMode::ToFile &&
+                !ctx.runtimeConfig.optnone_enabled)
+                return runNonInstrumentedCompilation(ctx, driver, *comp);
+
+            JobPlan plan = buildJobPlan(*comp);
+            if (!validateJobPlan(plan, ctx.mode, error))
+                return {false, std::move(error), {}};
+
+            if (!ctx.dc.message.empty())
+            {
+                ctx.driver_diagnostics = std::move(ctx.dc.message);
+                ctx.dc.message.clear();
+                ctx.dc.os.flush();
+            }
+
+            Cc1Runner cc1(ctx, *diags);
+            if (ctx.mode == OutputMode::ToMemory || ctx.mode == OutputMode::ToMemoryBitcode)
+                return cc1.runSingle(*plan.cc1Jobs.front());
+
+            if (plan.cc1Jobs.empty())
+            {
+                Linker linker(hasArg(ctx.filtered_args, "-v"));
+                if (!linker.run(plan.otherJobs, error))
+                    return {false, mergeDiagnostics(ctx.driver_diagnostics, error), {}};
+                return {true, mergeDiagnostics(ctx.driver_diagnostics, {}), {}};
+            }
+
+            if (ctx.instrument)
+                return runInstrumentedToFile(ctx, cc1, plan, error);
+            return runPlainToFile(ctx, cc1, plan, error);
+        }
+
     } // namespace
 
     CT_NODISCARD CompileResult compile(const std::vector<std::string>& input_args, OutputMode mode,
                                        bool instrument)
     {
         CompileContext ctx(input_args, mode, instrument);
-        ArgBuilder argBuilder(ctx);
-        std::string error;
-
-        if (!argBuilder.build(error))
-            return {false, std::move(error), {}};
-
-        auto diags = createDriverDiagnostics(ctx);
-
-        DriverSession driver(ctx, *diags);
-        std::unique_ptr<clang::driver::Compilation> comp = driver.buildCompilation(error);
-        if (!comp)
-        {
-            if (error.empty())
-                error = ctx.dc.message.empty() ? "failed to build compilation"
-                                               : std::move(ctx.dc.message);
-            return {false, std::move(error), {}};
-        }
-
-        if (comp->getJobs().empty())
-            return {
-                false, ctx.dc.message.empty() ? "no jobs to run" : std::move(ctx.dc.message), {}};
-
-        // Instrumented LTO is not supported (#163): the bitcode would be written without its
-        // summary, and the link-time pipeline would optimize the instrumented code again,
-        // which no test covers. The driver resolves -flto, -flto=<mode> and -fno-lto.
-        if (instrument && clang_compat::usesLto(*comp))
-            return {false,
-                    "error: ct: --instrument does not support -flto: compile instrumented code "
-                    "without link-time optimization",
-                    {}};
-
-        if (!instrument && mode == OutputMode::ToFile && !ctx.runtimeConfig.optnone_enabled)
-            return runNonInstrumentedCompilation(ctx, driver, *comp);
-
-        JobPlan plan = buildJobPlan(*comp);
-        if (!validateJobPlan(plan, mode, error))
-            return {false, std::move(error), {}};
-
-        if (!ctx.dc.message.empty())
-        {
-            ctx.driver_diagnostics = std::move(ctx.dc.message);
-            ctx.dc.message.clear();
-            ctx.dc.os.flush();
-        }
-
-        Cc1Runner cc1(ctx, *diags);
-        if (mode == OutputMode::ToMemory || mode == OutputMode::ToMemoryBitcode)
-            return cc1.runSingle(*plan.cc1Jobs.front());
-
-        if (plan.cc1Jobs.empty())
-        {
-            Linker linker(hasArg(ctx.filtered_args, "-v"));
-            if (!linker.run(plan.otherJobs, error))
-                return {false, mergeDiagnostics(ctx.driver_diagnostics, error), {}};
-            return {true, mergeDiagnostics(ctx.driver_diagnostics, {}), {}};
-        }
-
-        if (instrument)
-            return runInstrumentedToFile(ctx, cc1, plan, error);
-        return runPlainToFile(ctx, cc1, plan, error);
+        return runCompilation(ctx);
     }
 
 } // namespace compilerlib
