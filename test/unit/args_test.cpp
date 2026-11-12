@@ -3,7 +3,9 @@
 
 #include <llvm/ADT/SmallString.h>
 #include <llvm/Config/llvm-config.h>
+#include <llvm/Support/Allocator.h>
 #include <llvm/Support/Path.h>
+#include <llvm/Support/StringSaver.h>
 #include <llvm/Support/VirtualFileSystem.h>
 #include <llvm/TargetParser/Triple.h>
 
@@ -178,6 +180,74 @@ namespace
         const Args before = args;
         EXPECT_EQ(compilerlib::normalizeWorkingDirectoryArgs(args, *fs), "");
         EXPECT_EQ(args, before);
+    }
+
+    // The directory a -cc1 job's relative paths are resolved against, absolute on the host.
+    std::string jobDirectory(void)
+    {
+#ifdef _WIN32
+        return "C:\\work";
+#else
+        return "/work";
+#endif
+    }
+
+    std::string inJobDirectory(const char* path)
+    {
+        llvm::SmallString<64> resolved(jobDirectory());
+        llvm::sys::path::append(resolved, path);
+        return resolved.str().str();
+    }
+
+    Args resolveOutputs(const Args& args)
+    {
+        llvm::opt::ArgStringList list;
+        for (const std::string& arg : args)
+            list.push_back(arg.c_str());
+        llvm::BumpPtrAllocator allocator;
+        llvm::StringSaver saver(allocator);
+        const llvm::opt::ArgStringList resolved =
+            compilerlib::resolveCc1OutputPaths(list, jobDirectory(), [&](llvm::StringRef argument)
+                                               { return saver.save(argument).data(); });
+        return Args(resolved.begin(), resolved.end());
+    }
+
+    TEST(ResolveCc1OutputPaths, ResolvesTheFilesTheJobWrites)
+    {
+        const Args args{"-cc1",    "-o",
+                        "out/a.o", "-dependency-file",
+                        "a.d",     "-opt-record-file",
+                        "a.yaml",  "-split-dwarf-output",
+                        "a.dwo",   "-stack-usage-file",
+                        "a.su",    "-serialize-diagnostic-file",
+                        "a.dia",   "-header-include-file",
+                        "a.h.txt", "-ftime-trace=a.json"};
+        EXPECT_EQ(resolveOutputs(args),
+                  (Args{"-cc1", "-o", inJobDirectory("out/a.o"), "-dependency-file",
+                        inJobDirectory("a.d"), "-opt-record-file", inJobDirectory("a.yaml"),
+                        "-split-dwarf-output", inJobDirectory("a.dwo"), "-stack-usage-file",
+                        inJobDirectory("a.su"), "-serialize-diagnostic-file",
+                        inJobDirectory("a.dia"), "-header-include-file", inJobDirectory("a.h.txt"),
+                        "-ftime-trace=" + inJobDirectory("a.json")}));
+    }
+
+    // The inputs, which the job resolves itself; the name of the split DWARF file, which
+    // the object records as given; absolute paths; and "-", a standard stream.
+    TEST(ResolveCc1OutputPaths, LeavesEverythingElseAlone)
+    {
+        const Args args{"-cc1",
+                        "-I",
+                        "inc",
+                        "-split-dwarf-file",
+                        "a.dwo",
+                        "-dependency-file",
+                        "-",
+                        "-o",
+                        inJobDirectory("elsewhere.o"),
+                        "-x",
+                        "c",
+                        "a.c"};
+        EXPECT_EQ(resolveOutputs(args), args);
     }
 
     TEST(MergeDiagnostics, JoinsWithASingleNewline)
