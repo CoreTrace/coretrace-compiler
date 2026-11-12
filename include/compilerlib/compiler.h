@@ -30,6 +30,17 @@ namespace compilerlib
     };
 
     // std::pair<bool, std::string> compile(const std::vector<std::string>& args);
+    /// Compiles as clang does with `args`, in this process.
+    ///
+    /// `-working-directory <dir>` gives the compilation a working directory of its own: the
+    /// sources, the include directories and the files it writes are relative to `<dir>`, and a
+    /// relative `<dir>` to the process's working directory, which stays where it is. A
+    /// compilation with a job that runs as a program of its own, as linking and assembling do,
+    /// moves the whole process to `<dir>` instead, as clang does, and leaves it there.
+    ///
+    /// Compilations may run from several threads at once. A compilation that moves the process,
+    /// or that passes `-mllvm`, whose options Clang sets for the whole process, must not run
+    /// while another compilation of the process does.
     CompileResult compile(const std::vector<std::string>& args,
                           OutputMode mode = OutputMode::ToFile, bool instrument = false);
 
