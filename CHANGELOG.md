@@ -14,6 +14,15 @@ pull request.
 
 ## Unreleased
 
+### Features
+
+- **Compiling to a module.** `compilerlib::compileToModule`, from
+  `compilerlib/compile_module.hpp`, gives the module that `compilerlib::compile` writes as text
+  or bitcode, created in an `llvm::LLVMContext` of the host, instead of writing it for the host
+  to read it back. Its arguments are those of an LLVM IR compilation; the output file is not
+  written, and the other files the arguments ask for, such as a dependency file, are. The
+  context keeps its own setting of value names (#265, #263).
+
 ### Fixes
 
 - **A child of `fork()` and the vtable diagnostics, on Linux.** With `--ct-vtable-diag`, a
