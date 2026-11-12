@@ -515,4 +515,5 @@ Two kinds of compilations must not run while another one does:
   job run as programs of their own, which start in the process's working directory. With
   `-working-directory`, such a compilation moves the whole process to `<dir>`, as clang does, and
   leaves it there.
-- **`-mllvm`.** Clang sets LLVM's own options from it, which the whole process shares.
+- **Options of LLVM's own.** Clang applies `-mllvm`, `-mdebug-pass`, `-mlimit-float-precision`
+  and `-ftime-report` to LLVM's state, which the whole process shares.
