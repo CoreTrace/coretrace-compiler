@@ -1908,4 +1908,31 @@ int once(int x) { return x; }
         ASSERT_TRUE(result.success) << result.diagnostics;
         EXPECT_TRUE(fs::exists(project / "empty.o"));
     }
+
+    class WorkingDirectoryOutputTest : public WorkingDirectoryTest,
+                                       public ::testing::WithParamInterface<bool>
+    {
+    };
+
+    // The directory resolves the source and the include directory, and receives the output
+    // and the dependency file, instrumented or not.
+    TEST_P(WorkingDirectoryOutputTest, ResolvesTheSourcesAndTheFilesWritten)
+    {
+        const fs::path project = writeProject("project", 42);
+        const fs::path processDirectory = fs::current_path();
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-working-directory", project.string(), "-Iinc", "-c", "unit.c",
+                                  "-MD", "-MF", "ct_wd_unit.d", "-o", "ct_wd_unit.o"},
+                                 compilerlib::OutputMode::ToFile, /*instrument=*/GetParam());
+        fs::current_path(processDirectory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(fs::exists(project / "ct_wd_unit.o"));
+        EXPECT_NE(readFile((project / "ct_wd_unit.d").string()).find("value.h"), std::string::npos);
+        EXPECT_FALSE(fs::exists(processDirectory / "ct_wd_unit.o"));
+        EXPECT_FALSE(fs::exists(processDirectory / "ct_wd_unit.d"));
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Instrumentation, WorkingDirectoryOutputTest, ::testing::Bool(),
+                             [](const ::testing::TestParamInfo<bool>& info)
+                             { return info.param ? "Instrumented" : "Plain"; });
 } // namespace
