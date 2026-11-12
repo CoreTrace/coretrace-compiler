@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "compilerlib/compile_module.hpp"
 #include "compilerlib/compiler.h"
 
 #include <llvm/AsmParser/Parser.h>
@@ -31,6 +32,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #ifndef _WIN32
@@ -685,6 +687,153 @@ int main(void)
         EXPECT_FALSE(memory.success);
         EXPECT_TRUE(memory.llvmBitcode.empty());
         EXPECT_NE(memory.diagnostics.find("missing"), std::string::npos) << memory.diagnostics;
+    }
+
+    std::string printed(const llvm::Module& module)
+    {
+        std::string text;
+        llvm::raw_string_ostream stream(text);
+        module.print(stream, nullptr);
+        stream.flush();
+        return text;
+    }
+
+    // The text of `module` as the IR parser gives it back: a module read from text does not
+    // keep the order of each value's uses, which orders the predecessors listed for a block.
+    std::string normalizedText(const llvm::Module& module)
+    {
+        llvm::LLVMContext context;
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> parsed =
+            llvm::parseAssemblyString(printed(module), error, context);
+        if (!parsed)
+            return "unreadable module: " + error.getMessage().str();
+        parsed->setModuleIdentifier(module.getModuleIdentifier());
+        return printed(*parsed);
+    }
+
+    // An allocation, a loop and accesses for the instrumentation to rewrite.
+    constexpr const char* kModuleUnit = R"(#include <stdlib.h>
+
+int sum(int count)
+{
+    int* values = malloc(sizeof(int) * count);
+    int total = 0;
+    for (int i = 0; i < count; ++i)
+    {
+        values[i] = i;
+        total += values[i];
+    }
+    free(values);
+    return total;
+}
+)";
+
+    // compileToModule gives the module that compile() writes as text, without the text.
+    class ModuleOutputTest : public CompileTest,
+                             public ::testing::WithParamInterface<std::tuple<bool, const char*>>
+    {
+    };
+
+    TEST_P(ModuleOutputTest, IsTheTextualOutput)
+    {
+        const auto [instrument, optimization] = GetParam();
+        const std::vector<std::string> args{optimization, "-g", "-S", "-emit-llvm",
+                                            writeSource("unit.c", kModuleUnit)};
+        compilerlib::CompileResult text =
+            compilerlib::compile(args, compilerlib::OutputMode::ToMemory, instrument);
+        ASSERT_TRUE(text.success) << text.diagnostics;
+
+        llvm::LLVMContext context;
+        compilerlib::ModuleResult result = compilerlib::compileToModule(args, context, instrument);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        ASSERT_NE(result.module, nullptr);
+        EXPECT_EQ(&result.module->getContext(), &context);
+        EXPECT_EQ(result.diagnostics, text.diagnostics);
+
+        llvm::LLVMContext textContext;
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> parsed =
+            llvm::parseAssemblyString(text.llvmIR, error, textContext);
+        ASSERT_NE(parsed, nullptr) << error.getMessage().str();
+        parsed->setModuleIdentifier(result.module->getModuleIdentifier());
+        EXPECT_EQ(normalizedText(*result.module), normalizedText(*parsed));
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Modes, ModuleOutputTest,
+                             ::testing::Combine(::testing::Bool(), ::testing::Values("-O0", "-O2")),
+                             [](const ::testing::TestParamInfo<std::tuple<bool, const char*>>& info)
+                             {
+                                 return std::string(std::get<0>(info.param) ? "Instrumented"
+                                                                            : "Plain") +
+                                        (std::string(std::get<1>(info.param)) == "-O0" ? "O0"
+                                                                                       : "O2");
+                             });
+
+    // A bitcode compilation gives its module too. Its output file is not written; the
+    // dependency file it asks for is.
+    TEST_F(CompileTest, ModuleOfABitcodeCompilation)
+    {
+        llvm::LLVMContext context;
+        compilerlib::ModuleResult result =
+            compilerlib::compileToModule({"-emit-llvm", "-c", writeSource("unit.c", kBitcodeUnit),
+                                          "-o", path("unit.bc"), "-MD", "-MF", path("unit.d")},
+                                         context);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        ASSERT_NE(result.module, nullptr);
+        EXPECT_NE(result.module->getFunction("main"), nullptr);
+        EXPECT_FALSE(fs::exists(path("unit.bc")));
+        EXPECT_NE(readFile(path("unit.d")).find("unit.c"), std::string::npos);
+    }
+
+    TEST_F(CompileTest, ModuleNeedsAnIRCompilation)
+    {
+        llvm::LLVMContext context;
+        compilerlib::ModuleResult result = compilerlib::compileToModule(
+            {"-c", writeSource("unit.c", kBitcodeUnit), "-o", path("unit.o")}, context);
+        EXPECT_FALSE(result.success);
+        EXPECT_EQ(result.module, nullptr);
+        EXPECT_NE(result.diagnostics.find("-emit-llvm"), std::string::npos) << result.diagnostics;
+        EXPECT_FALSE(fs::exists(path("unit.o")));
+    }
+
+    TEST_F(CompileTest, ModuleReportsCompileErrors)
+    {
+        llvm::LLVMContext context;
+        compilerlib::ModuleResult result = compilerlib::compileToModule(
+            {"-S", "-emit-llvm", writeSource("broken.c", "int main(void) { return missing; }\n")},
+            context);
+        EXPECT_FALSE(result.success);
+        EXPECT_EQ(result.module, nullptr);
+        EXPECT_NE(result.diagnostics.find("missing"), std::string::npos) << result.diagnostics;
+    }
+
+    // Code generation names the values as -f[no-]discard-value-names asks, and the context
+    // keeps its own setting, which applies to the modules read into it later.
+    TEST_F(CompileTest, ModuleLeavesTheValueNamesSettingOfTheContext)
+    {
+        const std::string source = writeSource("unit.c", kBitcodeUnit);
+        for (bool discard : {false, true})
+        {
+            llvm::LLVMContext context;
+            context.setDiscardValueNames(discard);
+            for (bool names : {false, true})
+            {
+                compilerlib::ModuleResult result = compilerlib::compileToModule(
+                    {names ? "-fno-discard-value-names" : "-fdiscard-value-names", "-S",
+                     "-emit-llvm", source},
+                    context);
+                ASSERT_TRUE(result.success) << result.diagnostics;
+                EXPECT_EQ(printed(*result.module).find("%call ") != std::string::npos, names);
+#if LLVM_VERSION_MAJOR < 17
+                // LLVM 16 could not destroy the module's named values once the context
+                // discards names again: the context keeps them.
+                EXPECT_EQ(context.shouldDiscardValueNames(), discard && !names);
+#else
+                EXPECT_EQ(context.shouldDiscardValueNames(), discard);
+#endif
+            }
+        }
     }
 
     // Like clang, a failed compilation leaves no output behind: neither a partial object

@@ -498,3 +498,27 @@ expects, and waits for it: a host can compile from a thread with a small stack, 
 secondary thread on macOS, whose stack is 512 KiB (#204). The time-trace profiler a host runs on
 its own thread, started with `llvm::timeTraceProfilerInitialize`, therefore does not record the
 compilation. With `-ftime-trace`, each job writes its own trace file, as clang does.
+
+### Compiling to a module
+
+`compilerlib::compileToModule`, from `compilerlib/compile_module.hpp`, gives the module that
+`compilerlib::compile` writes as text or bitcode, created in an `llvm::LLVMContext` of the host,
+instead of writing it for the host to read it back:
+
+```cpp
+#include <compilerlib/compile_module.hpp>
+
+llvm::LLVMContext context;
+compilerlib::ModuleResult result =
+    compilerlib::compileToModule({"-g", "-c", "-emit-llvm", "unit.cpp"}, context);
+if (result.success)
+    analyze(*result.module);
+```
+
+Its arguments are those of an LLVM IR compilation, `-S -emit-llvm` or `-c -emit-llvm`. The output
+file is not written; the other files the arguments ask for, such as a dependency file, are. With
+`instrument`, the module is the instrumented one. Code generation sets options of the context, as
+it does with clang, except whether value names are discarded: the context keeps its own setting,
+which applies to the modules read into it later. With LLVM 16, a context that discards names keeps
+them after a compilation that names values, since LLVM 16 cannot destroy those values in a context
+that discards names.
