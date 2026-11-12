@@ -1977,4 +1977,21 @@ int once(int x) { return x; }
         ASSERT_TRUE(result.success) << result.diagnostics;
         EXPECT_TRUE(fs::exists(project / "program") || fs::exists(project / "program.exe"));
     }
+
+    // A -cc1 job reads some files through its file system rather than through its file
+    // manager, such as a sanitizer's ignore list, which the driver also reads first: both
+    // read it in the directory.
+    TEST_F(WorkingDirectoryTest, IgnoreListIsReadInTheDirectory)
+    {
+        const fs::path project = writeProject("project", 42);
+        writeSource("project/ignore.txt", "fun:value\n");
+        const fs::path processDirectory = fs::current_path();
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-working-directory", project.string(), "-Iinc", "-fsanitize=undefined",
+             "-fsanitize-ignorelist=ignore.txt", "-c", "unit.c", "-o", "unit.o"},
+            compilerlib::OutputMode::ToFile);
+        fs::current_path(processDirectory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(fs::exists(project / "unit.o"));
+    }
 } // namespace
