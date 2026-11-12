@@ -31,6 +31,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef _WIN32
@@ -1932,6 +1933,22 @@ int once(int x) { return x; }
         EXPECT_FALSE(fs::exists(processDirectory / "ct_wd_unit.d"));
     }
 
+    // A compilation whose jobs all run in this process leaves the process's working
+    // directory where it is, instrumented or not.
+    TEST_P(WorkingDirectoryOutputTest, ProcessStaysInItsDirectory)
+    {
+        const fs::path project = writeProject("project", 42);
+        const fs::path processDirectory = fs::current_path();
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-working-directory", project.string(), "-Iinc", "-c", "unit.c", "-o", "unit.o"},
+            compilerlib::OutputMode::ToFile, /*instrument=*/GetParam());
+        const fs::path directoryAfter = fs::current_path();
+        fs::current_path(processDirectory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_EQ(directoryAfter, processDirectory);
+        EXPECT_TRUE(fs::exists(project / "unit.o"));
+    }
+
     INSTANTIATE_TEST_SUITE_P(Instrumentation, WorkingDirectoryOutputTest, ::testing::Bool(),
                              [](const ::testing::TestParamInfo<bool>& info)
                              { return info.param ? "Instrumented" : "Plain"; });
@@ -1994,4 +2011,55 @@ int once(int x) { return x; }
         ASSERT_TRUE(result.success) << result.diagnostics;
         EXPECT_TRUE(fs::exists(project / "unit.o"));
     }
+
+    // Compilations from several threads at once, each in a project of its own whose header
+    // has the same name: each reads its own, and the process's working directory stays
+    // where it is.
+    class ConcurrentCompilationTest : public WorkingDirectoryTest,
+                                      public ::testing::WithParamInterface<bool>
+    {
+    };
+
+    TEST_P(ConcurrentCompilationTest, EachReadsItsOwnWorkingDirectory)
+    {
+        constexpr int kThreads = 8;
+        constexpr int kRounds = 3;
+        std::vector<std::string> projects;
+        for (int i = 0; i < kThreads; ++i)
+            projects.push_back(writeProject("project" + std::to_string(i), 100 + i));
+        const fs::path processDirectory = fs::current_path();
+
+        std::vector<std::string> failures(kThreads);
+        std::vector<std::thread> threads;
+        for (int i = 0; i < kThreads; ++i)
+        {
+            threads.emplace_back(
+                [&, i]
+                {
+                    const std::string expected = "ret i32 " + std::to_string(100 + i);
+                    for (int round = 0; round < kRounds && failures[i].empty(); ++round)
+                    {
+                        compilerlib::CompileResult result = compilerlib::compile(
+                            {"-working-directory", projects[i], "-Iinc", "-S", "-emit-llvm",
+                             "unit.c"},
+                            compilerlib::OutputMode::ToMemory, /*instrument=*/GetParam());
+                        if (!result.success)
+                            failures[i] = result.diagnostics;
+                        else if (result.llvmIR.find(expected) == std::string::npos)
+                            failures[i] = "no \"" + expected + "\" in\n" + result.llvmIR;
+                    }
+                });
+        }
+        for (std::thread& thread : threads)
+            thread.join();
+        const fs::path directoryAfter = fs::current_path();
+        fs::current_path(processDirectory);
+        for (int i = 0; i < kThreads; ++i)
+            EXPECT_EQ(failures[i], "") << "thread " << i;
+        EXPECT_EQ(directoryAfter, processDirectory);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Instrumentation, ConcurrentCompilationTest, ::testing::Bool(),
+                             [](const ::testing::TestParamInfo<bool>& info)
+                             { return info.param ? "Instrumented" : "Plain"; });
 } // namespace
