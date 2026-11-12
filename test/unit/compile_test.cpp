@@ -825,7 +825,13 @@ int sum(int count)
                     context);
                 ASSERT_TRUE(result.success) << result.diagnostics;
                 EXPECT_EQ(printed(*result.module).find("%call ") != std::string::npos, names);
+#if LLVM_VERSION_MAJOR < 17
+                // LLVM 16 could not destroy the module's named values once the context
+                // discards names again: the context keeps them.
+                EXPECT_EQ(context.shouldDiscardValueNames(), discard && !names);
+#else
                 EXPECT_EQ(context.shouldDiscardValueNames(), discard);
+#endif
             }
         }
     }

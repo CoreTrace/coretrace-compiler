@@ -31,6 +31,8 @@ namespace compilerlib
     ///
     /// Code generation sets options of `context` as it does with clang, except whether value
     /// names are discarded, which is restored: modules read into `context` later keep theirs.
+    /// With LLVM 16, a context that discards names keeps them after a compilation that names
+    /// values, which LLVM 16 could not destroy in a context that discards names.
     /// No other thread may use `context` during the compilation.
     CT_NODISCARD ModuleResult compileToModule(const std::vector<std::string>& args,
                                               llvm::LLVMContext& context, bool instrument = false);

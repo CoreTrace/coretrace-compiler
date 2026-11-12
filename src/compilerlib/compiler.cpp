@@ -739,7 +739,14 @@ namespace compilerlib
 
                 ~ModuleContextScope()
                 {
-                    context_.setDiscardValueNames(discardValueNames_);
+#if LLVM_VERSION_MAJOR < 17
+                    // LLVM 16 cannot destroy a value with a name in a context that discards
+                    // names: Value::setName("") then leaves the name of a function's argument
+                    // in the function's symbol table, which frees it a second time. A context
+                    // that discards names keeps them, once a compilation gave its module some.
+                    if (!discardValueNames_ || context_.shouldDiscardValueNames())
+#endif
+                        context_.setDiscardValueNames(discardValueNames_);
                     if (optimizationRecord_)
                         clang_compat::releaseFrontendOptimizationRecord(context_);
                 }
