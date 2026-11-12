@@ -138,6 +138,9 @@ pull request.
 - **A relative `-working-directory`** names a directory relative to the process's working
   directory. The compilation failed: the `-cc1` job resolved it again from the directory the
   driver had moved to (#262, #261).
+- **Objects linked alone with `-working-directory`** are read in that directory, to choose
+  between the C and C++ drivers. They were looked up in the process's working directory, and
+  the link failed with `failed to inspect object` (#262, #261).
 
 ### Performance
 
