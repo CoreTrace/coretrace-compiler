@@ -135,6 +135,9 @@ pull request.
 - **`CT_DEBUG_AUTOFREE` read from several threads.** The allocation pass read the variable into
   two plain statics on its first use, on which two threads instrumenting modules at once raced.
   It is now read once, into a constant (#251).
+- **A relative `-working-directory`** names a directory relative to the process's working
+  directory. The compilation failed: the `-cc1` job resolved it again from the directory the
+  driver had moved to (#262, #261).
 
 ### Performance
 
