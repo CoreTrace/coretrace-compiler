@@ -23,6 +23,13 @@ pull request.
   under a lock. A compilation with a job that runs as a program, such as a link, and one that
   passes `-mllvm` must not run while another one does (#262, #261).
 
+### Behaviour changes
+
+- **`-working-directory` leaves the process where it is** when every job of the compilation runs
+  in the process: a compilation to a file or to memory, instrumented or not. The process was
+  left in `<dir>`. A compilation that links or assembles still moves the process to `<dir>`, as
+  clang does (#262, #261).
+
 ### Fixes
 
 - **A child of `fork()` and the vtable diagnostics, on Linux.** With `--ct-vtable-diag`, a
