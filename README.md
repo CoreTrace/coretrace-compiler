@@ -519,4 +519,6 @@ Its arguments are those of an LLVM IR compilation, `-S -emit-llvm` or `-c -emit-
 file is not written; the other files the arguments ask for, such as a dependency file, are. With
 `instrument`, the module is the instrumented one. Code generation sets options of the context, as
 it does with clang, except whether value names are discarded: the context keeps its own setting,
-which applies to the modules read into it later.
+which applies to the modules read into it later. With LLVM 16, a context that discards names keeps
+them after a compilation that names values, since LLVM 16 cannot destroy those values in a context
+that discards names.
