@@ -2012,6 +2012,21 @@ int once(int x) { return x; }
         EXPECT_TRUE(fs::exists(project / "unit.o"));
     }
 
+    // The -cc1 job writes the statistics file of -save-stats=cwd: in the directory too.
+    TEST_F(WorkingDirectoryTest, StatisticsAreWrittenInTheDirectory)
+    {
+        const fs::path project = writeProject("project", 42);
+        const fs::path processDirectory = fs::current_path();
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-working-directory", project.string(), "-Iinc", "-c", "unit.c",
+                                  "-o", "unit.o", "-save-stats=cwd"},
+                                 compilerlib::OutputMode::ToFile);
+        fs::current_path(processDirectory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(fs::exists(project / "unit.stats"));
+        EXPECT_FALSE(fs::exists(processDirectory / "unit.stats"));
+    }
+
     // Compilations from several threads at once, each in a project of its own whose header
     // has the same name: each reads its own, and the process's working directory stays
     // where it is.

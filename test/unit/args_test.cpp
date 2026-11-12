@@ -250,6 +250,16 @@ namespace
         EXPECT_EQ(resolveOutputs(args), args);
     }
 
+    TEST(ResolveCc1OutputPaths, ResolvesTheStatisticsDependencyGraphAndModuleCache)
+    {
+        const Args args{"-cc1", "-stats-file=a.stats", "-dependency-dot", "a.dot",
+                        "-fmodules-cache-path=modules"};
+        EXPECT_EQ(
+            resolveOutputs(args),
+            (Args{"-cc1", "-stats-file=" + inJobDirectory("a.stats"), "-dependency-dot",
+                  inJobDirectory("a.dot"), "-fmodules-cache-path=" + inJobDirectory("modules")}));
+    }
+
     TEST(MergeDiagnostics, JoinsWithASingleNewline)
     {
         EXPECT_EQ(compilerlib::mergeDiagnostics("driver", "cc1"), "driver\ncc1");

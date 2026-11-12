@@ -173,8 +173,10 @@ namespace compilerlib
             "-split-dwarf-output",
             "-stack-usage-file",
             "-serialize-diagnostic-file",
+            "-dependency-dot",
         };
-        static constexpr llvm::StringLiteral kJoined[] = {"-ftime-trace="};
+        static constexpr llvm::StringLiteral kJoined[] = {
+            "-ftime-trace=", "-stats-file=", "-fmodules-cache-path="};
 
         // nullptr when `path` needs no change: absolute, or "-" for a standard stream. A
         // relative path is appended to the directory, as clang's FileManager does.
