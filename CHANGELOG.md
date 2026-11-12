@@ -21,7 +21,8 @@ pull request.
   or bitcode, created in an `llvm::LLVMContext` of the host, instead of writing it for the host
   to read it back. Its arguments are those of an LLVM IR compilation; the output file is not
   written, and the other files the arguments ask for, such as a dependency file, are. The
-  context keeps its own setting of value names (#265, #263).
+  context keeps its own setting of value names, except with LLVM 16, where a context that
+  discards them keeps them after a compilation that names values (#265, #263).
 
 ### Fixes
 
