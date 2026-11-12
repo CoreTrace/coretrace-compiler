@@ -189,6 +189,10 @@ pull request.
 - When `sbrk()` fails in the sbrk test of the full allocation table, the test reports `errno`,
   the program break and the mapping above it, `RLIMIT_DATA`, and the memory of the process and
   of the system (#239, #233).
+- Unit tests check that `compileToModule` gives the module that `compile` writes as text, at -O0
+  and -O2, instrumented or not, and the module of a bitcode compilation, whose dependency file is
+  written and output file is not; that it fails on a compilation to an object and on a broken
+  source; and that the context keeps its setting of value names (#265, #263).
 - The Docker tests build and test the image in a job per architecture, each on a runner of its
   own architecture: arm64 on `ubuntu-24.04-arm` instead of under QEMU on an amd64 runner. Under
   QEMU's user-mode emulation, `sbrk()` failed now and then in the sbrk test of the full
