@@ -199,6 +199,10 @@ pull request.
   Ubuntu 26.04, where clang-format 19 ran and apt.llvm.org has no LLVM 20. `scripts/format.sh`
   and `scripts/format-check.sh` run the binary that `CLANG_FORMAT` names and print its version
   (#238, #237).
+- A job of the Build workflow builds compilerlib and its unit tests with ThreadSanitizer, and
+  runs the tests of `-working-directory`, eight threads compiling at once included. LLVM and
+  Clang come from packages built without ThreadSanitizer, so a race inside their code goes
+  unseen (#262, #261).
 - When `sbrk()` fails in the sbrk test of the full allocation table, the test reports `errno`,
   the program break and the mapping above it, `RLIMIT_DATA`, and the memory of the process and
   of the system (#239, #233).
