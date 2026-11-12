@@ -1935,4 +1935,20 @@ int once(int x) { return x; }
     INSTANTIATE_TEST_SUITE_P(Instrumentation, WorkingDirectoryOutputTest, ::testing::Bool(),
                              [](const ::testing::TestParamInfo<bool>& info)
                              { return info.param ? "Instrumented" : "Plain"; });
+
+    // A relative directory is relative to the process's working directory, for the driver
+    // and for the jobs it gives the option to.
+    TEST_F(WorkingDirectoryTest, RelativeDirectoryIsRelativeToTheProcess)
+    {
+        const fs::path processDirectory = fs::current_path();
+        const fs::path relative = fs::relative(writeProject("project", 42), processDirectory);
+        if (relative.empty())
+            GTEST_SKIP() << "no relative path from the working directory to the test's";
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-working-directory=" + relative.string(), "-Iinc", "-S", "-emit-llvm", "unit.c"},
+            compilerlib::OutputMode::ToMemory);
+        fs::current_path(processDirectory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(result.llvmIR.find("ret i32 42"), std::string::npos) << result.llvmIR;
+    }
 } // namespace

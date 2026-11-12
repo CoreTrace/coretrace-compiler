@@ -222,6 +222,8 @@ namespace compilerlib
             std::string clang_resource_dir;
             std::string clang_sysroot;
             RuntimeArchives runtime_archives;
+            // The directory of -working-directory, absolute; empty without the option.
+            std::string working_directory;
             llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs;
             // Options of the driver's diagnostics engine, which must outlive it.
             clang_compat::DiagnosticOptionsStorage driver_diagnostic_options;
@@ -259,6 +261,10 @@ namespace compilerlib
             {
                 extractRuntimeConfig(ctx_.input_args, ctx_.filtered_args, ctx_.runtimeConfig);
                 normalizeEqualsArgs(ctx_.filtered_args);
+                // Absolute, so that it names one directory to the driver and to the jobs it
+                // gives the option to.
+                ctx_.working_directory =
+                    normalizeWorkingDirectoryArgs(ctx_.filtered_args, *ctx_.fs);
                 if (ctx_.runtimeConfig.bounds_without_alloc)
                 {
                     ctx_.dc.os << "warning: ct: bounds instrumentation requires alloc tracking; "
