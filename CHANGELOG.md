@@ -14,6 +14,23 @@ pull request.
 
 ## Unreleased
 
+### Features
+
+- **Compilations from several threads.** `compilerlib::compile` may run from several threads at
+  once: each compilation reads and writes files through a file system of its own, whose working
+  directory `-working-directory <dir>` moves while the process's stays. A host compiles each
+  command of a compilation database in its directory that way, instead of moving the process
+  under a lock. A compilation with a job that runs as a program, such as a link, and one that
+  passes `-mllvm`, `-mdebug-pass`, `-mlimit-float-precision` or `-ftime-report` must not run
+  while another one does (#262, #261).
+
+### Behaviour changes
+
+- **`-working-directory` leaves the process where it is** when every job of the compilation runs
+  in the process: a compilation to a file or to memory, instrumented or not. The process was
+  left in `<dir>`. A compilation that links or assembles still moves the process to `<dir>`, as
+  clang does (#262, #261).
+
 ### Fixes
 
 - **A child of `fork()` and the vtable diagnostics, on Linux.** With `--ct-vtable-diag`, a
@@ -119,6 +136,12 @@ pull request.
 - **`CT_DEBUG_AUTOFREE` read from several threads.** The allocation pass read the variable into
   two plain statics on its first use, on which two threads instrumenting modules at once raced.
   It is now read once, into a constant (#251).
+- **A relative `-working-directory`** names a directory relative to the process's working
+  directory. The compilation failed: the `-cc1` job resolved it again from the directory the
+  driver had moved to (#262, #261).
+- **Objects linked alone with `-working-directory`** are read in that directory, to choose
+  between the C and C++ drivers. They were looked up in the process's working directory, and
+  the link failed with `failed to inspect object` (#262, #261).
 
 ### Performance
 
@@ -177,6 +200,10 @@ pull request.
   Ubuntu 26.04, where clang-format 19 ran and apt.llvm.org has no LLVM 20. `scripts/format.sh`
   and `scripts/format-check.sh` run the binary that `CLANG_FORMAT` names and print its version
   (#238, #237).
+- A job of the Build workflow builds compilerlib and its unit tests with ThreadSanitizer, and
+  runs the tests of `-working-directory`, eight threads compiling at once included. LLVM and
+  Clang come from packages built without ThreadSanitizer, so a race inside their code goes
+  unseen (#262, #261).
 - When `sbrk()` fails in the sbrk test of the full allocation table, the test reports `errno`,
   the program break and the mapping above it, `RLIMIT_DATA`, and the memory of the process and
   of the system (#239, #233).
@@ -211,6 +238,8 @@ pull request.
 - `NOTICE` dates the copyright from 2025, when the code began, credits the CoreTrace
   contributors alongside Hugo Payet and links the repository. It keeps only these
   attribution notices, without the license header meant for source files (#248).
+- The README and `compilerlib/compiler.h` describe compiling from several threads, with
+  `-working-directory`, and its limits (#262, #261).
 
 ## v0.12.0 (2026-10-22)
 

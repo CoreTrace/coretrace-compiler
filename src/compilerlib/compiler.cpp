@@ -23,6 +23,7 @@
 #include <clang/Driver/Driver.h>
 #include <mutex>
 #include <clang/Frontend/CompilerInstance.h>
+#include <clang/Frontend/CompilerInvocation.h>
 #include <clang/Frontend/TextDiagnosticBuffer.h>
 #include <clang/Frontend/TextDiagnosticPrinter.h>
 #include <clang/FrontendTool/Utils.h>
@@ -222,6 +223,12 @@ namespace compilerlib
             std::string clang_resource_dir;
             std::string clang_sysroot;
             RuntimeArchives runtime_archives;
+            // The directory of -working-directory, absolute; empty without the option.
+            std::string working_directory;
+            // The file system of this compilation alone: its working directory is the
+            // process's when the compilation starts, then -working-directory's once the
+            // driver reads it, while the process's stays where it is. Compilations from
+            // several threads thus each have a working directory of their own.
             llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs;
             // Options of the driver's diagnostics engine, which must outlive it.
             clang_compat::DiagnosticOptionsStorage driver_diagnostic_options;
@@ -230,7 +237,7 @@ namespace compilerlib
 
             CompileContext(const std::vector<std::string>& args, OutputMode mode, bool instrument)
                 : mode(mode), instrument(instrument), input_args(args),
-                  fs(llvm::vfs::getRealFileSystem())
+                  fs(llvm::vfs::createPhysicalFileSystem())
             {
             }
         };
@@ -259,6 +266,14 @@ namespace compilerlib
             {
                 extractRuntimeConfig(ctx_.input_args, ctx_.filtered_args, ctx_.runtimeConfig);
                 normalizeEqualsArgs(ctx_.filtered_args);
+                // Absolute, so that it names one directory to the driver and to the jobs it
+                // gives the option to.
+                ctx_.working_directory =
+                    normalizeWorkingDirectoryArgs(ctx_.filtered_args, *ctx_.fs);
+                // The driver writes the files of -MJ and -gen-cdb-fragment-path relative to the
+                // process's working directory, which stays where it is.
+                if (!ctx_.working_directory.empty())
+                    resolveDriverOutputPaths(ctx_.filtered_args, ctx_.working_directory);
                 if (ctx_.runtimeConfig.bounds_without_alloc)
                 {
                     ctx_.dc.os << "warning: ct: bounds instrumentation requires alloc tracking; "
@@ -580,6 +595,14 @@ namespace compilerlib
             bool succeeded = false;
             if (parsed)
             {
+#if LLVM_VERSION_MAJOR < 22
+                // The compilation's file system, with the invocation's overlays, as LLVM 22
+                // sets it above: the job reads some files through it rather than through its
+                // file manager, such as a sanitizer's ignore list, and a relative path then
+                // names a file of the compilation's working directory.
+                ci->createFileManager(clang::createVFSFromCompilerInvocation(
+                    ci->getInvocation(), ci->getDiagnostics(), ctx.fs));
+#endif
                 Cc1TimeTrace trace(*ci, argv[0]);
                 succeeded = clang::ExecuteCompilerInvocation(ci.get());
             }
@@ -629,7 +652,20 @@ namespace compilerlib
                                                      clang_compat::options::OPT_fno_integrated_cc1,
                                                      /*Default=*/true);
                     for (clang::driver::Command& job : ownedComp->getJobs())
+                    {
                         job.InProcess = integrated && isCc1Command(job.getArguments());
+                        // clang moves the whole process to -working-directory, so the files
+                        // its jobs write land there; here the process stays, and the paths
+                        // of the files a -cc1 job writes are resolved beforehand.
+                        if (!ctx_.working_directory.empty() && isCc1Command(job.getArguments()))
+                        {
+                            const llvm::opt::DerivedArgList& owner = ownedComp->getArgs();
+                            job.replaceArguments(
+                                resolveCc1OutputPaths(job.getArguments(), ctx_.working_directory,
+                                                      [&](llvm::StringRef argument)
+                                                      { return owner.MakeArgString(argument); }));
+                        }
+                    }
                 }
                 else
                 {
@@ -1207,6 +1243,22 @@ namespace compilerlib
             return result;
         }
 
+        // Whether every job of `comp` runs in this process: the -cc1 jobs, unless the driver
+        // executes them with -fno-integrated-cc1, and none of the others, which run clang's
+        // tools, such as the linker or the assembler, as programs of their own.
+        CT_NODISCARD bool allJobsRunInProcess(const clang::driver::Compilation& comp,
+                                              bool driverExecutes)
+        {
+            for (const clang::driver::Command& job : comp.getJobs())
+            {
+                const bool inProcess =
+                    driverExecutes ? job.InProcess : isCc1Command(job.getArguments());
+                if (!inProcess)
+                    return false;
+            }
+            return true;
+        }
+
         CT_NODISCARD bool validateJobPlan(const JobPlan& plan, OutputMode mode, std::string& error)
         {
             if (mode == OutputMode::ToMemory || mode == OutputMode::ToMemoryBitcode)
@@ -1331,7 +1383,27 @@ namespace compilerlib
                     "without link-time optimization",
                     {}};
 
-        if (!instrument && mode == OutputMode::ToFile && !ctx.runtimeConfig.optnone_enabled)
+        // Plain file output runs the jobs as clang's driver does; the other modes run the -cc1
+        // jobs here and the others, such as the link, as programs.
+        const bool driverExecutes =
+            !instrument && mode == OutputMode::ToFile && !ctx.runtimeConfig.optnone_enabled;
+
+        // A program, such as the linker or the assembler, starts in the working directory of
+        // this process. With -working-directory, the process moves to that directory before
+        // such jobs run, as clang does, and stays there: the compilation changes the working
+        // directory of the whole process, so it must not run while another compilation of the
+        // process does. -### only prints the jobs.
+        if (!ctx.working_directory.empty() && !allJobsRunInProcess(*comp, driverExecutes) &&
+            !comp->getArgs().hasArg(clang_compat::options::OPT__HASH_HASH_HASH))
+        {
+            if (const std::error_code ec = llvm::sys::fs::set_current_path(ctx.working_directory))
+                return {false,
+                        "error: unable to set working directory: " + ctx.working_directory + ": " +
+                            ec.message(),
+                        {}};
+        }
+
+        if (driverExecutes)
             return runNonInstrumentedCompilation(ctx, driver, *comp);
 
         JobPlan plan = buildJobPlan(*comp);
