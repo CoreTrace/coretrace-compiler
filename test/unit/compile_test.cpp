@@ -1967,6 +1967,30 @@ int once(int x) { return x; }
             << result.diagnostics;
     }
 
+    // The job opens the log of -diagnostic-log-file when it creates its diagnostics, by the
+    // name it is given.
+    TEST_P(WorkingDirectoryOutputTest, DiagnosticLogIsWrittenInTheDirectory)
+    {
+        const fs::path project = writeProject("project", 42);
+        writeSource("project/warned.c", "#warning logged for the project\n");
+        const fs::path processDirectory = fs::current_path();
+        const fs::path strayLog = processDirectory / "ct_wd_diagnostics.log";
+        std::error_code ignored;
+        fs::remove(strayLog, ignored);
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-working-directory", project.string(), "-c", "warned.c", "-o", "warned.o", "-Xclang",
+             "-diagnostic-log-file", "-Xclang", "ct_wd_diagnostics.log"},
+            compilerlib::OutputMode::ToFile, /*instrument=*/GetParam());
+        fs::current_path(processDirectory);
+        const bool stray = fs::exists(strayLog);
+        fs::remove(strayLog, ignored);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(
+            readFile((project / "ct_wd_diagnostics.log").string()).find("logged for the project"),
+            std::string::npos);
+        EXPECT_FALSE(stray);
+    }
+
     INSTANTIATE_TEST_SUITE_P(Instrumentation, WorkingDirectoryOutputTest, ::testing::Bool(),
                              [](const ::testing::TestParamInfo<bool>& info)
                              { return info.param ? "Instrumented" : "Plain"; });
