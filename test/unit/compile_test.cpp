@@ -2043,6 +2043,65 @@ int once(int x) { return x; }
         EXPECT_FALSE(fs::exists(processDirectory / "unit.stats"));
     }
 
+    // The driver removes the files of a job that fails, by the names it keeps for them apart
+    // from the job's arguments: the output in the directory, and no file of that name in
+    // the process's working directory.
+    class WorkingDirectoryFailureTest : public WorkingDirectoryTest
+    {
+      protected:
+        // Compiles a source that does not compile, with `output` after it, in a project that
+        // has objects from before, from a directory that has files of the same names.
+        compilerlib::CompileResult compileBrokenUnit(const std::vector<std::string>& output)
+        {
+            writeSource("host/project/unit.c", "#error does not compile\n");
+            for (const char* object : kObjects)
+            {
+                writeSource((std::string("host/project/") + object).c_str(), "of the project");
+                writeSource((std::string("host/") + object).c_str(), "of the host");
+            }
+            std::vector<std::string> args{"-working-directory", path("host/project"), "-c",
+                                          "unit.c"};
+            args.insert(args.end(), output.begin(), output.end());
+            const fs::path processDirectory = fs::current_path();
+            fs::current_path(path("host"));
+            compilerlib::CompileResult result =
+                compilerlib::compile(args, compilerlib::OutputMode::ToFile);
+            fs::current_path(processDirectory);
+            return result;
+        }
+
+        void expectTheFilesOfTheHost(void) const
+        {
+            for (const char* object : kObjects)
+                EXPECT_EQ(readFile(path((std::string("host/") + object).c_str())), "of the host")
+                    << object;
+        }
+
+        bool projectHas(const char* object) const
+        {
+            return fs::exists(path((std::string("host/project/") + object).c_str()));
+        }
+
+        // The default name of the object, which the target decides.
+        static constexpr const char* kObjects[] = {"unit.o", "unit.obj"};
+    };
+
+    TEST_F(WorkingDirectoryFailureTest, RemovesTheOutputOfTheDirectoryOnly)
+    {
+        const compilerlib::CompileResult result = compileBrokenUnit({"-o", "unit.o"});
+        EXPECT_FALSE(result.success);
+        EXPECT_FALSE(projectHas("unit.o"));
+        expectTheFilesOfTheHost();
+    }
+
+    TEST_F(WorkingDirectoryFailureTest, RemovesTheDefaultOutputOfTheDirectoryOnly)
+    {
+        const compilerlib::CompileResult result = compileBrokenUnit({});
+        EXPECT_FALSE(result.success);
+        EXPECT_FALSE(projectHas("unit.o") && projectHas("unit.obj"));
+        expectTheFilesOfTheHost();
+    }
+
     // Compilations from several threads at once, each in a project of its own whose header
     // has the same name: each reads its own, and the process's working directory stays
     // where it is.
