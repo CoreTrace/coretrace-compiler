@@ -260,6 +260,13 @@ namespace
                   inJobDirectory("a.dot"), "-fmodules-cache-path=" + inJobDirectory("modules")}));
     }
 
+    TEST(ResolveCc1OutputPaths, ResolvesTheDiagnosticLog)
+    {
+        const Args args{"-cc1", "-diagnostic-log-file", "a.log"};
+        EXPECT_EQ(resolveOutputs(args),
+                  (Args{"-cc1", "-diagnostic-log-file", inJobDirectory("a.log")}));
+    }
+
     TEST(ResolveDriverOutputPaths, ResolvesTheFilesTheDriverWrites)
     {
         Args args{"-MJ", "a.json", "-MJb.json", "-gen-cdb-fragment-path", "fragments", "-c", "a.c"};
