@@ -929,6 +929,13 @@ int sum(int count)
         expectTheHostHandlerAfter({"-fsave-optimization-record=unknown"}, "unknown");
     }
 
+    // Instrumented, compilerlib sets up the record itself, after Clang's frontend.
+    TEST_F(ModuleDiagnosticHandlerTest, IsTheHostsAfterAnInstrumentedCompilationThatFails)
+    {
+        expectTheHostHandlerAfter(recordThatCannotBeOpened(), "unit.opt.yaml",
+                                  /*instrument=*/true);
+    }
+
     // Like clang, a failed compilation leaves no output behind: neither a partial object
     // nor an earlier one that would look up to date.
     class FailedCompilationTest : public CompileTest,
