@@ -1990,7 +1990,11 @@ namespace compilerlib
                 for (llvm::ReturnInst* ret : returns)
                 {
                     // The release uses the allocation, which must then be on every path to
-                    // the return. One made in a branch or a loop is left to the leak report.
+                    // the return. One made in a branch, or in a loop the function can leave
+                    // without entering, is left to the leak report. One made in a loop block
+                    // on every path, such as the body of a do-while loop, is released: the
+                    // release frees the block of the last iteration and leaves those of the
+                    // earlier iterations to the leak report.
                     // A return ends its block, so an allocation of that block comes before
                     // it, unreachable blocks included: the tree is not asked, as it would
                     // compare the two by their order, which LLVM finds again by walking the

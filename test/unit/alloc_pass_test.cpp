@@ -578,6 +578,37 @@ dead:
         EXPECT_EQ(calls[1]->getArgOperand(0), calls[0]);
     }
 
+    // The body of a do-while loop is on every path to the return, as #126 asks of a release:
+    // an allocation made there is released before the return. The release frees the block of
+    // the last iteration; those of the earlier iterations are left to the leak report (#257).
+    TEST_F(AutoFreeTest, AllocationInADoWhileLoopIsReleasedBeforeTheReturn)
+    {
+        instrument(R"(
+declare ptr @malloc(i64)
+
+define void @repeat(i32 %count) {
+entry:
+  br label %body
+
+body:
+  %left = phi i32 [ %count, %entry ], [ %next, %body ]
+  %block = call ptr @malloc(i64 8)
+  store i8 1, ptr %block
+  %next = sub i32 %left, 1
+  %more = icmp sgt i32 %next, 0
+  br i1 %more, label %body, label %done
+
+done:
+  ret void
+}
+)");
+        EXPECT_EQ(callees("repeat"), (std::vector<std::string>{"__ct_malloc", "__ct_autofree"}));
+        const std::vector<llvm::CallBase*> calls = callsIn(*module_->getFunction("repeat"));
+        ASSERT_EQ(calls.size(), 2u);
+        EXPECT_EQ(calls[1]->getParent()->getName(), "done");
+        EXPECT_EQ(calls[1]->getArgOperand(0), calls[0]);
+    }
+
     // Clang marks a new-expression's operator new and delete calls builtin; before
     // optimization, the calls the pass tracks lose that mark. Aligned operator new is not
     // tracked, and keeps it.

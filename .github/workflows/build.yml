@@ -186,6 +186,44 @@ jobs:
           ${{ runner.temp }}/ct_autofree_tests/*.log
           ${{ runner.temp }}/ct_runtime_tests/*.log
 
+  # compilerlib and its unit tests built with ThreadSanitizer: compilations from several threads
+  # at once, each in a working directory of its own, race on none of compilerlib's state. LLVM
+  # and Clang come from packages built without ThreadSanitizer: a race between two
+  # compilations inside their code goes unseen.
+  tsan-compilerlib:
+    name: compilerlib with ThreadSanitizer (ubuntu-24.04, LLVM 20)
+    runs-on: ubuntu-24.04
+    env:
+      TSAN_OPTIONS: halt_on_error=1:exitcode=66
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake ninja-build
+        sudo bash scripts/ci/install-llvm-apt.sh 20 llvm-20 llvm-20-dev clang-20 libclang-20-dev \
+          libclang-rt-20-dev
+        # The kernel randomizes mmap addresses over more bits than ThreadSanitizer supports.
+        sudo sysctl vm.mmap_rnd_bits=28
+
+    - name: Build
+      run: |
+        cmake -S . -B build -G Ninja \
+          -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+          "-DCMAKE_C_FLAGS=-fsanitize=thread -g" "-DCMAKE_CXX_FLAGS=-fsanitize=thread -g" \
+          -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread \
+          -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm \
+          -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang \
+          -DUSE_SHARED_LIB=OFF
+        cmake --build build --target compilerlib_unit_tests
+
+    - name: Run the compilations with a working directory, concurrent ones included
+      run: |
+        build/test/unit/compilerlib_unit_tests \
+          --gtest_filter='*WorkingDirectory*:*ConcurrentCompilationTest*'
+
   # Line coverage of compilerlib, cc and the runtime (ENABLE_COVERAGE), from the unit tests,
   # the smoke tests and the runtime fixture suites. Informational: no threshold is enforced.
   # The suites build their programs with -fprofile-instr-generate, so that the runtime they
