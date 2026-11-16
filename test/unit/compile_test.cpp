@@ -2204,6 +2204,16 @@ int once(int x) { return x; }
         expectTheDriversError(result.diagnostics);
     }
 
+    TEST_F(DriverErrorTest, FailsACompilationToAModule)
+    {
+        llvm::LLVMContext context;
+        const compilerlib::ModuleResult result =
+            compilerlib::compileToModule(inAMissingDirectory({"-S", "-emit-llvm"}), context);
+        EXPECT_FALSE(result.success);
+        EXPECT_TRUE(result.module == nullptr);
+        expectTheDriversError(result.diagnostics);
+    }
+
     // -working-directory, as clang reads it: the sources, the include directories and the
     // files a compilation writes are relative to it.
     class WorkingDirectoryTest : public CompileTest
