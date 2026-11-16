@@ -234,18 +234,26 @@ namespace compilerlib
         const llvm::opt::InputArgList parsed =
             clang_compat::driverOptTable().ParseArgs(argv, missingIndex, missingCount);
 
-        // Index of each option, either spelling, with its spelling and its absolute path.
-        std::map<unsigned, std::pair<std::string, std::string>> resolved;
+        // Index of each option, either spelling, with the arguments that replace it: its
+        // spelling and its absolute path.
+        std::map<unsigned, std::vector<std::string>> resolved;
         for (const llvm::opt::Arg* arg : parsed.filtered(
-                 clang_compat::options::OPT_MJ, clang_compat::options::OPT_gen_cdb_fragment_path))
+                 clang_compat::options::OPT_MJ, clang_compat::options::OPT_gen_cdb_fragment_path,
+                 clang_compat::options::OPT_ftime_trace_EQ))
         {
             const llvm::StringRef value = arg->getValue();
-            if (value.empty() || llvm::sys::path::is_absolute(value))
+            std::string path = resolveInDirectory(value, directory);
+            if (path == value)
                 continue;
-            llvm::SmallString<256> path(directory);
-            llvm::sys::path::append(path, value);
-            resolved.emplace(arg->getIndex(),
-                             std::make_pair(arg->getSpelling().str(), path.str().str()));
+            // A joined option keeps the spelling it was given, which may be another name
+            // of the option: its path ends the argument.
+            if (arg->getOption().getKind() == llvm::opt::Option::JoinedClass)
+            {
+                const std::string& given = args[arg->getIndex()];
+                resolved[arg->getIndex()] = {given.substr(0, given.size() - value.size()) + path};
+            }
+            else
+                resolved[arg->getIndex()] = {arg->getSpelling().str(), std::move(path)};
         }
         if (resolved.empty())
             return;
@@ -261,10 +269,10 @@ namespace compilerlib
                 continue;
             }
             // The separate spelling has its path in the next argument.
-            if (args[i] == found->second.first)
+            if (args[i] == found->second.front())
                 ++i;
-            out.push_back(std::move(found->second.first));
-            out.push_back(std::move(found->second.second));
+            for (std::string& argument : found->second)
+                out.push_back(std::move(argument));
         }
         args.swap(out);
     }

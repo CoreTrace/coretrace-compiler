@@ -271,7 +271,8 @@ namespace compilerlib
                 ctx_.working_directory =
                     normalizeWorkingDirectoryArgs(ctx_.filtered_args, *ctx_.fs);
                 // The driver writes the files of -MJ and -gen-cdb-fragment-path relative to the
-                // process's working directory, which stays where it is.
+                // process's working directory, which stays where it is, and looks there at
+                // the path of -ftime-trace=.
                 if (!ctx_.working_directory.empty())
                     resolveDriverOutputPaths(ctx_.filtered_args, ctx_.working_directory);
                 if (ctx_.runtimeConfig.bounds_without_alloc)

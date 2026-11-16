@@ -66,7 +66,8 @@ namespace compilerlib
     // Rewrites each option of a driver command line that names what the driver itself writes,
     // `-MJ <file>` and `-gen-cdb-fragment-path <directory>`, into the two-argument form, with a
     // relative path made absolute against `directory`. The driver writes them relative to the
-    // process's working directory, which clang itself moves to that directory first.
+    // process's working directory, which clang itself moves to that directory first. So does
+    // `-ftime-trace=<path>`, which the driver looks at there to tell a directory from a file.
     void resolveDriverOutputPaths(std::vector<std::string>& args, llvm::StringRef directory);
 
     // Appends `extra` to `out` with exactly one newline between them; no-op when empty.
