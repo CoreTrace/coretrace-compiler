@@ -294,6 +294,8 @@ where it is unless a job runs as a program (see Behaviour changes). Objects inst
   when it is never read (#259).
 - At -O0, the allocation pass takes a time quadratic in the allocations stored into one local
   variable (#256).
+- On Windows, code of a DLL that runs after the terminator of its copy of the runtime, and goes
+  through that copy, leaves memory allocated once `FreeLibrary` has unloaded the DLL (#227).
 
 ## v0.12.0 (2026-10-22)
 
