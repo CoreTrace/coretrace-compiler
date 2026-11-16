@@ -31,7 +31,8 @@ pull request.
   context keeps its own setting of value names, except with LLVM 16, where a context that
   discards them keeps them after a compilation that names values. It keeps its diagnostic
   handler too, which the compilation does not call, whether the compilation succeeded, failed,
-  or crashed and was recovered (#265, #263).
+  or crashed and was recovered. With `-working-directory`, it compiles from several threads
+  at once as `compile` does, each with a context of its own (#265, #263).
 
 ### Behaviour changes
 
