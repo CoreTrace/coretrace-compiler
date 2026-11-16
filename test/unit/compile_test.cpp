@@ -924,6 +924,11 @@ int sum(int count)
         expectTheHostHandlerAfter(recordThatCannotBeOpened(), "unit.opt.yaml");
     }
 
+    TEST_F(ModuleDiagnosticHandlerTest, IsTheHostsAfterAnUnknownRecordFormat)
+    {
+        expectTheHostHandlerAfter({"-fsave-optimization-record=unknown"}, "unknown");
+    }
+
     // Like clang, a failed compilation leaves no output behind: neither a partial object
     // nor an earlier one that would look up to date.
     class FailedCompilationTest : public CompileTest,
