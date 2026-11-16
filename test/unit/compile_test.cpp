@@ -2214,6 +2214,17 @@ int once(int x) { return x; }
         expectTheDriversError(result.diagnostics);
     }
 
+    TEST_F(DriverErrorTest, FailsACompilationWhoseProfileIsMissing)
+    {
+        const compilerlib::CompileResult result = compilerlib::compile(
+            {"-O1", "-fprofile-sample-use=" + path("missing.afdo"), "-S", "-emit-llvm",
+             writeSource("unit.c", "int value(void) { return 42; }\n")},
+            compilerlib::OutputMode::ToMemory);
+        EXPECT_FALSE(result.success);
+        EXPECT_NE(result.diagnostics.find("no such file or directory"), std::string::npos)
+            << result.diagnostics;
+    }
+
     // -working-directory, as clang reads it: the sources, the include directories and the
     // files a compilation writes are relative to it.
     class WorkingDirectoryTest : public CompileTest
