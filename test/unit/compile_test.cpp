@@ -876,6 +876,36 @@ int sum(int count)
             EXPECT_EQ(reported_, before + 1);
         }
 
+        // A compilation that `failing` arguments make fail in Clang's backend leaves the
+        // host's handler, and the context then takes another compilation.
+        void expectTheHostHandlerAfter(const std::vector<std::string>& failing,
+                                       const char* diagnostic, bool instrument = false)
+        {
+            const std::string source = writeSource("unit.c", kBitcodeUnit);
+            std::vector<std::string> args{"-O2", "-S", "-emit-llvm", source};
+            args.insert(args.end(), failing.begin(), failing.end());
+            compilerlib::ModuleResult failed =
+                compilerlib::compileToModule(args, context_, instrument);
+            EXPECT_FALSE(failed.success);
+            EXPECT_EQ(failed.module, nullptr);
+            EXPECT_NE(failed.diagnostics.find(diagnostic), std::string::npos) << failed.diagnostics;
+            EXPECT_EQ(reported_, 0) << "the compilation reported to the host's handler";
+            ASSERT_NO_FATAL_FAILURE(expectTheHostHandler());
+
+            compilerlib::ModuleResult result = compilerlib::compileToModule(
+                {"-O2", "-S", "-emit-llvm", source}, context_, instrument);
+            EXPECT_TRUE(result.success) << result.diagnostics;
+            EXPECT_NE(result.module, nullptr);
+            expectTheHostHandler();
+        }
+
+        // A record file in a directory that does not exist.
+        std::vector<std::string> recordThatCannotBeOpened() const
+        {
+            return {"-fsave-optimization-record",
+                    "-foptimization-record-file=" + path("missing/unit.opt.yaml")};
+        }
+
         int reported_ = 0;
         llvm::LLVMContext context_;
         const llvm::DiagnosticHandler* host_ = nullptr;
@@ -887,6 +917,11 @@ int sum(int count)
             {"-O2", "-S", "-emit-llvm", writeSource("unit.c", kBitcodeUnit)}, context_);
         ASSERT_TRUE(result.success) << result.diagnostics;
         expectTheHostHandler();
+    }
+
+    TEST_F(ModuleDiagnosticHandlerTest, IsTheHostsAfterARecordFileThatCannotBeOpened)
+    {
+        expectTheHostHandlerAfter(recordThatCannotBeOpened(), "unit.opt.yaml");
     }
 
     // Like clang, a failed compilation leaves no output behind: neither a partial object
