@@ -623,6 +623,22 @@ namespace compilerlib
             return status;
         }
 
+        // The driver removes the files of a job that fails by the names it keeps for them,
+        // apart from the job's arguments, and through the process's file system: a relative
+        // name would be a file of the process's working directory.
+        void resolveCleanupPaths(clang::driver::Compilation& comp, llvm::StringRef directory)
+        {
+            const auto resolved = [&](const char* name)
+            { return comp.getArgs().MakeArgString(resolveInDirectory(name, directory)); };
+            // Copies: adding a file writes the map it is read from.
+            const clang::driver::ArgStringMap results = comp.getResultFiles();
+            for (const auto& [action, name] : results)
+                comp.addResultFile(resolved(name), action);
+            const clang::driver::ArgStringMap failureResults = comp.getFailureResultFiles();
+            for (const auto& [action, name] : failureResults)
+                comp.addFailureResultFile(resolved(name), action);
+        }
+
         class DriverSession
         {
           public:
@@ -666,6 +682,8 @@ namespace compilerlib
                                                       { return owner.MakeArgString(argument); }));
                         }
                     }
+                    if (!ctx_.working_directory.empty())
+                        resolveCleanupPaths(*ownedComp, ctx_.working_directory);
                 }
                 else
                 {
