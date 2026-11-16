@@ -35,6 +35,8 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/IntrusiveRefCntPtr.h>
 #include <llvm/Config/llvm-config.h>
+#include <llvm/IR/DiagnosticHandler.h>
+#include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -726,14 +728,21 @@ namespace compilerlib
           private:
             // What a job changes in compileToModule's context, which the host keeps: whether
             // value names are discarded, which would apply to the modules the host reads into
-            // it later, and the optimization record of -fsave-optimization-record, whose file
-            // is closed once the job ends.
+            // it later, the diagnostic handler, and the optimization record of
+            // -fsave-optimization-record, whose file is closed once the job ends.
+            //
+            // Clang's backend replaces the handler with one that refers to the compilation,
+            // and returns without putting the previous one back when it cannot set up the
+            // optimization record or link a module in. The host's is set aside for the job,
+            // which runs with the handler a context of its own would have.
             class ModuleContextScope
             {
               public:
                 explicit ModuleContextScope(llvm::LLVMContext& context)
-                    : context_(context), discardValueNames_(context.shouldDiscardValueNames())
+                    : context_(context), discardValueNames_(context.shouldDiscardValueNames()),
+                      diagnosticHandler_(context.getDiagnosticHandler())
                 {
+                    context_.setDiagnosticHandler(std::make_unique<llvm::DiagnosticHandler>());
                 }
 
                 ModuleContextScope(const ModuleContextScope&) = delete;
@@ -757,11 +766,13 @@ namespace compilerlib
                         context_.setDiscardValueNames(discardValueNames_);
                     if (optimizationRecord_)
                         clang_compat::releaseFrontendOptimizationRecord(context_);
+                    context_.setDiagnosticHandler(std::move(diagnosticHandler_));
                 }
 
               private:
                 llvm::LLVMContext& context_;
                 bool discardValueNames_;
+                std::unique_ptr<llvm::DiagnosticHandler> diagnosticHandler_;
                 bool optimizationRecord_ = false;
             };
 
