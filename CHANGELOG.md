@@ -195,7 +195,10 @@ pull request.
 - Unit tests check that `compileToModule` gives the module that `compile` writes as text, at -O0
   and -O2, instrumented or not, and the module of a bitcode compilation, whose dependency file is
   written and output file is not; that it fails on a compilation to an object and on a broken
-  source; and that the context keeps its setting of value names (#265, #263).
+  source; that the context keeps its setting of value names; and that it keeps its diagnostic
+  handler, reports to it and takes another compilation after one that Clang's backend ends
+  early, on an optimization record it cannot set up or a module it cannot link in, and after a
+  crash that the host recovers (#265, #263).
 - The Docker tests build and test the image in a job per architecture, each on a runner of its
   own architecture: arm64 on `ubuntu-24.04-arm` instead of under QEMU on an amd64 runner. Under
   QEMU's user-mode emulation, `sbrk()` failed now and then in the sbrk test of the full
