@@ -309,6 +309,39 @@ namespace
         EXPECT_EQ(args, before);
     }
 
+    TEST(ResolveDriverInputPaths, ResolvesTheFilesTheDriverLooksAt)
+    {
+        Args args{"-fprofile-use=profiles",
+                  "-fprofile-instr-use=a.profdata",
+                  "-fprofile-sample-use=a.afdo",
+                  "-fauto-profile=b.afdo",
+                  "-fbuild-session-file=stamp",
+                  "-c",
+                  "a.c"};
+        compilerlib::resolveDriverInputPaths(args, jobDirectory());
+        EXPECT_EQ(args, (Args{"-fprofile-use=" + inJobDirectory("profiles"),
+                              "-fprofile-instr-use=" + inJobDirectory("a.profdata"),
+                              "-fprofile-sample-use=" + inJobDirectory("a.afdo"),
+                              "-fauto-profile=" + inJobDirectory("b.afdo"),
+                              "-fbuild-session-file=" + inJobDirectory("stamp"), "-c", "a.c"}));
+    }
+
+    // An absolute path, an option without a path, and the value of another option.
+    TEST(ResolveDriverInputPaths, LeavesEverythingElseAlone)
+    {
+        Args args{"-fprofile-use=" + inJobDirectory("profiles"),
+                  "-fprofile-use",
+                  "-Xclang",
+                  "-fbuild-session-file=stamp",
+                  "-I",
+                  "inc",
+                  "-c",
+                  "a.c"};
+        const Args before = args;
+        compilerlib::resolveDriverInputPaths(args, jobDirectory());
+        EXPECT_EQ(args, before);
+    }
+
     TEST(MergeDiagnostics, JoinsWithASingleNewline)
     {
         EXPECT_EQ(compilerlib::mergeDiagnostics("driver", "cc1"), "driver\ncc1");
