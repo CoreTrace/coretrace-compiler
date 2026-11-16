@@ -2085,6 +2085,22 @@ int once(int x) { return x; }
         EXPECT_FALSE(fs::exists(processDirectory / "unit.stats"));
     }
 
+    // The driver checks that the profile of -fprofile-sample-use= exists before the job reads
+    // it, through the process's file system: the profile of the directory.
+    TEST_F(WorkingDirectoryTest, SampleProfileIsReadInTheDirectory)
+    {
+        const fs::path project = writeProject("project", 42);
+        writeSource("project/ct_wd_samples.txt", "value:100:10\n 1: 10\n");
+        const fs::path processDirectory = fs::current_path();
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-working-directory", project.string(), "-Iinc", "-O1",
+             "-fprofile-sample-use=ct_wd_samples.txt", "-c", "unit.c", "-o", "unit.o"},
+            compilerlib::OutputMode::ToFile);
+        fs::current_path(processDirectory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(fs::exists(project / "unit.o"));
+    }
+
     // The driver removes the files of a job that fails, by the names it keeps for them apart
     // from the job's arguments: the output in the directory, and no file of that name in
     // the process's working directory.
