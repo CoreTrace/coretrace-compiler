@@ -498,3 +498,22 @@ expects, and waits for it: a host can compile from a thread with a small stack, 
 secondary thread on macOS, whose stack is 512 KiB (#204). The time-trace profiler a host runs on
 its own thread, started with `llvm::timeTraceProfilerInitialize`, therefore does not record the
 compilation. With `-ftime-trace`, each job writes its own trace file, as clang does.
+
+### Compiling from several threads
+
+`compilerlib::compile` may run from several threads at once, as for a host that compiles each
+command of a compilation database. Each compilation reads and writes files through a file system
+of its own, whose working directory `-working-directory <dir>` sets without moving the process:
+the sources, the include directories and the files the compilation writes, its output, its
+dependency file and the others, are relative to `<dir>`, and a relative `<dir>` is relative to the
+process's working directory. A host passes each command's directory that way, instead of changing
+the process's working directory under a lock.
+
+Two kinds of compilations must not run while another one does:
+
+- **Jobs that run as programs.** The linker, the assembler and, with `-fno-integrated-cc1`, every
+  job run as programs of their own, which start in the process's working directory. With
+  `-working-directory`, such a compilation moves the whole process to `<dir>`, as clang does, and
+  leaves it there.
+- **Options of LLVM's own.** Clang applies `-mllvm`, `-mdebug-pass`, `-mlimit-float-precision`
+  and `-ftime-report` to LLVM's state, which the whole process shares.
