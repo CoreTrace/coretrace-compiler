@@ -2101,6 +2101,22 @@ int once(int x) { return x; }
         EXPECT_TRUE(fs::exists(project / "unit.o"));
     }
 
+    // The driver reads the time of the file of -fbuild-session-file= the same way.
+    TEST_F(WorkingDirectoryTest, BuildSessionFileIsReadInTheDirectory)
+    {
+        const fs::path project = writeProject("project", 42);
+        writeSource("project/ct_wd_session.stamp", "");
+        const fs::path processDirectory = fs::current_path();
+        compilerlib::CompileResult result = compilerlib::compile(
+            {"-working-directory", project.string(), "-Iinc", "-fmodules",
+             "-fmodules-cache-path=cache", "-fbuild-session-file=ct_wd_session.stamp", "-c",
+             "unit.c", "-o", "unit.o"},
+            compilerlib::OutputMode::ToFile);
+        fs::current_path(processDirectory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_TRUE(fs::exists(project / "unit.o"));
+    }
+
     // The driver removes the files of a job that fails, by the names it keeps for them apart
     // from the job's arguments: the output in the directory, and no file of that name in
     // the process's working directory.
