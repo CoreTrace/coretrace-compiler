@@ -23,6 +23,16 @@ pull request.
   under a lock. A compilation with a job that runs as a program, such as a link, and one that
   passes `-mllvm`, `-mdebug-pass`, `-mlimit-float-precision` or `-ftime-report` must not run
   while another one does (#262, #261).
+- **Compiling to a module.** `compilerlib::compileToModule`, from
+  `compilerlib/compile_module.hpp`, gives the module that `compilerlib::compile` writes as text
+  or bitcode, created in an `llvm::LLVMContext` of the host, instead of writing it for the host
+  to read it back. Its arguments are those of an LLVM IR compilation; the output file is not
+  written, and the other files the arguments ask for, such as a dependency file, are. The
+  context keeps its own setting of value names, except with LLVM 16, where a context that
+  discards them keeps them after a compilation that names values. It keeps its diagnostic
+  handler too, which the compilation does not call, whether the compilation succeeded, failed,
+  or crashed and was recovered. With `-working-directory`, it compiles from several threads
+  at once as `compile` does, each with a context of its own (#265, #263).
 
 ### Behaviour changes
 
@@ -207,6 +217,14 @@ pull request.
 - When `sbrk()` fails in the sbrk test of the full allocation table, the test reports `errno`,
   the program break and the mapping above it, `RLIMIT_DATA`, and the memory of the process and
   of the system (#239, #233).
+- Unit tests check that `compileToModule` gives the module that `compile` writes as text, at -O0
+  and -O2, instrumented or not, and the module of a bitcode compilation, whose dependency file is
+  written and output file is not; that it fails on a compilation to an object and on a broken
+  source; that the context keeps its setting of value names; and that it keeps its diagnostic
+  handler, reports to it and takes another compilation after one that Clang's backend ends
+  early, on an optimization record it cannot set up or a module it cannot link in, and after a
+  crash that the host recovers; and that eight threads, each with a context and a working
+  directory of its own, each get the module of their own sources (#265, #263).
 - The Docker tests build and test the image in a job per architecture, each on a runner of its
   own architecture: arm64 on `ubuntu-24.04-arm` instead of under QEMU on an amd64 runner. Under
   QEMU's user-mode emulation, `sbrk()` failed now and then in the sbrk test of the full
@@ -238,6 +256,7 @@ pull request.
 
 ### Documentation
 
+- The README describes compiling to a module with `compileToModule` (#265, #263).
 - `NOTICE` dates the copyright from 2025, when the code began, credits the CoreTrace
   contributors alongside Hugo Payet and links the repository. It keeps only these
   attribution notices, without the license header meant for source files (#248).

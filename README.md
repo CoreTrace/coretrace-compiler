@@ -517,3 +517,32 @@ Two kinds of compilations must not run while another one does:
   leaves it there.
 - **Options of LLVM's own.** Clang applies `-mllvm`, `-mdebug-pass`, `-mlimit-float-precision`
   and `-ftime-report` to LLVM's state, which the whole process shares.
+
+### Compiling to a module
+
+`compilerlib::compileToModule`, from `compilerlib/compile_module.hpp`, gives the module that
+`compilerlib::compile` writes as text or bitcode, created in an `llvm::LLVMContext` of the host,
+instead of writing it for the host to read it back:
+
+```cpp
+#include <compilerlib/compile_module.hpp>
+
+llvm::LLVMContext context;
+compilerlib::ModuleResult result =
+    compilerlib::compileToModule({"-g", "-c", "-emit-llvm", "unit.cpp"}, context);
+if (result.success)
+    analyze(*result.module);
+```
+
+Its arguments are those of an LLVM IR compilation, `-S -emit-llvm` or `-c -emit-llvm`. The output
+file is not written; the other files the arguments ask for, such as a dependency file, are. With
+`instrument`, the module is the instrumented one. Code generation sets options of the context, as
+it does with clang, except whether value names are discarded: the context keeps its own setting,
+which applies to the modules read into it later. With LLVM 16, a context that discards names keeps
+them after a compilation that names values, since LLVM 16 cannot destroy those values in a context
+that discards names. The context's diagnostic handler is set aside for the compilation, which does
+not call it, and is the context's again once `compileToModule` returns, whether the compilation
+succeeded, failed, or crashed and was recovered.
+
+`-working-directory` and compilations from several threads at once are as for
+`compilerlib::compile`, each compilation with a context of its own.

@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "compilerlib/compile_module.hpp"
 #include "compilerlib/compiler.h"
 
 #include <llvm/AsmParser/Parser.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/Attributes.h>
+#include <llvm/IR/DiagnosticHandler.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Object/ObjectFile.h>
+#include <llvm/Support/CrashRecoveryContext.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/JSON.h>
 #include <llvm/Support/SourceMgr.h>
@@ -32,6 +35,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #ifndef _WIN32
@@ -686,6 +690,296 @@ int main(void)
         EXPECT_FALSE(memory.success);
         EXPECT_TRUE(memory.llvmBitcode.empty());
         EXPECT_NE(memory.diagnostics.find("missing"), std::string::npos) << memory.diagnostics;
+    }
+
+    std::string printed(const llvm::Module& module)
+    {
+        std::string text;
+        llvm::raw_string_ostream stream(text);
+        module.print(stream, nullptr);
+        stream.flush();
+        return text;
+    }
+
+    // The text of `module` as the IR parser gives it back: a module read from text does not
+    // keep the order of each value's uses, which orders the predecessors listed for a block.
+    std::string normalizedText(const llvm::Module& module)
+    {
+        llvm::LLVMContext context;
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> parsed =
+            llvm::parseAssemblyString(printed(module), error, context);
+        if (!parsed)
+            return "unreadable module: " + error.getMessage().str();
+        parsed->setModuleIdentifier(module.getModuleIdentifier());
+        return printed(*parsed);
+    }
+
+    // An allocation, a loop and accesses for the instrumentation to rewrite.
+    constexpr const char* kModuleUnit = R"(#include <stdlib.h>
+
+int sum(int count)
+{
+    int* values = malloc(sizeof(int) * count);
+    int total = 0;
+    for (int i = 0; i < count; ++i)
+    {
+        values[i] = i;
+        total += values[i];
+    }
+    free(values);
+    return total;
+}
+)";
+
+    // compileToModule gives the module that compile() writes as text, without the text.
+    class ModuleOutputTest : public CompileTest,
+                             public ::testing::WithParamInterface<std::tuple<bool, const char*>>
+    {
+    };
+
+    TEST_P(ModuleOutputTest, IsTheTextualOutput)
+    {
+        const auto [instrument, optimization] = GetParam();
+        const std::vector<std::string> args{optimization, "-g", "-S", "-emit-llvm",
+                                            writeSource("unit.c", kModuleUnit)};
+        compilerlib::CompileResult text =
+            compilerlib::compile(args, compilerlib::OutputMode::ToMemory, instrument);
+        ASSERT_TRUE(text.success) << text.diagnostics;
+
+        llvm::LLVMContext context;
+        compilerlib::ModuleResult result = compilerlib::compileToModule(args, context, instrument);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        ASSERT_NE(result.module, nullptr);
+        EXPECT_EQ(&result.module->getContext(), &context);
+        EXPECT_EQ(result.diagnostics, text.diagnostics);
+
+        llvm::LLVMContext textContext;
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> parsed =
+            llvm::parseAssemblyString(text.llvmIR, error, textContext);
+        ASSERT_NE(parsed, nullptr) << error.getMessage().str();
+        parsed->setModuleIdentifier(result.module->getModuleIdentifier());
+        EXPECT_EQ(normalizedText(*result.module), normalizedText(*parsed));
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Modes, ModuleOutputTest,
+                             ::testing::Combine(::testing::Bool(), ::testing::Values("-O0", "-O2")),
+                             [](const ::testing::TestParamInfo<std::tuple<bool, const char*>>& info)
+                             {
+                                 return std::string(std::get<0>(info.param) ? "Instrumented"
+                                                                            : "Plain") +
+                                        (std::string(std::get<1>(info.param)) == "-O0" ? "O0"
+                                                                                       : "O2");
+                             });
+
+    // A bitcode compilation gives its module too. Its output file is not written; the
+    // dependency file it asks for is.
+    TEST_F(CompileTest, ModuleOfABitcodeCompilation)
+    {
+        llvm::LLVMContext context;
+        compilerlib::ModuleResult result =
+            compilerlib::compileToModule({"-emit-llvm", "-c", writeSource("unit.c", kBitcodeUnit),
+                                          "-o", path("unit.bc"), "-MD", "-MF", path("unit.d")},
+                                         context);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        ASSERT_NE(result.module, nullptr);
+        EXPECT_NE(result.module->getFunction("main"), nullptr);
+        EXPECT_FALSE(fs::exists(path("unit.bc")));
+        EXPECT_NE(readFile(path("unit.d")).find("unit.c"), std::string::npos);
+    }
+
+    TEST_F(CompileTest, ModuleNeedsAnIRCompilation)
+    {
+        llvm::LLVMContext context;
+        compilerlib::ModuleResult result = compilerlib::compileToModule(
+            {"-c", writeSource("unit.c", kBitcodeUnit), "-o", path("unit.o")}, context);
+        EXPECT_FALSE(result.success);
+        EXPECT_EQ(result.module, nullptr);
+        EXPECT_NE(result.diagnostics.find("-emit-llvm"), std::string::npos) << result.diagnostics;
+        EXPECT_FALSE(fs::exists(path("unit.o")));
+    }
+
+    TEST_F(CompileTest, ModuleReportsCompileErrors)
+    {
+        llvm::LLVMContext context;
+        compilerlib::ModuleResult result = compilerlib::compileToModule(
+            {"-S", "-emit-llvm", writeSource("broken.c", "int main(void) { return missing; }\n")},
+            context);
+        EXPECT_FALSE(result.success);
+        EXPECT_EQ(result.module, nullptr);
+        EXPECT_NE(result.diagnostics.find("missing"), std::string::npos) << result.diagnostics;
+    }
+
+    // Code generation names the values as -f[no-]discard-value-names asks, and the context
+    // keeps its own setting, which applies to the modules read into it later.
+    TEST_F(CompileTest, ModuleLeavesTheValueNamesSettingOfTheContext)
+    {
+        const std::string source = writeSource("unit.c", kBitcodeUnit);
+        for (bool discard : {false, true})
+        {
+            llvm::LLVMContext context;
+            context.setDiscardValueNames(discard);
+            for (bool names : {false, true})
+            {
+                compilerlib::ModuleResult result = compilerlib::compileToModule(
+                    {names ? "-fno-discard-value-names" : "-fdiscard-value-names", "-S",
+                     "-emit-llvm", source},
+                    context);
+                ASSERT_TRUE(result.success) << result.diagnostics;
+                EXPECT_EQ(printed(*result.module).find("%call ") != std::string::npos, names);
+#if LLVM_VERSION_MAJOR < 17
+                // LLVM 16 could not destroy the module's named values once the context
+                // discards names again: the context keeps them.
+                EXPECT_EQ(context.shouldDiscardValueNames(), discard && !names);
+#else
+                EXPECT_EQ(context.shouldDiscardValueNames(), discard);
+#endif
+            }
+        }
+    }
+
+    // A diagnostic handler of the host, which counts what the context reports to it.
+    class CountingDiagnosticHandler final : public llvm::DiagnosticHandler
+    {
+      public:
+        explicit CountingDiagnosticHandler(int& reported) : reported_(reported) {}
+
+        bool handleDiagnostics(const llvm::DiagnosticInfo&) override
+        {
+            ++reported_;
+            return true;
+        }
+
+      private:
+        int& reported_;
+    };
+
+    // The diagnostic handler of the context is the host's. Clang's backend replaces it for
+    // the time it runs, with one that refers to the compilation, and returns without putting
+    // the host's back when it cannot set up the optimization record: compileToModule does.
+    class ModuleDiagnosticHandlerTest : public CompileTest
+    {
+      protected:
+        void SetUp() override
+        {
+            CompileTest::SetUp();
+            auto handler = std::make_unique<CountingDiagnosticHandler>(reported_);
+            host_ = handler.get();
+            context_.setDiagnosticHandler(std::move(handler));
+        }
+
+        // The context has the host's handler, and reports to it.
+        void expectTheHostHandler()
+        {
+            ASSERT_EQ(context_.getDiagHandlerPtr(), host_);
+            const int before = reported_;
+            context_.emitError("reported to the host");
+            EXPECT_EQ(reported_, before + 1);
+        }
+
+        // A compilation that `failing` arguments make fail in Clang's backend leaves the
+        // host's handler, and the context then takes another compilation.
+        void expectTheHostHandlerAfter(const std::vector<std::string>& failing,
+                                       const char* diagnostic, bool instrument = false)
+        {
+            const std::string source = writeSource("unit.c", kBitcodeUnit);
+            std::vector<std::string> args{"-O2", "-S", "-emit-llvm", source};
+            args.insert(args.end(), failing.begin(), failing.end());
+            compilerlib::ModuleResult failed =
+                compilerlib::compileToModule(args, context_, instrument);
+            EXPECT_FALSE(failed.success);
+            EXPECT_EQ(failed.module, nullptr);
+            EXPECT_NE(failed.diagnostics.find(diagnostic), std::string::npos) << failed.diagnostics;
+            EXPECT_EQ(reported_, 0) << "the compilation reported to the host's handler";
+            ASSERT_NO_FATAL_FAILURE(expectTheHostHandler());
+
+            compilerlib::ModuleResult result = compilerlib::compileToModule(
+                {"-O2", "-S", "-emit-llvm", source}, context_, instrument);
+            EXPECT_TRUE(result.success) << result.diagnostics;
+            EXPECT_NE(result.module, nullptr);
+            expectTheHostHandler();
+        }
+
+        // A record file in a directory that does not exist.
+        std::vector<std::string> recordThatCannotBeOpened() const
+        {
+            return {"-fsave-optimization-record",
+                    "-foptimization-record-file=" + path("missing/unit.opt.yaml")};
+        }
+
+        int reported_ = 0;
+        llvm::LLVMContext context_;
+        const llvm::DiagnosticHandler* host_ = nullptr;
+    };
+
+    TEST_F(ModuleDiagnosticHandlerTest, IsTheHostsAfterACompilation)
+    {
+        compilerlib::ModuleResult result = compilerlib::compileToModule(
+            {"-O2", "-S", "-emit-llvm", writeSource("unit.c", kBitcodeUnit)}, context_);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        expectTheHostHandler();
+    }
+
+    TEST_F(ModuleDiagnosticHandlerTest, IsTheHostsAfterARecordFileThatCannotBeOpened)
+    {
+        expectTheHostHandlerAfter(recordThatCannotBeOpened(), "unit.opt.yaml");
+    }
+
+    TEST_F(ModuleDiagnosticHandlerTest, IsTheHostsAfterAnUnknownRecordFormat)
+    {
+        expectTheHostHandlerAfter({"-fsave-optimization-record=unknown"}, "unknown");
+    }
+
+    // Instrumented, compilerlib sets up the record itself, after Clang's frontend.
+    TEST_F(ModuleDiagnosticHandlerTest, IsTheHostsAfterAnInstrumentedCompilationThatFails)
+    {
+        expectTheHostHandlerAfter(recordThatCannotBeOpened(), "unit.opt.yaml",
+                                  /*instrument=*/true);
+    }
+
+    // The other way Clang's backend returns early: a module it has to link in does not
+    // link, here one that defines the unit's symbols again.
+    TEST_F(ModuleDiagnosticHandlerTest, IsTheHostsAfterAModuleThatCannotBeLinkedIn)
+    {
+        const std::string again = path("again.bc");
+        compilerlib::CompileResult bitcode = compilerlib::compile(
+            {"-c", "-emit-llvm", writeSource("again.c", kBitcodeUnit), "-o", again},
+            compilerlib::OutputMode::ToFile);
+        ASSERT_TRUE(bitcode.success) << bitcode.diagnostics;
+        expectTheHostHandlerAfter({"-Xclang", "-mlink-bitcode-file", "-Xclang", again},
+                                  "multiply defined");
+    }
+
+    // Compiles a source that crashes Clang, once the host enabled crash recovery, in a context
+    // of the host, which keeps value names and has a diagnostic handler. Exits with 0 when the
+    // compilation failed and left the context as the host set it.
+    [[noreturn]] void crashInAModuleCompilationAndExit(const std::string& source)
+    {
+        llvm::CrashRecoveryContext::Enable();
+        int reported = 0;
+        llvm::LLVMContext context;
+        auto handler = std::make_unique<CountingDiagnosticHandler>(reported);
+        const llvm::DiagnosticHandler* host = handler.get();
+        context.setDiagnosticHandler(std::move(handler));
+        const compilerlib::ModuleResult result = compilerlib::compileToModule(
+            {"-fdiscard-value-names", "-S", "-emit-llvm", source}, context);
+        if (result.success)
+            std::_Exit(1);
+        if (context.shouldDiscardValueNames())
+            std::_Exit(2);
+        if (context.getDiagHandlerPtr() != host)
+            std::_Exit(3);
+        context.emitError("reported to the host");
+        std::_Exit(reported == 1 ? 0 : 4);
+    }
+
+    // A crash that the host recovers leaves the job where it stood, and nothing the job
+    // would have run on its way out runs: the context is restored all the same.
+    TEST_F(CompileTest, ModuleLeavesTheContextOfTheHostAfterARecoveredCrash)
+    {
+        const std::string source = writeSource("crash.c", "#pragma clang __debug crash\n");
+        EXPECT_EXIT(crashInAModuleCompilationAndExit(source), ::testing::ExitedWithCode(0), "");
     }
 
     // Like clang, a failed compilation leaves no output behind: neither a partial object
@@ -2211,6 +2505,48 @@ int once(int x) { return x; }
                             failures[i] = result.diagnostics;
                         else if (result.llvmIR.find(expected) == std::string::npos)
                             failures[i] = "no \"" + expected + "\" in\n" + result.llvmIR;
+                    }
+                });
+        }
+        for (std::thread& thread : threads)
+            thread.join();
+        const fs::path directoryAfter = fs::current_path();
+        fs::current_path(processDirectory);
+        for (int i = 0; i < kThreads; ++i)
+            EXPECT_EQ(failures[i], "") << "thread " << i;
+        EXPECT_EQ(directoryAfter, processDirectory);
+    }
+
+    // compileToModule too, each thread with a context of its own: each module comes from
+    // its own project, and the process's working directory stays where it is.
+    TEST_P(ConcurrentCompilationTest, EachModuleComesFromItsOwnWorkingDirectory)
+    {
+        constexpr int kThreads = 8;
+        constexpr int kRounds = 3;
+        std::vector<std::string> projects;
+        for (int i = 0; i < kThreads; ++i)
+            projects.push_back(writeProject("project" + std::to_string(i), 100 + i));
+        const fs::path processDirectory = fs::current_path();
+
+        std::vector<std::string> failures(kThreads);
+        std::vector<std::thread> threads;
+        for (int i = 0; i < kThreads; ++i)
+        {
+            threads.emplace_back(
+                [&, i]
+                {
+                    const std::string expected = "ret i32 " + std::to_string(100 + i);
+                    llvm::LLVMContext context;
+                    for (int round = 0; round < kRounds && failures[i].empty(); ++round)
+                    {
+                        compilerlib::ModuleResult result =
+                            compilerlib::compileToModule({"-working-directory", projects[i],
+                                                          "-Iinc", "-S", "-emit-llvm", "unit.c"},
+                                                         context, /*instrument=*/GetParam());
+                        if (!result.success)
+                            failures[i] = result.diagnostics;
+                        else if (printed(*result.module).find(expected) == std::string::npos)
+                            failures[i] = "no \"" + expected + "\" in\n" + printed(*result.module);
                     }
                 });
         }
