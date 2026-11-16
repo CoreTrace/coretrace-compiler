@@ -2155,6 +2155,35 @@ int once(int x) { return x; }
         }
     }
 
+    // An error of the driver's, reported while it builds the compilation: no job runs, as
+    // with clang, whatever runs the jobs. Here, a working directory that does not exist, and a
+    // profile that does not either.
+    class DriverErrorTest : public CompileTest
+    {
+      protected:
+        std::vector<std::string> inAMissingDirectory(std::vector<std::string> args) const
+        {
+            args.insert(args.begin(), {"-working-directory", path("missing")});
+            args.push_back(writeSource("unit.c", "int value(void) { return 42; }\n"));
+            return args;
+        }
+
+        static void expectTheDriversError(const std::string& diagnostics)
+        {
+            EXPECT_NE(diagnostics.find("unable to set working directory"), std::string::npos)
+                << diagnostics;
+        }
+    };
+
+    TEST_F(DriverErrorTest, FailsACompilationToMemory)
+    {
+        const compilerlib::CompileResult result = compilerlib::compile(
+            inAMissingDirectory({"-S", "-emit-llvm"}), compilerlib::OutputMode::ToMemory);
+        EXPECT_FALSE(result.success);
+        EXPECT_EQ(result.llvmIR, "");
+        expectTheDriversError(result.diagnostics);
+    }
+
     // -working-directory, as clang reads it: the sources, the include directories and the
     // files a compilation writes are relative to it.
     class WorkingDirectoryTest : public CompileTest
