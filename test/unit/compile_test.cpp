@@ -5,6 +5,7 @@
 #include <llvm/AsmParser/Parser.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/Attributes.h>
+#include <llvm/IR/DiagnosticHandler.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -834,6 +835,58 @@ int sum(int count)
 #endif
             }
         }
+    }
+
+    // A diagnostic handler of the host, which counts what the context reports to it.
+    class CountingDiagnosticHandler final : public llvm::DiagnosticHandler
+    {
+      public:
+        explicit CountingDiagnosticHandler(int& reported) : reported_(reported) {}
+
+        bool handleDiagnostics(const llvm::DiagnosticInfo&) override
+        {
+            ++reported_;
+            return true;
+        }
+
+      private:
+        int& reported_;
+    };
+
+    // The diagnostic handler of the context is the host's. Clang's backend replaces it for
+    // the time it runs, with one that refers to the compilation, and returns without putting
+    // the host's back when it cannot set up the optimization record: compileToModule does.
+    class ModuleDiagnosticHandlerTest : public CompileTest
+    {
+      protected:
+        void SetUp() override
+        {
+            CompileTest::SetUp();
+            auto handler = std::make_unique<CountingDiagnosticHandler>(reported_);
+            host_ = handler.get();
+            context_.setDiagnosticHandler(std::move(handler));
+        }
+
+        // The context has the host's handler, and reports to it.
+        void expectTheHostHandler()
+        {
+            ASSERT_EQ(context_.getDiagHandlerPtr(), host_);
+            const int before = reported_;
+            context_.emitError("reported to the host");
+            EXPECT_EQ(reported_, before + 1);
+        }
+
+        int reported_ = 0;
+        llvm::LLVMContext context_;
+        const llvm::DiagnosticHandler* host_ = nullptr;
+    };
+
+    TEST_F(ModuleDiagnosticHandlerTest, IsTheHostsAfterACompilation)
+    {
+        compilerlib::ModuleResult result = compilerlib::compileToModule(
+            {"-O2", "-S", "-emit-llvm", writeSource("unit.c", kBitcodeUnit)}, context_);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        expectTheHostHandler();
     }
 
     // Like clang, a failed compilation leaves no output behind: neither a partial object
