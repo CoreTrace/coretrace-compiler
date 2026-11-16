@@ -277,6 +277,31 @@ namespace
         EXPECT_EQ(args, before);
     }
 
+    // The driver looks at the path of -ftime-trace=<path>, to tell a directory from a file.
+    TEST(ResolveDriverOutputPaths, ResolvesTheTimeTrace)
+    {
+        Args args{"-ftime-trace=traces", "-c", "a.c"};
+        compilerlib::resolveDriverOutputPaths(args, jobDirectory());
+        EXPECT_EQ(args, (Args{"-ftime-trace=" + inJobDirectory("traces"), "-c", "a.c"}));
+    }
+
+    TEST(ResolveDriverOutputPaths, LeavesATimeTraceWithoutARelativePathAlone)
+    {
+        Args args{"-ftime-trace", "-ftime-trace=" + inJobDirectory("traces"), "-c", "a.c"};
+        const Args before = args;
+        compilerlib::resolveDriverOutputPaths(args, jobDirectory());
+        EXPECT_EQ(args, before);
+    }
+
+    // "-" is a standard stream, to the driver as to a job.
+    TEST(ResolveDriverOutputPaths, LeavesAStandardStreamAlone)
+    {
+        Args args{"-MJ", "-", "-ftime-trace=-", "-c", "a.c"};
+        const Args before = args;
+        compilerlib::resolveDriverOutputPaths(args, jobDirectory());
+        EXPECT_EQ(args, before);
+    }
+
     TEST(MergeDiagnostics, JoinsWithASingleNewline)
     {
         EXPECT_EQ(compilerlib::mergeDiagnostics("driver", "cc1"), "driver\ncc1");
