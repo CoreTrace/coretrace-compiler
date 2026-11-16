@@ -22,7 +22,9 @@ pull request.
   to read it back. Its arguments are those of an LLVM IR compilation; the output file is not
   written, and the other files the arguments ask for, such as a dependency file, are. The
   context keeps its own setting of value names, except with LLVM 16, where a context that
-  discards them keeps them after a compilation that names values (#265, #263).
+  discards them keeps them after a compilation that names values. It keeps its diagnostic
+  handler too, which the compilation does not call, whether the compilation succeeded, failed,
+  or crashed and was recovered (#265, #263).
 
 ### Fixes
 
