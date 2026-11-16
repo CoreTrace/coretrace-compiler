@@ -184,6 +184,7 @@ namespace compilerlib
             "-stack-usage-file",
             "-serialize-diagnostic-file",
             "-dependency-dot",
+            "-diagnostic-log-file",
         };
         static constexpr llvm::StringLiteral kJoined[] = {
             "-ftime-trace=", "-stats-file=", "-fmodules-cache-path="};

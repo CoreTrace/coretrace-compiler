@@ -54,8 +54,8 @@ namespace compilerlib
 
     // The arguments of a -cc1 job, with the relative path of each file it writes made absolute
     // against `directory`: its output, dependency file and graph, header list, optimization
-    // record, split DWARF, stack usage, serialized diagnostics, time trace, statistics and
-    // module cache. A job resolves the files it reads, and its output, against its
+    // record, split DWARF, stack usage, serialized diagnostics and their log, time trace,
+    // statistics and module cache. A job resolves the files it reads, and its output, against its
     // -working-directory, but the other files it writes against the process's working
     // directory, which clang itself moves to that directory first. `save` keeps a new argument
     // alive as long as the job.
