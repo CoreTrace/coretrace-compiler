@@ -1949,6 +1949,24 @@ int once(int x) { return x; }
         EXPECT_TRUE(fs::exists(project / "unit.o"));
     }
 
+    // The driver tells whether -ftime-trace=<path> names a file or a directory, to name the
+    // trace after the output in a directory: a directory of the compilation's.
+    TEST_P(WorkingDirectoryOutputTest, TimeTraceIsWrittenInADirectoryOfTheDirectory)
+    {
+        const fs::path project = writeProject("project", 42);
+        fs::create_directories(project / "traces");
+        const fs::path processDirectory = fs::current_path();
+        compilerlib::CompileResult result =
+            compilerlib::compile({"-working-directory", project.string(), "-Iinc", "-c", "unit.c",
+                                  "-o", "unit.o", "-ftime-trace=traces"},
+                                 compilerlib::OutputMode::ToFile, /*instrument=*/GetParam());
+        fs::current_path(processDirectory);
+        ASSERT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(readFile((project / "traces" / "unit.json").string()).find("traceEvents"),
+                  std::string::npos)
+            << result.diagnostics;
+    }
+
     INSTANTIATE_TEST_SUITE_P(Instrumentation, WorkingDirectoryOutputTest, ::testing::Bool(),
                              [](const ::testing::TestParamInfo<bool>& info)
                              { return info.param ? "Instrumented" : "Plain"; });
