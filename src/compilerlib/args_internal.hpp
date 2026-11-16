@@ -70,6 +70,13 @@ namespace compilerlib
     // `-ftime-trace=<path>`, which the driver looks at there to tell a directory from a file.
     void resolveDriverOutputPaths(std::vector<std::string>& args, llvm::StringRef directory);
 
+    // Rewrites each option of a driver command line that names what the driver itself looks
+    // at, with a relative path made absolute against `directory`: the profiles of
+    // `-fprofile-use=`, `-fprofile-instr-use=` and `-fprofile-sample-use=`, and the file of
+    // `-fbuild-session-file=`. The driver looks at them through the process's file system,
+    // which clang itself moves to that directory first.
+    void resolveDriverInputPaths(std::vector<std::string>& args, llvm::StringRef directory);
+
     // Appends `extra` to `out` with exactly one newline between them; no-op when empty.
     void appendDiagnostics(std::string& out, const std::string& extra);
 

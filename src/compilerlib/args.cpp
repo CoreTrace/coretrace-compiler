@@ -295,6 +295,15 @@ namespace compilerlib
                                   clang_compat::options::OPT_ftime_trace_EQ});
     }
 
+    void resolveDriverInputPaths(std::vector<std::string>& args, llvm::StringRef directory)
+    {
+        resolveDriverOptionPaths(args, directory,
+                                 {clang_compat::options::OPT_fprofile_use_EQ,
+                                  clang_compat::options::OPT_fprofile_instr_use_EQ,
+                                  clang_compat::options::OPT_fprofile_sample_use_EQ,
+                                  clang_compat::options::OPT_fbuild_session_file});
+    }
+
     void appendDiagnostics(std::string& out, const std::string& extra)
     {
         if (extra.empty())
