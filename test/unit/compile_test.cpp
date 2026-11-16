@@ -2193,6 +2193,17 @@ int once(int x) { return x; }
         expectTheDriversError(result.diagnostics);
     }
 
+    TEST_F(DriverErrorTest, FailsAnInstrumentedCompilation)
+    {
+        const std::string object = path("unit.o");
+        const compilerlib::CompileResult result =
+            compilerlib::compile(inAMissingDirectory({"-c", "-o", object}),
+                                 compilerlib::OutputMode::ToFile, /*instrument=*/true);
+        EXPECT_FALSE(result.success);
+        EXPECT_FALSE(fs::exists(object));
+        expectTheDriversError(result.diagnostics);
+    }
+
     // -working-directory, as clang reads it: the sources, the include directories and the
     // files a compilation writes are relative to it.
     class WorkingDirectoryTest : public CompileTest
