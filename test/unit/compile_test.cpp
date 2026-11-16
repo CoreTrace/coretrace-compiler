@@ -11,6 +11,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Object/ObjectFile.h>
+#include <llvm/Support/CrashRecoveryContext.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/JSON.h>
 #include <llvm/Support/SourceMgr.h>
@@ -947,6 +948,37 @@ int sum(int count)
         ASSERT_TRUE(bitcode.success) << bitcode.diagnostics;
         expectTheHostHandlerAfter({"-Xclang", "-mlink-bitcode-file", "-Xclang", again},
                                   "multiply defined");
+    }
+
+    // Compiles a source that crashes Clang, once the host enabled crash recovery, in a context
+    // of the host, which keeps value names and has a diagnostic handler. Exits with 0 when the
+    // compilation failed and left the context as the host set it.
+    [[noreturn]] void crashInAModuleCompilationAndExit(const std::string& source)
+    {
+        llvm::CrashRecoveryContext::Enable();
+        int reported = 0;
+        llvm::LLVMContext context;
+        auto handler = std::make_unique<CountingDiagnosticHandler>(reported);
+        const llvm::DiagnosticHandler* host = handler.get();
+        context.setDiagnosticHandler(std::move(handler));
+        const compilerlib::ModuleResult result = compilerlib::compileToModule(
+            {"-fdiscard-value-names", "-S", "-emit-llvm", source}, context);
+        if (result.success)
+            std::_Exit(1);
+        if (context.shouldDiscardValueNames())
+            std::_Exit(2);
+        if (context.getDiagHandlerPtr() != host)
+            std::_Exit(3);
+        context.emitError("reported to the host");
+        std::_Exit(reported == 1 ? 0 : 4);
+    }
+
+    // A crash that the host recovers leaves the job where it stood, and nothing the job
+    // would have run on its way out runs: the context is restored all the same.
+    TEST_F(CompileTest, ModuleLeavesTheContextOfTheHostAfterARecoveredCrash)
+    {
+        const std::string source = writeSource("crash.c", "#pragma clang __debug crash\n");
+        EXPECT_EXIT(crashInAModuleCompilationAndExit(source), ::testing::ExitedWithCode(0), "");
     }
 
     // Like clang, a failed compilation leaves no output behind: neither a partial object
