@@ -936,6 +936,19 @@ int sum(int count)
                                   /*instrument=*/true);
     }
 
+    // The other way Clang's backend returns early: a module it has to link in does not
+    // link, here one that defines the unit's symbols again.
+    TEST_F(ModuleDiagnosticHandlerTest, IsTheHostsAfterAModuleThatCannotBeLinkedIn)
+    {
+        const std::string again = path("again.bc");
+        compilerlib::CompileResult bitcode = compilerlib::compile(
+            {"-c", "-emit-llvm", writeSource("again.c", kBitcodeUnit), "-o", again},
+            compilerlib::OutputMode::ToFile);
+        ASSERT_TRUE(bitcode.success) << bitcode.diagnostics;
+        expectTheHostHandlerAfter({"-Xclang", "-mlink-bitcode-file", "-Xclang", again},
+                                  "multiply defined");
+    }
+
     // Like clang, a failed compilation leaves no output behind: neither a partial object
     // nor an earlier one that would look up to date.
     class FailedCompilationTest : public CompileTest,
