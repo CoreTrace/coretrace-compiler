@@ -205,6 +205,9 @@ pull request.
   in a block that no path reaches before the return of that block (#254).
 - `scripts/bench/instrument_time.py` also measures how the time of instrumentation grows with the
   allocations of a function released before its return (#254, #252).
+- A test of the allocation pass checks that an allocation made in the body of a do-while loop is
+  released before its function returns, and that the release frees the block of the last
+  iteration (#260, #257).
 
 ### Documentation
 
