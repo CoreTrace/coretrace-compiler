@@ -712,7 +712,10 @@ namespace compilerlib
             CompileResult runToModule(const clang::driver::Command& job)
             {
                 CompileResult result;
-                if (!runOnClangStack([&] { result = runToModuleOnThisThread(job); }))
+                // On this frame, which the job leaves standing whatever happens to it, a
+                // crash that the host recovers included.
+                ModuleContextScope scope(*ctx_.module_context);
+                if (!runOnClangStack([&] { result = runToModuleOnThisThread(job, scope); }))
                 {
                     ctx_.module.reset();
                     return {false, "compilation crashed", {}};
@@ -721,21 +724,26 @@ namespace compilerlib
             }
 
           private:
-            // What code generation changes in compileToModule's context, which the host
-            // keeps: whether value names are discarded, which would apply to the modules the
-            // host reads into it later, and the optimization record of
-            // -fsave-optimization-record, whose file is closed once the job ends.
+            // What a job changes in compileToModule's context, which the host keeps: whether
+            // value names are discarded, which would apply to the modules the host reads into
+            // it later, and the optimization record of -fsave-optimization-record, whose file
+            // is closed once the job ends.
             class ModuleContextScope
             {
               public:
-                ModuleContextScope(llvm::LLVMContext& context, bool optimizationRecord)
-                    : context_(context), discardValueNames_(context.shouldDiscardValueNames()),
-                      optimizationRecord_(optimizationRecord)
+                explicit ModuleContextScope(llvm::LLVMContext& context)
+                    : context_(context), discardValueNames_(context.shouldDiscardValueNames())
                 {
                 }
 
                 ModuleContextScope(const ModuleContextScope&) = delete;
                 ModuleContextScope& operator=(const ModuleContextScope&) = delete;
+
+                // The job's frontend action sets up an optimization record on the context.
+                void expectOptimizationRecord()
+                {
+                    optimizationRecord_ = true;
+                }
 
                 ~ModuleContextScope()
                 {
@@ -754,10 +762,11 @@ namespace compilerlib
               private:
                 llvm::LLVMContext& context_;
                 bool discardValueNames_;
-                bool optimizationRecord_;
+                bool optimizationRecord_ = false;
             };
 
-            CompileResult runToModuleOnThisThread(const clang::driver::Command& job)
+            CompileResult runToModuleOnThisThread(const clang::driver::Command& job,
+                                                  ModuleContextScope& scope)
             {
                 auto ci = makeCompilerInstance(job.getArguments());
                 if (!ci)
@@ -784,17 +793,13 @@ namespace compilerlib
                     ctx_.module = std::move(module);
                     return true;
                 };
-                bool ok = false;
-                {
-                    ModuleContextScope scope(*ctx_.module_context,
-                                             !ci->getCodeGenOpts().OptRecordFile.empty());
-                    ok = ctx_.runtimeConfig.optnone_enabled
-                             ? runCodegenWithModule<
-                                   frontend::OptNoneAction<InstrumentedCodegenAction>>(
-                                   *ci, keepModule, error)
-                             : runCodegenWithModule<InstrumentedCodegenAction>(*ci, keepModule,
-                                                                               error);
-                }
+                if (!ci->getCodeGenOpts().OptRecordFile.empty())
+                    scope.expectOptimizationRecord();
+                const bool ok =
+                    ctx_.runtimeConfig.optnone_enabled
+                        ? runCodegenWithModule<frontend::OptNoneAction<InstrumentedCodegenAction>>(
+                              *ci, keepModule, error)
+                        : runCodegenWithModule<InstrumentedCodegenAction>(*ci, keepModule, error);
                 if (!ok)
                 {
                     ctx_.module.reset();
