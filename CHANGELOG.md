@@ -223,7 +223,8 @@ pull request.
   source; that the context keeps its setting of value names; and that it keeps its diagnostic
   handler, reports to it and takes another compilation after one that Clang's backend ends
   early, on an optimization record it cannot set up or a module it cannot link in, and after a
-  crash that the host recovers (#265, #263).
+  crash that the host recovers; and that eight threads, each with a context and a working
+  directory of its own, each get the module of their own sources (#265, #263).
 - The Docker tests build and test the image in a job per architecture, each on a runner of its
   own architecture: arm64 on `ubuntu-24.04-arm` instead of under QEMU on an amd64 runner. Under
   QEMU's user-mode emulation, `sbrk()` failed now and then in the sbrk test of the full
