@@ -161,6 +161,15 @@ namespace compilerlib
         return last;
     }
 
+    std::string resolveInDirectory(llvm::StringRef path, llvm::StringRef directory)
+    {
+        if (path.empty() || path == "-" || llvm::sys::path::is_absolute(path))
+            return path.str();
+        llvm::SmallString<256> resolved(directory);
+        llvm::sys::path::append(resolved, path);
+        return resolved.str().str();
+    }
+
     llvm::opt::ArgStringList
     resolveCc1OutputPaths(const llvm::opt::ArgStringList& args, llvm::StringRef directory,
                           llvm::function_ref<const char*(llvm::StringRef)> save)
@@ -179,17 +188,13 @@ namespace compilerlib
         static constexpr llvm::StringLiteral kJoined[] = {
             "-ftime-trace=", "-stats-file=", "-fmodules-cache-path="};
 
-        // nullptr when `path` needs no change: absolute, or "-" for a standard stream. A
-        // relative path is appended to the directory, as clang's FileManager does.
+        // nullptr when `path` needs no change.
         auto absolute = [&](llvm::StringRef prefix, llvm::StringRef path) -> const char*
         {
-            if (path.empty() || path == "-" || llvm::sys::path::is_absolute(path))
+            const std::string resolved = resolveInDirectory(path, directory);
+            if (resolved == path)
                 return nullptr;
-            llvm::SmallString<256> resolved(directory);
-            llvm::sys::path::append(resolved, path);
-            std::string argument = prefix.str();
-            argument += resolved.str();
-            return save(argument);
+            return save(prefix.str() + resolved);
         };
 
         llvm::opt::ArgStringList out;

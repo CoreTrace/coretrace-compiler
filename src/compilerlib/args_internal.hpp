@@ -48,6 +48,10 @@ namespace compilerlib
     CT_NODISCARD std::string normalizeWorkingDirectoryArgs(std::vector<std::string>& args,
                                                            llvm::vfs::FileSystem& fs);
 
+    // `path` made absolute against `directory` when it is relative, as clang's FileManager
+    // does; as given when it is absolute, empty, or "-", a standard stream.
+    CT_NODISCARD std::string resolveInDirectory(llvm::StringRef path, llvm::StringRef directory);
+
     // The arguments of a -cc1 job, with the relative path of each file it writes made absolute
     // against `directory`: its output, dependency file and graph, header list, optimization
     // record, split DWARF, stack usage, serialized diagnostics, time trace, statistics and
