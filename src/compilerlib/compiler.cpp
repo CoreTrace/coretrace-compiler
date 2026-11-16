@@ -1553,6 +1553,12 @@ namespace compilerlib
             if (!validateJobPlan(plan, ctx.mode, error))
                 return {false, std::move(error), {}};
 
+            // The driver reported an error as it built the compilation, such as a working
+            // directory it could not move to. clang runs no job then, in
+            // Driver::ExecuteCompilation, which the modes below stand in for (#264).
+            if (diags->hasErrorOccurred())
+                return {false, std::move(ctx.dc.message), {}};
+
             if (!ctx.dc.message.empty())
             {
                 ctx.driver_diagnostics = std::move(ctx.dc.message);
