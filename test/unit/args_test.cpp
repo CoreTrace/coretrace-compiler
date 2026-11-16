@@ -309,6 +309,13 @@ namespace
         EXPECT_EQ(args, before);
     }
 
+    TEST(ResolveCc1OutputPaths, ResolvesTheInstrumentationProfile)
+    {
+        const Args args{"-cc1", "-fprofile-instrument-use-path=default.profdata"};
+        EXPECT_EQ(resolveOutputs(args), (Args{"-cc1", "-fprofile-instrument-use-path=" +
+                                                          inJobDirectory("default.profdata")}));
+    }
+
     TEST(ResolveDriverInputPaths, ResolvesTheFilesTheDriverLooksAt)
     {
         Args args{"-fprofile-use=profiles",
