@@ -223,59 +223,76 @@ namespace compilerlib
         return out;
     }
 
+    namespace
+    {
+        // Rewrites each of `options` in a driver command line, with a relative path made
+        // absolute against `directory`: a joined option in its one argument, the others
+        // in the two-argument form.
+        void resolveDriverOptionPaths(std::vector<std::string>& args, llvm::StringRef directory,
+                                      llvm::ArrayRef<llvm::opt::OptSpecifier> options)
+        {
+            std::vector<const char*> argv;
+            argv.reserve(args.size());
+            for (const auto& arg : args)
+                argv.push_back(arg.c_str());
+            unsigned missingIndex = 0;
+            unsigned missingCount = 0;
+            // The driver's own parse, as for -working-directory.
+            const llvm::opt::InputArgList parsed =
+                clang_compat::driverOptTable().ParseArgs(argv, missingIndex, missingCount);
+
+            // Index of each option, either spelling, with the arguments that replace it: its
+            // spelling and its absolute path.
+            std::map<unsigned, std::vector<std::string>> resolved;
+            for (const llvm::opt::Arg* arg : parsed)
+            {
+                if (llvm::none_of(options, [&](llvm::opt::OptSpecifier option)
+                                  { return arg->getOption().matches(option); }))
+                    continue;
+                const llvm::StringRef value = arg->getValue();
+                std::string path = resolveInDirectory(value, directory);
+                if (path == value)
+                    continue;
+                // A joined option keeps the spelling it was given, which may be another name
+                // of the option: its path ends the argument.
+                if (arg->getOption().getKind() == llvm::opt::Option::JoinedClass)
+                {
+                    const std::string& given = args[arg->getIndex()];
+                    resolved[arg->getIndex()] = {given.substr(0, given.size() - value.size()) +
+                                                 path};
+                }
+                else
+                    resolved[arg->getIndex()] = {arg->getSpelling().str(), std::move(path)};
+            }
+            if (resolved.empty())
+                return;
+
+            std::vector<std::string> out;
+            out.reserve(args.size() + resolved.size());
+            for (unsigned i = 0; i < args.size(); ++i)
+            {
+                auto found = resolved.find(i);
+                if (found == resolved.end())
+                {
+                    out.push_back(std::move(args[i]));
+                    continue;
+                }
+                // The separate spelling has its path in the next argument.
+                if (args[i] == found->second.front())
+                    ++i;
+                for (std::string& argument : found->second)
+                    out.push_back(std::move(argument));
+            }
+            args.swap(out);
+        }
+    } // namespace
+
     void resolveDriverOutputPaths(std::vector<std::string>& args, llvm::StringRef directory)
     {
-        std::vector<const char*> argv;
-        argv.reserve(args.size());
-        for (const auto& arg : args)
-            argv.push_back(arg.c_str());
-        unsigned missingIndex = 0;
-        unsigned missingCount = 0;
-        // The driver's own parse, as for -working-directory.
-        const llvm::opt::InputArgList parsed =
-            clang_compat::driverOptTable().ParseArgs(argv, missingIndex, missingCount);
-
-        // Index of each option, either spelling, with the arguments that replace it: its
-        // spelling and its absolute path.
-        std::map<unsigned, std::vector<std::string>> resolved;
-        for (const llvm::opt::Arg* arg : parsed.filtered(
-                 clang_compat::options::OPT_MJ, clang_compat::options::OPT_gen_cdb_fragment_path,
-                 clang_compat::options::OPT_ftime_trace_EQ))
-        {
-            const llvm::StringRef value = arg->getValue();
-            std::string path = resolveInDirectory(value, directory);
-            if (path == value)
-                continue;
-            // A joined option keeps the spelling it was given, which may be another name
-            // of the option: its path ends the argument.
-            if (arg->getOption().getKind() == llvm::opt::Option::JoinedClass)
-            {
-                const std::string& given = args[arg->getIndex()];
-                resolved[arg->getIndex()] = {given.substr(0, given.size() - value.size()) + path};
-            }
-            else
-                resolved[arg->getIndex()] = {arg->getSpelling().str(), std::move(path)};
-        }
-        if (resolved.empty())
-            return;
-
-        std::vector<std::string> out;
-        out.reserve(args.size() + resolved.size());
-        for (unsigned i = 0; i < args.size(); ++i)
-        {
-            auto found = resolved.find(i);
-            if (found == resolved.end())
-            {
-                out.push_back(std::move(args[i]));
-                continue;
-            }
-            // The separate spelling has its path in the next argument.
-            if (args[i] == found->second.front())
-                ++i;
-            for (std::string& argument : found->second)
-                out.push_back(std::move(argument));
-        }
-        args.swap(out);
+        resolveDriverOptionPaths(args, directory,
+                                 {clang_compat::options::OPT_MJ,
+                                  clang_compat::options::OPT_gen_cdb_fragment_path,
+                                  clang_compat::options::OPT_ftime_trace_EQ});
     }
 
     void appendDiagnostics(std::string& out, const std::string& extra)
