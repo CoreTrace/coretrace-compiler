@@ -187,7 +187,8 @@ namespace compilerlib
             "-diagnostic-log-file",
         };
         static constexpr llvm::StringLiteral kJoined[] = {
-            "-ftime-trace=", "-stats-file=", "-fmodules-cache-path="};
+            "-ftime-trace=", "-stats-file=", "-fmodules-cache-path=",
+            "-fprofile-instrument-use-path="};
 
         // nullptr when `path` needs no change.
         auto absolute = [&](llvm::StringRef prefix, llvm::StringRef path) -> const char*

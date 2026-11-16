@@ -57,8 +57,9 @@ namespace compilerlib
     // record, split DWARF, stack usage, serialized diagnostics and their log, time trace,
     // statistics and module cache. A job resolves the files it reads, and its output, against its
     // -working-directory, but the other files it writes against the process's working
-    // directory, which clang itself moves to that directory first. `save` keeps a new argument
-    // alive as long as the job.
+    // directory, which clang itself moves to that directory first. So it does for the one file
+    // it reads while it parses its options, the instrumentation profile. `save` keeps a new
+    // argument alive as long as the job.
     CT_NODISCARD llvm::opt::ArgStringList
     resolveCc1OutputPaths(const llvm::opt::ArgStringList& args, llvm::StringRef directory,
                           llvm::function_ref<const char*(llvm::StringRef)> save);
