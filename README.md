@@ -521,4 +521,6 @@ file is not written; the other files the arguments ask for, such as a dependency
 it does with clang, except whether value names are discarded: the context keeps its own setting,
 which applies to the modules read into it later. With LLVM 16, a context that discards names keeps
 them after a compilation that names values, since LLVM 16 cannot destroy those values in a context
-that discards names.
+that discards names. The context's diagnostic handler is set aside for the compilation, which does
+not call it, and is the context's again once `compileToModule` returns, whether the compilation
+succeeded, failed, or crashed and was recovered.
