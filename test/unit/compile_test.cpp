@@ -2225,6 +2225,20 @@ int once(int x) { return x; }
             << result.diagnostics;
     }
 
+    // A warning of the driver's is no error: the compilation gives its output, and the
+    // warning with it.
+    TEST_F(DriverErrorTest, LeavesACompilationWithADriverWarningAlone)
+    {
+        const compilerlib::CompileResult result =
+            compilerlib::compile({"-L" + path("libraries"), "-S", "-emit-llvm",
+                                  writeSource("unit.c", "int value(void) { return 42; }\n")},
+                                 compilerlib::OutputMode::ToMemory);
+        EXPECT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(result.llvmIR.find("ret i32 42"), std::string::npos);
+        EXPECT_NE(result.diagnostics.find("argument unused during compilation"), std::string::npos)
+            << result.diagnostics;
+    }
+
     // -working-directory, as clang reads it: the sources, the include directories and the
     // files a compilation writes are relative to it.
     class WorkingDirectoryTest : public CompileTest
