@@ -37,6 +37,9 @@ namespace compilerlib
     /// call it, and is the context's again once compileToModule returns: whether the
     /// compilation succeeded, failed, or crashed and was recovered.
     /// No other thread may use `context` during the compilation.
+    ///
+    /// `-working-directory` and compilations from several threads at once are as for
+    /// compile(), each compilation with a context of its own.
     CT_NODISCARD ModuleResult compileToModule(const std::vector<std::string>& args,
                                               llvm::LLVMContext& context, bool instrument = false);
 
