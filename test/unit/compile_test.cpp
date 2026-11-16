@@ -2517,6 +2517,48 @@ int once(int x) { return x; }
         EXPECT_EQ(directoryAfter, processDirectory);
     }
 
+    // compileToModule too, each thread with a context of its own: each module comes from
+    // its own project, and the process's working directory stays where it is.
+    TEST_P(ConcurrentCompilationTest, EachModuleComesFromItsOwnWorkingDirectory)
+    {
+        constexpr int kThreads = 8;
+        constexpr int kRounds = 3;
+        std::vector<std::string> projects;
+        for (int i = 0; i < kThreads; ++i)
+            projects.push_back(writeProject("project" + std::to_string(i), 100 + i));
+        const fs::path processDirectory = fs::current_path();
+
+        std::vector<std::string> failures(kThreads);
+        std::vector<std::thread> threads;
+        for (int i = 0; i < kThreads; ++i)
+        {
+            threads.emplace_back(
+                [&, i]
+                {
+                    const std::string expected = "ret i32 " + std::to_string(100 + i);
+                    llvm::LLVMContext context;
+                    for (int round = 0; round < kRounds && failures[i].empty(); ++round)
+                    {
+                        compilerlib::ModuleResult result =
+                            compilerlib::compileToModule({"-working-directory", projects[i],
+                                                          "-Iinc", "-S", "-emit-llvm", "unit.c"},
+                                                         context, /*instrument=*/GetParam());
+                        if (!result.success)
+                            failures[i] = result.diagnostics;
+                        else if (printed(*result.module).find(expected) == std::string::npos)
+                            failures[i] = "no \"" + expected + "\" in\n" + printed(*result.module);
+                    }
+                });
+        }
+        for (std::thread& thread : threads)
+            thread.join();
+        const fs::path directoryAfter = fs::current_path();
+        fs::current_path(processDirectory);
+        for (int i = 0; i < kThreads; ++i)
+            EXPECT_EQ(failures[i], "") << "thread " << i;
+        EXPECT_EQ(directoryAfter, processDirectory);
+    }
+
     INSTANTIATE_TEST_SUITE_P(Instrumentation, ConcurrentCompilationTest, ::testing::Bool(),
                              [](const ::testing::TestParamInfo<bool>& info)
                              { return info.param ? "Instrumented" : "Plain"; });
