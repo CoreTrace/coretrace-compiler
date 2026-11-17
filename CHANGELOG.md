@@ -19,9 +19,9 @@ its own, which `-working-directory` sets without moving the process, and `compil
 gives the `llvm::Module` of a compilation in a context of the host, instead of text or bitcode
 to read back. With the vtable diagnostics, the runtime no longer hangs in a child of `fork()`
 or while a library loads. On Windows, a DLL that links the runtime names its symbols, reports
-its leaks and frees its memory when it is unloaded. Instrumentation is faster at -O0: the bounds
-pass, and the releases of the allocation pass before a return, no longer take a time quadratic
-in the length of a function.
+its leaks at process exit and frees its runtime state when it is dynamically unloaded.
+Instrumentation is faster at -O0: the bounds pass, and the releases of the allocation pass before
+a return, no longer take a time quadratic in the length of a function.
 
 The `cc` options and the runtime ABI are those of 0.12.0. The compilerlib API gains
 `compilerlib/compile_module.hpp`, and `compile` keeps its signature; the declarations of
