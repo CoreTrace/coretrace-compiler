@@ -12,7 +12,7 @@ From v0.8.0 on, each release also has detailed notes on the
 [releases page](https://github.com/CoreTrace/coretrace-compiler/releases), citing every
 pull request.
 
-## v0.13.0 (2026-11-16)
+## v0.13.0 (2026-11-17)
 
 compilerlib compiles from several threads at once: each compilation has a working directory of
 its own, which `-working-directory` sets without moving the process, and `compileToModule`
