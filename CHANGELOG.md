@@ -12,7 +12,23 @@ From v0.8.0 on, each release also has detailed notes on the
 [releases page](https://github.com/CoreTrace/coretrace-compiler/releases), citing every
 pull request.
 
-## Unreleased
+## v0.13.0 (2026-11-17)
+
+compilerlib compiles from several threads at once: each compilation has a working directory of
+its own, which `-working-directory` sets without moving the process, and `compileToModule`
+gives the `llvm::Module` of a compilation in a context of the host, instead of text or bitcode
+to read back. With the vtable diagnostics, the runtime no longer hangs in a child of `fork()`
+or while a library loads. On Windows, a DLL that links the runtime names its symbols, reports
+its leaks at process exit and frees its runtime state when it is dynamically unloaded.
+Instrumentation is faster at -O0: the bounds pass, and the releases of the allocation pass before
+a return, no longer take a time quadratic in the length of a function.
+
+The `cc` options and the runtime ABI are those of 0.12.0. The compilerlib API gains
+`compilerlib/compile_module.hpp`, and `compile` keeps its signature; the declarations of
+`compilerlib/frontend/no_instrument_action.hpp` and `optnone_action.hpp` moved to headers that
+these include. One behaviour of `compile` changes: with `-working-directory`, the process stays
+where it is unless a job runs as a program (see Behaviour changes). Objects instrumented by
+0.12.0 link with the 0.13.0 runtime, and the other way round.
 
 ### Features
 
@@ -50,18 +66,18 @@ pull request.
   `dlopen` when a thread of the runtime held it. The child could also wait for a cache of the
   runtime that another thread of the parent was initializing. The runtime now looks the
   modules up through `_dl_find_object`, which takes no lock (glibc 2.35 and later), and
-  initializes its caches when the program starts (#206).
+  initializes its caches when the program starts (#222, #206).
 - **A child of `fork()` on macOS, when Objective-C objects are tracked.** The child hung inside
   `fork()`: libSystem's own fork handlers release objects in the child before the runtime's
   handler gives its locks back, and the runtime's hook of `-[NSObject dealloc]` waited for the
   allocation table's lock. While the forking thread holds the runtime's locks, the hook now
-  forgets the object's record under the lock it holds, without its trace line (#207).
+  forgets the object's record under the lock it holds, without its trace line (#221, #207).
 - **Symbols of a DLL loaded in place of another, on Windows.** The `symbol` and `demangled`
   lines of a virtual call box could name a function of a DLL unloaded since, once another DLL
   was loaded at its address, even at the same path with the same time stamp: DbgHelp kept the
   modules it had listed. The runtime now follows the loader's notifications, and before it
   names a call target, has its session drop the modules unloaded since and list the modules
-  loaded; when that fails, the box names nothing (#208).
+  loaded; when that fails, the box names nothing (#220, #208).
 - **DbgHelp shared with the program, on Windows.** The runtime initialized DbgHelp on the
   program's own session, `GetCurrentProcess()`, and each copy of the runtime, in the executable
   and in each DLL that links it, called DbgHelp under a lock of its own. Each copy now has a
@@ -69,19 +85,19 @@ pull request.
   DbgHelp is still busy then, and leaves to the system when the process terminates, as
   Microsoft's `DllMain` guidance asks; all of them take one lock per process, a semaphore that a
   program using DbgHelp can take too. A box waits 500 ms at most for it, and a name it could not
-  decode meanwhile is decoded at the next box (README, "DbgHelp on Windows") (#208, #226).
+  decode meanwhile is decoded at the next box (README, "DbgHelp on Windows") (#228, #208, #226).
 - **A virtual call named while a library loads, on Linux.** With `--ct-vtable-diag`, the runtime
   named the target of a virtual call with `dladdr`, which waits for the lock that `dlopen` holds
   while it runs the constructors of the library it loads (glibc 2.39 checked). A constructor
   that waited for a thread making such a call, as a thread pool's start does, never returned.
   The runtime now reads the symbol from the tables of the module that `_dl_find_object` finds
-  (glibc 2.35 and later), and does not call `dladdr` for an address that no module holds (#223).
+  (glibc 2.35 and later), and does not call `dladdr` for an address that no module holds (#229, #223).
 - **Fork handlers registered before the runtime's.** A handler that `pthread_atfork` registered
   before the runtime's, by a global object of the program or a library initialized first, runs
   while the forking thread holds every lock of the runtime: in the parent around `fork()`, and in
   the child before the runtime gives its locks back. When it called into the runtime, with a
   traced virtual call or an instrumented allocation, it waited forever for a lock its own thread
-  held. The runtime now takes and releases none of its locks on that thread meanwhile (#224).
+  held. The runtime now takes and releases none of its locks on that thread meanwhile (#230, #224).
 - **The leak report of a DLL that links the runtime, on Windows.** Such a DLL has a copy of the
   runtime and of its allocation table of its own. That copy reported its leaks only when its TLS
   callback received a non-null `lpvReserved` at process exit, which the four Windows jobs never
@@ -89,7 +105,7 @@ pull request.
   the copy now reports them when the process exits, after the DLL's `atexit` handlers, the
   destructors of its global objects and its destructor functions, whether the program returns
   from `main`, calls `ExitProcess`, or the DLL calls `exit()`; it still reports nothing when
-  `FreeLibrary` unloads the DLL (#232).
+  `FreeLibrary` unloads the DLL (#234, #232).
 - **Crash backtraces after a DLL was unloaded, on Windows.** With `CT_BACKTRACE`, the crash
   handler named the frames through the runtime's DbgHelp session without bringing its modules up
   to date: a frame in a DLL loaded at the address of a DLL unloaded since could be named after
@@ -98,13 +114,13 @@ pull request.
   were last brought up to date. When it cannot tell, after more unloads than the runtime keeps
   track of, it names only the frames of the executable and of the module that holds the runtime's
   copy; it names none once the runtime has stopped following the loader, when that module
-  detaches (README, "DbgHelp on Windows") (#225).
+  detaches (README, "DbgHelp on Windows") (#235, #225).
 - **Memory kept after a DLL unloaded, on Windows.** The copy of the runtime in a DLL that links it
   keeps the names it decodes for the vtable boxes in a cache that is never destroyed, so that code
   that runs at exit still prints boxes. When `FreeLibrary` unloaded the DLL, that cache stayed
   allocated, and each load of the DLL built another one: 488 bytes per load and unload in the
   measurement of #227, whose DLL decoded two names. The copy now frees the cache when `FreeLibrary`
-  unloads the DLL, after the DLL's destructors, whose boxes still name types (#227).
+  unloads the DLL, after the DLL's destructors, whose boxes still name types (#240, #227).
 - **The crash handler of an unloaded DLL, on Windows.** With `CT_BACKTRACE`, the copy of the
   runtime in a DLL that links it installed its crash handler over the filter installed before it,
   and nothing put that filter back. Once `FreeLibrary` had unloaded the DLL, an exception that
@@ -112,21 +128,21 @@ pull request.
   filter that the program had installed before the DLL ran. Only the executable's copy installs the
   crash handler now: it reports the crashes in an instrumented DLL's code too, and a DLL's copy
   leaves the process's filter alone. An instrumented DLL that a program without the runtime loads
-  reports no crash any more (README, "Crash handler on Windows") (#236).
+  reports no crash any more (README, "Crash handler on Windows") (#241, #236).
 - **Memory kept by a DLL that allocates, after it unloaded, on Windows.** The copy of the runtime in
   a DLL that links it never destroyed its allocation table, nor freed what its block index grew
   into, its quarantine's queue or the blocks that its quarantine held. A DLL that allocated and
   freed through its copy left them allocated at each load and unload: about 42 KB per cycle for 64
   blocks of 64 bytes freed, and 957 KB for 5000 blocks of 16 bytes, in a probe of #227. The copy now
   frees them when `FreeLibrary` unloads the DLL, after the DLL's exit-time code, and keeps them when
-  the process exits, for the leak report (#227).
+  the process exits, for the leak report (#242, #227).
 - **Unmapping a recorded page, on Windows.** The runtime's `munmap` dropped the record of a
   mapping that it had recorded with its allocation table's lock held, outside the runtime's own
   work. When the release of that record came back to the runtime's entry points, as through the
   copies of the library's inline functions that an instrumented module compiles (#197), it waited
   for that lock, which its own thread held, and the unmap never returned: a test DLL whose
   operators new and delete go through the runtime hung in each of the four Windows jobs. `munmap`
-  now drops the record as the runtime's own work (#243).
+  now drops the record as the runtime's own work (#245, #243).
 - **`LICENSE` and `NOTICE` in the install prefix.** `cmake --install` installed neither, which
   Apache-2.0 asks redistributions to carry. Both now go to `share/doc/coretrace-compiler/`, in
   the `licenses` component (#249, #250).
@@ -201,7 +217,7 @@ pull request.
   a destructor prints at detach still calls DbgHelp. With `--ct-vtable-diag`, it also calls
   `GetModuleHandleExA`, `GetModuleFileNameA` and `GetModuleHandleA`, and looks
   `GetCurrentThreadStackLimits` up the first time an address lies in no module. A test checks
-  that neither the executable's copy nor a DLL's makes the removed lookups at detach (#231).
+  that neither the executable's copy nor a DLL's makes the removed lookups at detach (#247, #231).
 
 ### Tests and CI
 
@@ -229,7 +245,7 @@ pull request.
   own architecture: arm64 on `ubuntu-24.04-arm` instead of under QEMU on an amd64 runner. Under
   QEMU's user-mode emulation, `sbrk()` failed now and then in the sbrk test of the full
   allocation table: the page above the program break was taken by a mapping that the process
-  does not list (#233).
+  does not list (#246, #233).
 - On macOS, the test of in-memory bitcode that checks that no temporary file is created detects
   the SDK before it points `TMPDIR` at the directory it checks. Under ctest, the detection ran
   `xcrun` with that `TMPDIR`, and the test failed when `xcrun` left its cache, `xcrun_db`, there
@@ -262,6 +278,24 @@ pull request.
   attribution notices, without the license header meant for source files (#248).
 - The README and `compilerlib/compiler.h` describe compiling from several threads, with
   `-working-directory`, and its limits (#262, #261).
+
+### Known issues
+
+- In memory, to a module and with `--instrument`, a compilation goes on after an error of
+  Clang's driver, such as an unknown argument or a working directory that does not exist: it
+  prints the error and gives its output, where clang and a plain compilation to a file fail
+  (#264).
+- With `-working-directory` and CodeView debug information, the name of the object recorded in
+  the debug information is a path in the process's working directory (#266).
+- With `-working-directory`, a compilation to memory or to a module that is refused because its
+  arguments give more than one job leaves the process in that directory (#267).
+- With `--ct-autofree`, a block that `posix_memalign` allocates is never released when it is
+  written through its pointer (#258), and is released at the return rather than after the call
+  when it is never read (#259).
+- At -O0, the allocation pass takes a time quadratic in the allocations stored into one local
+  variable (#256).
+- On Windows, code of a DLL that runs after the terminator of its copy of the runtime, and goes
+  through that copy, leaves memory allocated once `FreeLibrary` has unloaded the DLL (#227).
 
 ## v0.12.0 (2026-10-22)
 
