@@ -2155,6 +2155,90 @@ int once(int x) { return x; }
         }
     }
 
+    // An error of the driver's, reported while it builds the compilation: no job runs, as
+    // with clang, whatever runs the jobs. Here, a working directory that does not exist, and a
+    // profile that does not either.
+    class DriverErrorTest : public CompileTest
+    {
+      protected:
+        std::vector<std::string> inAMissingDirectory(std::vector<std::string> args) const
+        {
+            args.insert(args.begin(), {"-working-directory", path("missing")});
+            args.push_back(writeSource("unit.c", "int value(void) { return 42; }\n"));
+            return args;
+        }
+
+        static void expectTheDriversError(const std::string& diagnostics)
+        {
+            EXPECT_NE(diagnostics.find("unable to set working directory"), std::string::npos)
+                << diagnostics;
+        }
+    };
+
+    TEST_F(DriverErrorTest, FailsACompilationToMemory)
+    {
+        const compilerlib::CompileResult result = compilerlib::compile(
+            inAMissingDirectory({"-S", "-emit-llvm"}), compilerlib::OutputMode::ToMemory);
+        EXPECT_FALSE(result.success);
+        EXPECT_EQ(result.llvmIR, "");
+        expectTheDriversError(result.diagnostics);
+    }
+
+    TEST_F(DriverErrorTest, FailsACompilationToBitcodeInMemory)
+    {
+        const compilerlib::CompileResult result = compilerlib::compile(
+            inAMissingDirectory({"-c", "-emit-llvm"}), compilerlib::OutputMode::ToMemoryBitcode);
+        EXPECT_FALSE(result.success);
+        EXPECT_EQ(result.llvmIR, "");
+        expectTheDriversError(result.diagnostics);
+    }
+
+    TEST_F(DriverErrorTest, FailsAnInstrumentedCompilation)
+    {
+        const std::string object = path("unit.o");
+        const compilerlib::CompileResult result =
+            compilerlib::compile(inAMissingDirectory({"-c", "-o", object}),
+                                 compilerlib::OutputMode::ToFile, /*instrument=*/true);
+        EXPECT_FALSE(result.success);
+        EXPECT_FALSE(fs::exists(object));
+        expectTheDriversError(result.diagnostics);
+    }
+
+    TEST_F(DriverErrorTest, FailsACompilationToAModule)
+    {
+        llvm::LLVMContext context;
+        const compilerlib::ModuleResult result =
+            compilerlib::compileToModule(inAMissingDirectory({"-S", "-emit-llvm"}), context);
+        EXPECT_FALSE(result.success);
+        EXPECT_TRUE(result.module == nullptr);
+        expectTheDriversError(result.diagnostics);
+    }
+
+    TEST_F(DriverErrorTest, FailsACompilationWhoseProfileIsMissing)
+    {
+        const compilerlib::CompileResult result = compilerlib::compile(
+            {"-O1", "-fprofile-sample-use=" + path("missing.afdo"), "-S", "-emit-llvm",
+             writeSource("unit.c", "int value(void) { return 42; }\n")},
+            compilerlib::OutputMode::ToMemory);
+        EXPECT_FALSE(result.success);
+        EXPECT_NE(result.diagnostics.find("no such file or directory"), std::string::npos)
+            << result.diagnostics;
+    }
+
+    // A warning of the driver's is no error: the compilation gives its output, and the
+    // warning with it.
+    TEST_F(DriverErrorTest, LeavesACompilationWithADriverWarningAlone)
+    {
+        const compilerlib::CompileResult result =
+            compilerlib::compile({"-L" + path("libraries"), "-S", "-emit-llvm",
+                                  writeSource("unit.c", "int value(void) { return 42; }\n")},
+                                 compilerlib::OutputMode::ToMemory);
+        EXPECT_TRUE(result.success) << result.diagnostics;
+        EXPECT_NE(result.llvmIR.find("ret i32 42"), std::string::npos);
+        EXPECT_NE(result.diagnostics.find("argument unused during compilation"), std::string::npos)
+            << result.diagnostics;
+    }
+
     // -working-directory, as clang reads it: the sources, the include directories and the
     // files a compilation writes are relative to it.
     class WorkingDirectoryTest : public CompileTest
